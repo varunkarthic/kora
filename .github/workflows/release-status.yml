@@ -1,0 +1,49 @@
+name: Refresh release status
+
+on:
+  issues:
+    types: [opened, closed, reopened, edited, milestoned, demilestoned]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: read
+
+concurrency:
+  group: kora-release-status
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --limit 100 --json tagName,isDraft --jq '[.[] | select(.isDraft == false)][0].tagName')
+          [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "no semantic release found" >&2; exit 1; }
+          {
+            echo "tag=$tag"
+            echo "version=${BASH_REMATCH[1]}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Render current status
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/release/render_release.py --repo "$GITHUB_REPOSITORY" --version "${{ steps.release.outputs.version }}" --output release.md --github-output "$GITHUB_OUTPUT"
+      - name: Update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          CHANNEL: ${{ steps.notes.outputs.channel }}
+          STABLE: ${{ steps.notes.outputs.stable }}
+        run: |
+          prerelease=true
+          latest=false
+          if [[ "$STABLE" == "true" ]]; then prerelease=false; latest=true; fi
+          gh release edit "$TAG" --title "KORA ${TAG} (${CHANNEL})" --notes-file release.md --prerelease="$prerelease" --latest="$latest"
