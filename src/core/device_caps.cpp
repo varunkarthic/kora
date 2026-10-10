@@ -130,23 +130,7 @@ DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device
     data.subgroup.quad =
         data.subgroup.supported && has_flag(subgroup.supportedOperations, VK_SUBGROUP_FEATURE_QUAD_BIT);
 
-    data.queue_families.reserve(physical_device.queue_family_properties.size());
-    for (const auto& family : physical_device.queue_family_properties) {
-        DeviceInfo::QueueFamily result;
-        result.queue_count = family.queueCount;
-        result.timestamp_valid_bits = family.timestampValidBits;
-        result.min_image_transfer_granularity = {
-            family.minImageTransferGranularity.width,
-            family.minImageTransferGranularity.height,
-            family.minImageTransferGranularity.depth,
-        };
-        result.graphics = has_flag(family.queueFlags, VK_QUEUE_GRAPHICS_BIT);
-        result.compute = has_flag(family.queueFlags, VK_QUEUE_COMPUTE_BIT);
-        result.transfer =
-            has_flag(family.queueFlags, VK_QUEUE_TRANSFER_BIT) || result.graphics || result.compute;
-        result.sparse_binding = has_flag(family.queueFlags, VK_QUEUE_SPARSE_BINDING_BIT);
-        data.queue_families.push_back(result);
-    }
+    data.queue_families = classify_queue_families(physical_device.queue_family_properties);
 
     const auto& memory = physical_device.memory_properties;
     data.memory_heaps.reserve(memory.memoryHeapCount);
@@ -175,6 +159,32 @@ DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device
 
     data.tier = classify_tier(data.features, data.subgroup);
     return DeviceCaps(std::move(data));
+}
+
+std::vector<DeviceInfo::QueueFamily> DeviceCaps::classify_queue_families(
+    const std::vector<VkQueueFamilyProperties>& queue_families) {
+    std::vector<DeviceInfo::QueueFamily> classified;
+    classified.reserve(queue_families.size());
+    for (const auto& family : queue_families) {
+        DeviceInfo::QueueFamily family_info;
+        family_info.queue_count = family.queueCount;
+        family_info.timestamp_valid_bits = family.timestampValidBits;
+        family_info.min_image_transfer_granularity = {
+            family.minImageTransferGranularity.width,
+            family.minImageTransferGranularity.height,
+            family.minImageTransferGranularity.depth,
+        };
+        family_info.graphics = has_flag(family.queueFlags, VK_QUEUE_GRAPHICS_BIT);
+        family_info.compute = has_flag(family.queueFlags, VK_QUEUE_COMPUTE_BIT);
+        family_info.transfer =
+            has_flag(family.queueFlags, VK_QUEUE_TRANSFER_BIT) || family_info.graphics || family_info.compute;
+        family_info.sparse_binding = has_flag(family.queueFlags, VK_QUEUE_SPARSE_BINDING_BIT);
+        family_info.dedicated_compute = family_info.compute && !family_info.graphics;
+        family_info.dedicated_transfer =
+            family_info.transfer && !family_info.graphics && !family_info.compute;
+        classified.push_back(family_info);
+    }
+    return classified;
 }
 
 }  // namespace kora::detail

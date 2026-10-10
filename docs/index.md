@@ -30,6 +30,7 @@ internals/vulkan-backend
 internals/instance
 internals/physical-device
 internals/capabilities
+internals/queues
 ci-cd
 releases
 security

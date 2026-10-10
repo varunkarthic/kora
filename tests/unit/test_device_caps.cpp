@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstring>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "core/device_caps.hpp"
 
@@ -126,6 +129,8 @@ TEST(DeviceCaps, MapsLimitsFeaturesQueuesAndMemoryWithoutVulkanTypes) {
     EXPECT_EQ(info.queue_families()[0].queue_count, 2U);
     EXPECT_TRUE(info.queue_families()[0].compute);
     EXPECT_TRUE(info.queue_families()[0].transfer);
+    EXPECT_TRUE(info.queue_families()[0].dedicated_compute);
+    EXPECT_FALSE(info.queue_families()[0].dedicated_transfer);
     EXPECT_EQ(info.queue_families()[0].timestamp_valid_bits, 64U);
     EXPECT_EQ(info.queue_families()[0].min_image_transfer_granularity[2], 3U);
 
@@ -169,3 +174,96 @@ TEST(DeviceCaps, ReportsIndividualDescriptorIndexingSupport) {
     EXPECT_FALSE(info.features().runtime_descriptor_array);
     EXPECT_EQ(info.tier(), kora::CapabilityTier::A);
 }
+
+namespace {
+
+struct QueueFamilyExpectation {
+    std::uint32_t queue_count;
+    std::uint32_t timestamp_valid_bits;
+    std::array<std::uint32_t, 3> min_image_transfer_granularity;
+    bool graphics;
+    bool compute;
+    bool transfer;
+    bool sparse_binding;
+    bool dedicated_compute;
+    bool dedicated_transfer;
+};
+
+struct QueueFamilyLayout {
+    std::string name;
+    std::vector<VkQueueFamilyProperties> families;
+    std::vector<QueueFamilyExpectation> expected;
+};
+
+VkQueueFamilyProperties make_queue_family(VkQueueFlags flags, std::uint32_t queue_count,
+                                          std::uint32_t timestamp_valid_bits,
+                                          VkExtent3D transfer_granularity) {
+    VkQueueFamilyProperties family{};
+    family.queueFlags = flags;
+    family.queueCount = queue_count;
+    family.timestampValidBits = timestamp_valid_bits;
+    family.minImageTransferGranularity = transfer_granularity;
+    return family;
+}
+
+}  // namespace
+
+class QueueFamilyClassificationTest : public testing::TestWithParam<QueueFamilyLayout> {};
+
+TEST_P(QueueFamilyClassificationTest, ClassifiesSyntheticQueueFamilies) {
+    const auto& layout = GetParam();
+    const auto classified = kora::detail::DeviceCaps::classify_queue_families(layout.families);
+
+    ASSERT_EQ(classified.size(), layout.expected.size());
+    for (std::size_t i = 0; i < classified.size(); ++i) {
+        SCOPED_TRACE(i);
+        const auto& actual = classified[i];
+        const auto& expected = layout.expected[i];
+        EXPECT_EQ(actual.queue_count, expected.queue_count);
+        EXPECT_EQ(actual.timestamp_valid_bits, expected.timestamp_valid_bits);
+        EXPECT_EQ(actual.min_image_transfer_granularity, expected.min_image_transfer_granularity);
+        EXPECT_EQ(actual.graphics, expected.graphics);
+        EXPECT_EQ(actual.compute, expected.compute);
+        EXPECT_EQ(actual.transfer, expected.transfer);
+        EXPECT_EQ(actual.sparse_binding, expected.sparse_binding);
+        EXPECT_EQ(actual.dedicated_compute, expected.dedicated_compute);
+        EXPECT_EQ(actual.dedicated_transfer, expected.dedicated_transfer);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SyntheticLayouts, QueueFamilyClassificationTest,
+    testing::Values(
+        QueueFamilyLayout{
+            "separate_compute_and_transfer",
+            {
+                make_queue_family(VK_QUEUE_COMPUTE_BIT | VK_QUEUE_SPARSE_BINDING_BIT, 2, 64,
+                                  VkExtent3D{4, 2, 1}),
+                make_queue_family(VK_QUEUE_TRANSFER_BIT, 1, 32, VkExtent3D{8, 4, 1}),
+            },
+            {
+                {2, 64, {4, 2, 1}, false, true, true, true, true, false},
+                {1, 32, {8, 4, 1}, false, false, true, false, false, true},
+            },
+        },
+        QueueFamilyLayout{
+            "shared_graphics_compute_with_async_compute",
+            {
+                make_queue_family(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 4, 0, VkExtent3D{1, 1, 1}),
+                make_queue_family(VK_QUEUE_COMPUTE_BIT, 2, 32, VkExtent3D{2, 2, 1}),
+            },
+            {
+                {4, 0, {1, 1, 1}, true, true, true, false, false, false},
+                {2, 32, {2, 2, 1}, false, true, true, false, true, false},
+            },
+        },
+        QueueFamilyLayout{
+            "single_family_uma",
+            {
+                make_queue_family(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 1, 64, VkExtent3D{0, 0, 0}),
+            },
+            {
+                {1, 64, {0, 0, 0}, true, true, true, false, false, false},
+            },
+        }),
+    [](const testing::TestParamInfo<QueueFamilyLayout>& info) { return info.param.name; });

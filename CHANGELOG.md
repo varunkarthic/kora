@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Immutable, vendor-neutral device capability snapshots with limits, features, queue families,
   memory topology, subgroup support, and additive A-D convenience tiers.
+- Dedicated-compute and dedicated-transfer queue-family classification with preserved queue
+  properties and vendor-neutral rules.
 
 ## [0.1.7] - 2026-10-10
 
