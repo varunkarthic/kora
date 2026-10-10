@@ -66,6 +66,8 @@ public:
         bool compute = false;
         bool transfer = false;
         bool sparse_binding = false;
+        bool dedicated_compute = false;
+        bool dedicated_transfer = false;
     };
 
     struct MemoryHeap {
