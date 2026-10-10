@@ -67,6 +67,23 @@ kora::vk::PhysicalDeviceInfo make_device() {
     return device;
 }
 
+VkPhysicalDeviceMemoryProperties make_memory_properties(
+    const std::vector<VkMemoryHeapFlags>& heap_flags,
+    const std::vector<std::pair<std::uint32_t, VkMemoryPropertyFlags>>& memory_types) {
+    VkPhysicalDeviceMemoryProperties properties{};
+    properties.memoryHeapCount = static_cast<std::uint32_t>(heap_flags.size());
+    for (std::uint32_t index = 0; index < properties.memoryHeapCount; ++index) {
+        properties.memoryHeaps[index].size = (index + 1) * 1024U;
+        properties.memoryHeaps[index].flags = heap_flags[index];
+    }
+    properties.memoryTypeCount = static_cast<std::uint32_t>(memory_types.size());
+    for (std::uint32_t index = 0; index < properties.memoryTypeCount; ++index) {
+        properties.memoryTypes[index].heapIndex = memory_types[index].first;
+        properties.memoryTypes[index].propertyFlags = memory_types[index].second;
+    }
+    return properties;
+}
+
 void enable_tier_b(kora::vk::PhysicalDeviceInfo& device) {
     device.vulkan12_features.timelineSemaphore = VK_TRUE;
 }
@@ -141,6 +158,54 @@ TEST(DeviceCaps, MapsLimitsFeaturesQueuesAndMemoryWithoutVulkanTypes) {
     EXPECT_TRUE(info.memory_types()[0].device_local);
     EXPECT_TRUE(info.memory_types()[0].host_visible);
     EXPECT_TRUE(info.memory_types()[0].host_coherent);
+    EXPECT_EQ(info.memory_topology(), kora::MemoryTopology::Uma);
+    EXPECT_FALSE(info.memory_topology_needs_benchmark());
+    EXPECT_EQ(info.memory_type_preferences().automatic, (std::vector<std::uint32_t>{0}));
+    EXPECT_EQ(info.memory_type_preferences().readback, (std::vector<std::uint32_t>{0}));
+}
+
+TEST(DeviceCaps, ClassifiesSyntheticMemoryTopologiesAndTypePreferences) {
+    const auto discrete = make_memory_properties(
+        {VK_MEMORY_HEAP_DEVICE_LOCAL_BIT, 0},
+        {{0, 0}, {1, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT}});
+    auto classification = kora::detail::DeviceCaps::classify_memory_properties(discrete);
+    EXPECT_EQ(classification.topology, kora::MemoryTopology::Discrete);
+    EXPECT_FALSE(classification.needs_benchmark);
+    EXPECT_EQ(classification.type_preferences.automatic, (std::vector<std::uint32_t>{0, 1}));
+    EXPECT_EQ(classification.type_preferences.host_visible, (std::vector<std::uint32_t>{1, 0}));
+
+    const auto uma = make_memory_properties(
+        {VK_MEMORY_HEAP_DEVICE_LOCAL_BIT},
+        {{0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT}});
+    classification = kora::detail::DeviceCaps::classify_memory_properties(uma);
+    EXPECT_EQ(classification.topology, kora::MemoryTopology::Uma);
+    EXPECT_FALSE(classification.needs_benchmark);
+    EXPECT_EQ(classification.type_preferences.automatic, (std::vector<std::uint32_t>{0}));
+
+    const auto bar = make_memory_properties(
+        {VK_MEMORY_HEAP_DEVICE_LOCAL_BIT, 0},
+        {{0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
+         {0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT},
+         {1, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT}});
+    classification = kora::detail::DeviceCaps::classify_memory_properties(bar);
+    EXPECT_EQ(classification.topology, kora::MemoryTopology::DiscreteWithBar);
+    EXPECT_TRUE(classification.needs_benchmark);
+    EXPECT_EQ(classification.type_preferences.automatic, (std::vector<std::uint32_t>{0, 1, 2}));
+    EXPECT_EQ(classification.type_preferences.device_preferred, (std::vector<std::uint32_t>{0, 1, 2}));
+    EXPECT_EQ(classification.type_preferences.host_visible, (std::vector<std::uint32_t>{1, 2, 0}));
+    EXPECT_EQ(classification.type_preferences.read_mostly, (std::vector<std::uint32_t>{1, 0, 2}));
+    EXPECT_EQ(classification.type_preferences.write_mostly, (std::vector<std::uint32_t>{1, 0, 2}));
+    EXPECT_EQ(classification.type_preferences.streaming, (std::vector<std::uint32_t>{1, 2, 0}));
+    EXPECT_EQ(classification.type_preferences.readback, (std::vector<std::uint32_t>{2, 1, 0}));
+
+    const auto unknown = make_memory_properties(
+        {0}, {{0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT}});
+    classification = kora::detail::DeviceCaps::classify_memory_properties(unknown);
+    EXPECT_EQ(classification.topology, kora::MemoryTopology::Unknown);
+    EXPECT_FALSE(classification.needs_benchmark);
+    EXPECT_EQ(classification.type_preferences.automatic, (std::vector<std::uint32_t>{0}));
 }
 
 TEST(DeviceCaps, ReadsPromotedFeaturesFromExtensionQueryStructures) {

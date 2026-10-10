@@ -53,6 +53,65 @@ CapabilityTier classify_tier(const DeviceInfo::Features& features, const DeviceI
     return CapabilityTier::D;
 }
 
+bool type_is_device_local(const VkPhysicalDeviceMemoryProperties& memory, const VkMemoryType& type) {
+    if (has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) return true;
+    const auto heap_count = std::min<std::uint32_t>(memory.memoryHeapCount, VK_MAX_MEMORY_HEAPS);
+    return type.heapIndex < heap_count &&
+           has_flag(memory.memoryHeaps[type.heapIndex].flags, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
+}
+
+int preference_score(MemoryPolicy policy, MemoryTopology topology, bool device_local, bool host_visible,
+                     bool host_coherent, bool host_cached) {
+    const auto score = [](bool first, bool second, bool third) {
+        return static_cast<int>(first) * 4 + static_cast<int>(second) * 2 + static_cast<int>(third);
+    };
+    switch (policy) {
+        case MemoryPolicy::Auto:
+            switch (topology) {
+                case MemoryTopology::Uma:
+                    return score(device_local && host_visible, host_visible && host_coherent, device_local);
+                case MemoryTopology::DiscreteWithBar:
+                case MemoryTopology::Discrete:
+                    return score(device_local && !host_visible, device_local && host_visible,
+                                 host_visible && host_cached);
+                case MemoryTopology::Unknown:
+                    return score(device_local && !host_visible, device_local && host_visible, host_visible);
+            }
+            break;
+        case MemoryPolicy::DevicePreferred:
+            return score(device_local && !host_visible, device_local && host_visible, device_local);
+        case MemoryPolicy::HostVisible:
+            return score(host_visible, host_coherent, host_cached);
+        case MemoryPolicy::ReadMostly:
+            return score(device_local, host_cached, host_visible);
+        case MemoryPolicy::WriteMostly:
+            return score(device_local, host_coherent, host_visible);
+        case MemoryPolicy::Streaming:
+            return score(host_visible, host_coherent, device_local);
+        case MemoryPolicy::Readback:
+            return score(host_visible, host_cached, host_coherent);
+    }
+    return 0;
+}
+
+std::vector<std::uint32_t> order_memory_types(const VkPhysicalDeviceMemoryProperties& memory,
+                                              MemoryPolicy policy, MemoryTopology topology) {
+    const auto type_count = std::min<std::uint32_t>(memory.memoryTypeCount, VK_MAX_MEMORY_TYPES);
+    std::vector<std::uint32_t> indices(type_count);
+    for (std::uint32_t index = 0; index < type_count; ++index) indices[index] = index;
+    std::stable_sort(indices.begin(), indices.end(), [&](std::uint32_t left, std::uint32_t right) {
+        const auto score = [&](std::uint32_t index) {
+            const auto& type = memory.memoryTypes[index];
+            return preference_score(policy, topology, type_is_device_local(memory, type),
+                                    has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                    has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                    has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_HOST_CACHED_BIT));
+        };
+        return score(left) > score(right);
+    });
+    return indices;
+}
+
 }  // namespace
 
 DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device) {
@@ -133,8 +192,9 @@ DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device
     data.queue_families = classify_queue_families(physical_device.queue_family_properties);
 
     const auto& memory = physical_device.memory_properties;
-    data.memory_heaps.reserve(memory.memoryHeapCount);
-    for (std::uint32_t index = 0; index < memory.memoryHeapCount; ++index) {
+    const auto memory_heap_count = std::min<std::uint32_t>(memory.memoryHeapCount, VK_MAX_MEMORY_HEAPS);
+    data.memory_heaps.reserve(memory_heap_count);
+    for (std::uint32_t index = 0; index < memory_heap_count; ++index) {
         const auto& heap = memory.memoryHeaps[index];
         data.memory_heaps.push_back({
             heap.size,
@@ -143,8 +203,9 @@ DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device
         });
     }
 
-    data.memory_types.reserve(memory.memoryTypeCount);
-    for (std::uint32_t index = 0; index < memory.memoryTypeCount; ++index) {
+    const auto memory_type_count = std::min<std::uint32_t>(memory.memoryTypeCount, VK_MAX_MEMORY_TYPES);
+    data.memory_types.reserve(memory_type_count);
+    for (std::uint32_t index = 0; index < memory_type_count; ++index) {
         const auto& type = memory.memoryTypes[index];
         data.memory_types.push_back({
             type.heapIndex,
@@ -156,6 +217,11 @@ DeviceCaps DeviceCaps::from_vulkan(const vk::PhysicalDeviceInfo& physical_device
             has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_PROTECTED_BIT),
         });
     }
+
+    const auto memory_classification = classify_memory_properties(memory);
+    data.memory_topology = memory_classification.topology;
+    data.memory_topology_needs_benchmark = memory_classification.needs_benchmark;
+    data.memory_type_preferences = memory_classification.type_preferences;
 
     data.tier = classify_tier(data.features, data.subgroup);
     return DeviceCaps(std::move(data));
@@ -185,6 +251,46 @@ std::vector<DeviceInfo::QueueFamily> DeviceCaps::classify_queue_families(
         classified.push_back(family_info);
     }
     return classified;
+}
+
+MemoryClassification DeviceCaps::classify_memory_properties(
+    const VkPhysicalDeviceMemoryProperties& memory_properties) {
+    MemoryClassification classification;
+    bool has_local_host_visible = false;
+    bool has_local_host_invisible = false;
+    const auto type_count = std::min<std::uint32_t>(memory_properties.memoryTypeCount, VK_MAX_MEMORY_TYPES);
+    for (std::uint32_t index = 0; index < type_count; ++index) {
+        const auto& type = memory_properties.memoryTypes[index];
+        const bool local = type_is_device_local(memory_properties, type);
+        const bool visible = has_flag(type.propertyFlags, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+        has_local_host_visible |= local && visible;
+        has_local_host_invisible |= local && !visible;
+    }
+
+    if (has_local_host_visible && has_local_host_invisible) {
+        classification.topology = MemoryTopology::DiscreteWithBar;
+        classification.needs_benchmark = true;
+    } else if (has_local_host_visible) {
+        classification.topology = MemoryTopology::Uma;
+    } else if (has_local_host_invisible) {
+        classification.topology = MemoryTopology::Discrete;
+    }
+
+    classification.type_preferences.automatic =
+        order_memory_types(memory_properties, MemoryPolicy::Auto, classification.topology);
+    classification.type_preferences.device_preferred =
+        order_memory_types(memory_properties, MemoryPolicy::DevicePreferred, classification.topology);
+    classification.type_preferences.host_visible =
+        order_memory_types(memory_properties, MemoryPolicy::HostVisible, classification.topology);
+    classification.type_preferences.read_mostly =
+        order_memory_types(memory_properties, MemoryPolicy::ReadMostly, classification.topology);
+    classification.type_preferences.write_mostly =
+        order_memory_types(memory_properties, MemoryPolicy::WriteMostly, classification.topology);
+    classification.type_preferences.streaming =
+        order_memory_types(memory_properties, MemoryPolicy::Streaming, classification.topology);
+    classification.type_preferences.readback =
+        order_memory_types(memory_properties, MemoryPolicy::Readback, classification.topology);
+    return classification;
 }
 
 }  // namespace kora::detail
