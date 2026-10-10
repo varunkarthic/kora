@@ -79,8 +79,17 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
       - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Initialize MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
         run: cmake --preset release -DKORA_VERSION_PATCH=${{ needs.prepare.outputs.patch }} -DKORA_BUILD_TESTS=ON
+      - name: Verify MSVC selection
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = Select-String -Path build/release/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=.*cl.exe$'
+          if (-not $compiler) { throw 'CMake did not select the MSVC cl.exe compiler' }
       - name: Build
         run: cmake --build --preset release --parallel
       - name: Test
