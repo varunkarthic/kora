@@ -26,6 +26,7 @@ architecture
 debugging
 internals/core
 internals/checked-arithmetic
+internals/vulkan-backend
 ci-cd
 releases
 security

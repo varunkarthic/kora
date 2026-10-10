@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Initial runtime-loaded Vulkan device dispatch table and deterministic fault injection for memory
+  allocation and queue submission.
+
 ## [0.1.3] - 2026-10-10
 
 ### Fixed
