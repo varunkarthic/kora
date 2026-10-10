@@ -5,6 +5,7 @@ add_library(kora
   core/log.cpp
   core/options.cpp
   core/version.cpp
+  memory/suballocator.cpp
   vulkan/loader.cpp
 )
 add_library(kora::kora ALIAS kora)

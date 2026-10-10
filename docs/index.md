@@ -32,6 +32,7 @@ internals/physical-device
 internals/capabilities
 internals/queues
 internals/logical-device
+internals/suballocator
 device-selection
 memory-model
 ci-cd
