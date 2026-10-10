@@ -12,6 +12,12 @@ library loading independent of GPU-driver installation; a missing or unusable lo
 and dispatch state for as long as the table is in use. The `Api` is an internal interface in
 `src/vulkan/api.hpp`, not a public Vulkan-ABI guarantee.
 
+`Loader::supported_api_version()` returns the maximum Vulkan API version reported by the loader,
+or Vulkan 1.0 when `vkEnumerateInstanceVersion` is unavailable. Instance creation clamps its
+requested version against that value. On macOS, loader discovery tries the standard loader name,
+then `VULKAN_SDK` locations and common Homebrew library prefixes so an installed executable does
+not depend on a build-tree runtime path.
+
 The implemented table currently contains:
 
 | Entry point | Vulkan signature | Loader used |

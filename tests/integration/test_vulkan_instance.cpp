@@ -78,6 +78,7 @@ TEST(VulkanInstance, RepeatedCreationAndDestruction) {
 TEST(VulkanInstance, RequestedApiVersionIsClamped) {
     auto loader = kora::vk::Loader::load();
     if (!loader) KORA_REQUIRE_VULKAN(loader);
+    EXPECT_GE(loader.value().supported_api_version(), VK_API_VERSION_1_0);
 
     kora::vk::Loader::InstanceOptions options;
     options.requested_api_version = VK_API_VERSION_1_1;
@@ -86,4 +87,5 @@ TEST(VulkanInstance, RequestedApiVersionIsClamped) {
         KORA_REQUIRE_VULKAN(false);
     ASSERT_TRUE(instance) << instance.error().describe();
     EXPECT_LE(instance.value().api_version(), VK_API_VERSION_1_1);
+    EXPECT_LE(instance.value().api_version(), loader.value().supported_api_version());
 }

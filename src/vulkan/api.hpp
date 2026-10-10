@@ -119,6 +119,9 @@ class Loader {
 public:
     static Result<Loader> load();
 
+    /// Highest Vulkan API version reported by the loader (Vulkan 1.0 when unavailable).
+    uint32_t supported_api_version() const noexcept;
+
     struct InstanceOptions {
         uint32_t requested_api_version = VK_API_VERSION_1_3;
         std::string application_name = "KORA";

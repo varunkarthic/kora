@@ -38,6 +38,7 @@ option(KORA_SANITIZE_THREAD    "ThreadSanitizer" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(KoraWarnings)
 include(KoraDependencies)
+include(GNUInstallDirs)
 
 configure_file(include/kora/version.hpp.in ${PROJECT_BINARY_DIR}/include/kora/version.hpp @ONLY)
 
@@ -56,7 +57,6 @@ if(KORA_BUILD_PYTHON AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/CMak
   add_subdirectory(bindings/python)
 endif()
 
-include(GNUInstallDirs)
 install(TARGETS kora EXPORT koraTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/kora DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} PATTERN "*.in" EXCLUDE)

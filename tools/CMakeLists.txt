@@ -1,1 +1,5 @@
-# kora-info and kora-bench are added by their phases.
+add_executable(kora-info kora-info/main.cpp)
+target_include_directories(kora-info PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(kora-info PRIVATE kora::kora ${KORA_VULKAN_HEADERS})
+kora_configure_target(kora-info)
+install(TARGETS kora-info RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
