@@ -73,9 +73,19 @@ ResolvedOptions resolve(const RuntimeOptions& o, const EnvLookup& env) {
     r.disable_autotune = env_bool("KORA_DISABLE_AUTOTUNE", o.disable_autotune, false);
     r.disable_multi_queue = env_bool("KORA_DISABLE_MULTI_QUEUE", o.disable_multi_queue, false);
     r.disable_cpu_backend = env_bool("KORA_DISABLE_CPU_BACKEND", o.disable_cpu_backend, false);
-    r.deterministic = o.deterministic.value_or(false);
-    r.force_legacy_sync = o.force_legacy_sync.value_or(false);
-    r.shutdown_mode = o.shutdown_mode.value_or(ShutdownMode::Graceful);
+    r.deterministic = env_bool("KORA_DETERMINISTIC", o.deterministic, false);
+    r.force_legacy_sync = env_bool("KORA_FORCE_LEGACY_SYNC", o.force_legacy_sync, false);
+    if (o.shutdown_mode) {
+        r.shutdown_mode = *o.shutdown_mode;
+    } else if (auto v = env("KORA_SHUTDOWN_MODE")) {
+        auto s = lower(*v);
+        if (s == "graceful")
+            r.shutdown_mode = ShutdownMode::Graceful;
+        else if (s == "cancel_pending" || s == "cancel-pending")
+            r.shutdown_mode = ShutdownMode::CancelPending;
+        else
+            warn("KORA_SHUTDOWN_MODE: expected graceful or cancel_pending, got '" + *v + "', ignored");
+    }
 
     // Device policy: API > KORA_DEVICE ("auto|discrete|integrated|all|<index>|<uuid>").
     if (o.device_policy) {

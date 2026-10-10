@@ -20,10 +20,12 @@ also reset to the default with a warning.
 | `KORA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `off` | `warn` | Default log threshold |
 | `KORA_CACHE_DIR` | Filesystem path | Platform cache path | Persistent cache location |
 | `KORA_DETERMINISTIC` | Boolean | `false` | Deterministic scheduling policy |
+| `KORA_SHUTDOWN_MODE` | `graceful`, `cancel_pending` | `graceful` | Runtime shutdown behavior |
 | `KORA_DISABLE_AUTOTUNE` | Boolean | `false` | Disable online tuning |
 | `KORA_DISABLE_MULTI_QUEUE` | Boolean | `false` | Restrict device queue use |
 | `KORA_DISABLE_CPU_BACKEND` | Boolean | `false` | Exclude CPU execution |
 | `KORA_FORCE_LEGACY_SYNC` | Boolean | `false` | Test hook for legacy synchronization |
+| `KORA_TRACE` | Boolean | `false` | Force trace-level telemetry |
 
 Boolean parsing accepts `1/true/on/yes` and `0/false/off/no`, case-insensitively.
 

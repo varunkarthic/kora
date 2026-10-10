@@ -81,3 +81,38 @@ TEST(Options, UuidDevice) {
     EXPECT_EQ(r.device_policy, DevicePolicy::ByUuid);
     EXPECT_EQ(r.device_uuid.size(), 32u);
 }
+
+TEST(Options, OperationalEnvironmentKnobs) {
+    auto r = resolve({}, fake({{"KORA_DETERMINISTIC", "true"},
+                               {"KORA_DISABLE_MULTI_QUEUE", "1"},
+                               {"KORA_DISABLE_CPU_BACKEND", "yes"},
+                               {"KORA_FORCE_LEGACY_SYNC", "on"},
+                               {"KORA_SHUTDOWN_MODE", "cancel_pending"},
+                               {"KORA_TRACE", "true"}}));
+    EXPECT_TRUE(r.deterministic);
+    EXPECT_TRUE(r.disable_multi_queue);
+    EXPECT_TRUE(r.disable_cpu_backend);
+    EXPECT_TRUE(r.force_legacy_sync);
+    EXPECT_EQ(r.shutdown_mode, ShutdownMode::CancelPending);
+    EXPECT_EQ(r.telemetry, TelemetryLevel::Trace);
+}
+
+TEST(Options, ExplicitOperationalKnobsBeatEnvironment) {
+    RuntimeOptions o;
+    o.deterministic = false;
+    o.force_legacy_sync = false;
+    o.shutdown_mode = ShutdownMode::Graceful;
+    auto r = resolve(o, fake({{"KORA_DETERMINISTIC", "true"},
+                              {"KORA_FORCE_LEGACY_SYNC", "true"},
+                              {"KORA_SHUTDOWN_MODE", "cancel_pending"}}));
+    EXPECT_FALSE(r.deterministic);
+    EXPECT_FALSE(r.force_legacy_sync);
+    EXPECT_EQ(r.shutdown_mode, ShutdownMode::Graceful);
+}
+
+TEST(Options, BadShutdownModeWarns) {
+    auto r = resolve({}, fake({{"KORA_SHUTDOWN_MODE", "immediate"}}));
+    EXPECT_EQ(r.shutdown_mode, ShutdownMode::Graceful);
+    ASSERT_EQ(r.warnings.size(), 1u);
+    EXPECT_NE(r.warnings[0].find("KORA_SHUTDOWN_MODE"), std::string::npos);
+}
