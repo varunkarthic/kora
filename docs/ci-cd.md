@@ -65,7 +65,8 @@ prerelease flag, and latest-release flag without creating a new version.
 
 ## Changelog maintenance
 
-Every user-visible pull request must update `[Unreleased]` in [`CHANGELOG.md`](../CHANGELOG.md) under
+Every user-visible pull request must update `[Unreleased]` in
+[`CHANGELOG.md`](https://github.com/varunkarthic/kora/blob/main/CHANGELOG.md) under
 an appropriate Added, Changed, Deprecated, Removed, Fixed, or Security heading. The release workflow
 moves that content under the exact version and date and rewrites comparison links.
 

@@ -1,0 +1,40 @@
+# Runtime options API
+
+Header: `include/kora/options.hpp`
+
+## Types
+
+`DevicePolicy`
+: Selects automatic placement, preference for discrete or integrated devices, an explicit index or
+  UUID, or all eligible devices. Preference is not a guarantee that a requested device exists.
+
+`TelemetryLevel`
+: Controls off, basic, profile, or trace data collection.
+
+`ShutdownMode`
+: Chooses graceful completion or cancellation of pending work during runtime shutdown.
+
+`RuntimeOptions`
+: User-facing optional overrides. An unset field permits environment/default resolution.
+
+`ResolvedOptions`
+: Fully concrete values plus non-fatal parsing warnings. Runtime construction should consume this
+  type after calling `resolve`.
+
+## Functions
+
+`system_env()`
+: Returns the production environment lookup. Tests inject an `EnvLookup` instead of mutating the
+  process environment.
+
+`resolve(options, env)`
+: Merges explicit values, environment variables, and defaults. Bad environment input never throws;
+  it adds a warning and preserves a safe value.
+
+## Invariants
+
+- Explicit API values always beat environment variables.
+- Memory-budget fractions remain in `(0,1]`.
+- UUID selection uses exactly 32 hexadecimal characters.
+- Selection policy is capability based; a vendor ID is not a policy input.
+- Test-only fallback switches must not silently become production defaults.
