@@ -160,6 +160,11 @@ inline Status ok_status() {
     return Status{};
 }
 
+/// Throw kora::Exception when a Status contains an error; otherwise return normally.
+inline void throw_if_error(const Status& status) {
+    status.value_or_throw();
+}
+
 }  // namespace kora
 
 /// Propagate an error: `KORA_TRY(x, compute());` declares `x` or returns the error.
