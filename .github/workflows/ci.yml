@@ -35,6 +35,8 @@ jobs:
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
       - name: Check C++ formatting
         run: find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --dry-run --Werror
+      - name: Check vendor-neutral device policy
+        run: bash tools/ci/check_vendor_neutrality.sh
       - name: Configure
         run: cmake --preset debug
       - name: Build

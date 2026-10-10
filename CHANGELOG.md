@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Immutable, vendor-neutral device capability snapshots with limits, features, queue families,
+  memory topology, subgroup support, and additive A-D convenience tiers.
+
 ## [0.1.7] - 2026-10-10
 
 ## [0.1.6] - 2026-10-10

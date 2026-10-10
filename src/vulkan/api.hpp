@@ -82,6 +82,8 @@ struct PhysicalDeviceInfo {
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceFeatures features{};
     VkPhysicalDeviceMemoryProperties memory_properties{};
+    VkPhysicalDeviceSubgroupProperties subgroup_properties{};
+    std::vector<VkQueueFamilyProperties> queue_family_properties;
     std::vector<VkExtensionProperties> extensions;
     std::vector<VkTimeDomainKHR> calibrated_time_domains;
 

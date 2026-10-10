@@ -1,5 +1,6 @@
 add_library(kora
   core/errors.cpp
+  core/device_caps.cpp
   core/log.cpp
   core/options.cpp
   core/version.cpp
