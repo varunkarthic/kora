@@ -21,6 +21,12 @@ def main() -> None:
                 raise SystemExit(f"{path}: job {name!r} has no steps or reusable workflow")
         print(f"validated {path}")
 
+    release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    for contract in ("ilammy/msvc-dev-cmd@v1", "Verify MSVC selection", "cl.exe"):
+        if contract not in release:
+            raise SystemExit(f"release workflow is missing Windows package contract: {contract}")
+    print("validated Windows release package compiler contract")
+
 
 if __name__ == "__main__":
     main()

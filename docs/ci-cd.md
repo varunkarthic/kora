@@ -44,12 +44,17 @@ Release jobs build, test, and install KORA independently on:
 
 - Ubuntu x86-64;
 - macOS ARM64;
-- Windows x86-64.
+- Windows x86-64 using the MSVC ABI.
 
 The installed prefix is archived as a platform-specific `.tar.gz` or `.zip` file. Each archive
 contains the library, public headers, generated version header, and CMake package metadata. GitHub's
 automatically generated source archives remain available alongside these binary development
 packages.
+
+The Windows packaging job initializes the Visual Studio developer environment and verifies that
+CMake selected `cl.exe` before compiling. The resulting archive contains the MSVC `.lib` library;
+MinGW applications must build KORA from source with their own toolchain instead of consuming that
+binary archive.
 
 An archive is published only after its platform build and tests pass. The workflow does not claim a
 platform package exists merely because another platform succeeded.
