@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Detailed human and schema-versioned JSON `kora-info` diagnostics for device queues, memory,
+  budgets, topology, subgroup/features, portability, MoltenVK, and cache state.
 - Vendor-neutral memory topology classification, benchmark-needed signaling for discrete BAR-like
   memory, and ordered per-policy memory-type preferences.
 - Capability-gated logical-device creation with compute and optional dedicated-transfer queues,
