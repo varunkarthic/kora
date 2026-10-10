@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-10
+
 ### Added
 
 - Raw physical-device discovery with versioned core and extension property/feature queries.
@@ -71,7 +73,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/varunkarthic/kora/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/varunkarthic/kora/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/varunkarthic/kora/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/varunkarthic/kora/compare/v0.1.2...v0.1.3
