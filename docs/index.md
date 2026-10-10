@@ -25,6 +25,7 @@ configuration
 architecture
 debugging
 internals/core
+internals/checked-arithmetic
 ci-cd
 releases
 security
