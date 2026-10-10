@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/device_caps.hpp"
 #include "kora/log.hpp"
 #include "support/vulkan_test.hpp"
 #include "vulkan/api.hpp"
@@ -66,6 +67,8 @@ TEST(VulkanPhysicalDevice, EnumeratesAndQueriesEveryDevice) {
         EXPECT_LE(device.api_version, instance.value().api_version());
         EXPECT_GE(device.memory_properties.memoryTypeCount, 1u);
         EXPECT_GE(device.memory_properties.memoryHeapCount, 1u);
+        EXPECT_FALSE(device.queue_family_properties.empty());
+        EXPECT_EQ(device.subgroup_properties.pNext, nullptr);
         EXPECT_EQ(device.vulkan11_features.pNext, nullptr);
         EXPECT_EQ(device.vulkan12_features.pNext, nullptr);
         EXPECT_EQ(device.vulkan13_features.pNext, nullptr);
@@ -107,6 +110,12 @@ TEST(VulkanPhysicalDevice, EnumeratesAndQueriesEveryDevice) {
             EXPECT_EQ(device.vulkan13_properties.sType,
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES);
         }
+
+        const auto public_info = kora::detail::DeviceCaps::from_vulkan(device).to_device_info();
+        EXPECT_EQ(public_info.name(), device.properties.deviceName);
+        EXPECT_EQ(public_info.queue_families().size(), device.queue_family_properties.size());
+        EXPECT_EQ(public_info.memory_heaps().size(), device.memory_properties.memoryHeapCount);
+        EXPECT_EQ(public_info.memory_types().size(), device.memory_properties.memoryTypeCount);
 
         std::cout << "Physical device " << i << ": " << device.properties.deviceName << " (Vulkan "
                   << VK_VERSION_MAJOR(device.properties.apiVersion) << '.'

@@ -13,7 +13,8 @@ and runs the release-tool unit tests. It discovers the lavapipe ICD manifest ins
 installs the Vulkan validation layer so the integration suite exercises both software-device
 enumeration and validation-enabled instance creation. On other platforms, the successful `kora-info` output check is skipped only
 when the CLI reports `NoVulkanImplementation`; failures unrelated to Vulkan availability remain
-test failures.
+test failures. The Linux job also rejects source-level branches on Vulkan vendor IDs to keep device
+policy capability-driven.
 
 Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These jobs use the same
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete

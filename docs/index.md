@@ -29,6 +29,7 @@ internals/checked-arithmetic
 internals/vulkan-backend
 internals/instance
 internals/physical-device
+internals/capabilities
 ci-cd
 releases
 security

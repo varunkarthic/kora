@@ -369,6 +369,10 @@ Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_p
     if (get_properties2 != nullptr) {
         void* chain = nullptr;
         if (core11) {
+            append_query_structure(chain, info.subgroup_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES);
+        }
+        if (core11) {
             append_query_structure(chain, info.vulkan11_properties,
                                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES);
         }
@@ -425,6 +429,22 @@ Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_p
         get_memory_properties(physical_device, &info.memory_properties);
     }
 
+    const auto get_queue_family_properties =
+        load_instance_function<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+            get_proc, instance, "vkGetPhysicalDeviceQueueFamilyProperties");
+    if (get_queue_family_properties == nullptr) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide vkGetPhysicalDeviceQueueFamilyProperties");
+    }
+    uint32_t queue_family_count = 0;
+    get_queue_family_properties(physical_device, &queue_family_count, nullptr);
+    info.queue_family_properties.resize(queue_family_count);
+    if (queue_family_count != 0) {
+        get_queue_family_properties(physical_device, &queue_family_count,
+                                    info.queue_family_properties.data());
+        info.queue_family_properties.resize(queue_family_count);
+    }
+
     if (has_extension(info.extensions, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ||
         has_extension(info.extensions, "VK_EXT_calibrated_timestamps")) {
         auto get_time_domains = load_instance_function<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
@@ -452,6 +472,7 @@ Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_p
     info.vulkan12_properties.pNext = nullptr;
     info.vulkan13_features.pNext = nullptr;
     info.vulkan13_properties.pNext = nullptr;
+    info.subgroup_properties.pNext = nullptr;
     info.timeline_semaphore_features.pNext = nullptr;
     info.buffer_device_address_features.pNext = nullptr;
     info.buffer_device_address_features_ext.pNext = nullptr;
