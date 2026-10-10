@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-10
+
 ### Added
 
 - C++20 CMake project with Debug, Release, sanitizer, test, benchmark, and Python presets.
@@ -28,4 +30,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/main...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/varunkarthic/kora/releases/tag/v0.1.0
