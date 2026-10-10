@@ -127,10 +127,14 @@ Result<std::vector<T>> enumerate(Enumerate function, const char* description) {
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                              VkDebugUtilsMessageTypeFlagsEXT,
                                              const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
-    const auto level = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0     ? log::Level::Error
-                       : (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0 ? log::Level::Warn
-                       : (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) != 0 ? log::Level::Info
-                                                                                        : log::Level::Debug;
+    log::Level level = log::Level::Debug;
+    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+        level = log::Level::Error;
+    } else if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) {
+        level = log::Level::Warn;
+    } else if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) != 0) {
+        level = log::Level::Info;
+    }
     log::write(level, log::Category::Device,
                data != nullptr && data->pMessage != nullptr ? data->pMessage : "Vulkan validation message");
     return VK_FALSE;
