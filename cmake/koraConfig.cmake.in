@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+if("@KORA_HAVE_SPIRV_TOOLS@" STREQUAL "ON")
+  find_dependency(SPIRV-Tools CONFIG)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/koraTargets.cmake")
+check_required_components(kora)
