@@ -19,5 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   milestone-driven Beta/Stable release notes.
 - Read the Docs-ready Sphinx/MyST documentation covering setup, architecture, configuration, APIs,
   releases, security, and maintenance.
+- Complete environment resolution for deterministic mode, shutdown policy, legacy synchronization,
+  and trace telemetry.
 
 [Unreleased]: https://github.com/varunkarthic/kora/compare/main...HEAD
