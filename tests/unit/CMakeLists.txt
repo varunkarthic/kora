@@ -6,3 +6,4 @@ kora_add_test(kora_unit_tests unit
     test_options.cpp
     test_log.cpp
 )
+target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})
