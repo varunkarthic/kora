@@ -53,8 +53,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Initialize MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
         run: cmake --preset debug
+      - name: Verify MSVC selection
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = Select-String -Path build/debug/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=.*cl.exe$'
+          if (-not $compiler) { throw 'CMake did not select the MSVC cl.exe compiler' }
       - name: Build
         run: cmake --build --preset debug --parallel
       - name: Test

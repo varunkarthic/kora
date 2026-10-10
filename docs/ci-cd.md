@@ -15,8 +15,15 @@ Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These 
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete
 platform gate that precedes a release.
 
+The Windows job initializes the Visual Studio developer environment before CMake runs and then
+checks `CMakeCache.txt` for `cl.exe`. This assertion prevents a runner image's unrelated MinGW tools
+from silently changing the compiler behind the **Windows / MSVC** label. When Vulkan-Headers is
+downloaded as a fallback, KORA disables the dependency's optional C++ module and tests: KORA uses
+only its headers, so those extra targets must not widen the supported compiler contract.
+
 The workflows grant read-only repository permissions unless a job must publish or update a release.
-Third-party actions are limited to checkout, Ninja setup, and artifact upload/download.
+Third-party actions are limited to checkout, Ninja and MSVC environment setup, and artifact
+upload/download.
 
 ## Version calculation
 
@@ -63,6 +70,9 @@ documentation, security, cross-device validation, invariants, and shutdown seman
 to a milestone, or removed from one. It regenerates the latest release body and switches the title,
 prerelease flag, and latest-release flag without creating a new version.
 
+Before the first semantic release exists, status refresh is intentionally a successful no-op. The
+first successful `main` CI run creates the initial release; later issue events can then update it.
+
 ## Changelog maintenance
 
 Every user-visible pull request must update `[Unreleased]` in
@@ -96,6 +106,15 @@ next successful main push receives the next patch version; do not reuse or move 
 If a release body becomes stale, dispatch **Refresh release status** manually. If the release
 milestone is missing, create it rather than bypassing the renderer. Never mark a release Stable by
 hand while a tracked gate remains open.
+
+For a failing hosted job, open its log and identify the first failed command rather than relying on
+the final summary alone. Confirm that the job actually started—account or repository restrictions
+can prevent all steps from running—and keep these states distinct:
+
+- a local workflow syntax check;
+- a hosted build and test result on each operating system;
+- a completed release workflow;
+- downloaded and inspected release archives.
 
 Release jobs use the repository-provided `GITHUB_TOKEN`; no personal token or package credential is
 stored in the repository. Keep workflow permissions minimal and never print tokens in commands or
