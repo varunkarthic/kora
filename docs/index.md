@@ -1,0 +1,50 @@
+# KORA documentation
+
+KORA is a vendor-neutral C++20 runtime for explicit heterogeneous CPU and Vulkan GPU workloads. It
+turns prebuilt SPIR-V compute kernels, buffers, dependencies, and runtime policies into portable
+execution without requiring CUDA, ROCm/HIP, oneAPI, or OpenCL.
+
+KORA is under active development. The documentation distinguishes implemented behavior from planned
+architecture. Interfaces described as planned are not yet available in the current source tree.
+
+```{toctree}
+:maxdepth: 2
+:caption: Start here
+
+overview
+getting-started
+building
+testing
+configuration
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Design and operation
+
+architecture
+internals/core
+ci-cd
+releases
+security
+maintenance
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: API reference
+
+api/errors
+api/options
+api/logging
+api/version
+api/checked
+```
+
+## Documentation guarantees
+
+- Commands are written for the checked-in CMake presets.
+- Required and optional dependencies are identified separately.
+- Security, platform, and Vulkan limitations are stated explicitly.
+- A source-level design is not presented as runtime-verified behavior.
+- Release status reflects milestone gates: open gates mean Beta; all closed means Stable.
