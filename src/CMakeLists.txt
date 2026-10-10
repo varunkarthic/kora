@@ -3,6 +3,7 @@ add_library(kora
   core/log.cpp
   core/options.cpp
   core/version.cpp
+  vulkan/loader.cpp
 )
 add_library(kora::kora ALIAS kora)
 target_include_directories(kora PUBLIC
