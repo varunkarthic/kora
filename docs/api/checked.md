@@ -14,5 +14,14 @@ overflowing `offset + size`.
 `add_r` and `mul_r` adapt failures to `Result<std::uint64_t>` with `ErrorCode::Overflow` and caller
 context.
 
+Higher-level helpers cover the size calculations used at API boundaries:
+
+- `byte_size(count, element_size, context)` and `byte_size<T>(count, context)`;
+- `volume(width, height, depth, context)`;
+- `range_end(offset, size, capacity, context)`;
+- `align_up_r(value, alignment, context)`.
+
+See {doc}`../internals/checked-arithmetic` for their exact failure semantics and usage rules.
+
 This header is under `detail` and is not a stable public application API. It is documented because
 its invariants protect security- and correctness-sensitive internal calculations.

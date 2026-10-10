@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Completed checked arithmetic with compiler-assisted overflow detection, byte-count and volume
+  helpers, bounded range validation, Result-returning alignment, expanded boundary tests, and an
+  internal design reference.
+
 ## [0.1.1] - 2026-10-10
 
 ### Added
