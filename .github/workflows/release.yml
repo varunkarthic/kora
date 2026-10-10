@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: read
+
+concurrency:
+  group: kora-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      patch: ${{ steps.version.outputs.patch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Calculate next semantic version
+        id: version
+        shell: bash
+        run: |
+          base=$(tr -d '[:space:]' < VERSION)
+          [[ "$base" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "invalid VERSION: $base" >&2; exit 1; }
+          previous=$(git tag -l "v${base}.*" --sort=-v:refname | head -n 1)
+          patch=0
+          if [[ -n "$previous" ]]; then patch=$(( ${previous##*.} + 1 )); fi
+          {
+            echo "version=${base}.${patch}"
+            echo "tag=v${base}.${patch}"
+            echo "patch=${patch}"
+            echo "previous=${previous}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Stamp changelog and tag release commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          args=("$VERSION")
+          if [[ -n "$PREVIOUS" ]]; then args+=(--previous-tag "$PREVIOUS"); fi
+          python3 tools/release/stamp_changelog.py "${args[@]}"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add CHANGELOG.md
+          git commit -m "chore(release): ${TAG} [skip ci]"
+          git tag -a "$TAG" -m "KORA ${TAG}"
+          git push origin HEAD:main "$TAG"
+
+  package:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: linux-x86_64
+            extension: tar.gz
+          - os: macos-14
+            artifact: macos-arm64
+            extension: tar.gz
+          - os: windows-2025
+            artifact: windows-x86_64
+            extension: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Configure
+        run: cmake --preset release -DKORA_VERSION_PATCH=${{ needs.prepare.outputs.patch }} -DKORA_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build --preset release --parallel
+      - name: Test
+        run: ctest --preset release --output-on-failure
+      - name: Install
+        run: cmake --install build/release --prefix stage
+      - name: Create package
+        shell: bash
+        run: |
+          archive="kora-${{ needs.prepare.outputs.version }}-${{ matrix.artifact }}.${{ matrix.extension }}"
+          if [[ "${{ matrix.extension }}" == "zip" ]]; then
+            cmake -E tar "cfv" "$archive" --format=zip stage
+          else
+            cmake -E tar "czfv" "$archive" --format=gnutar stage
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.artifact }}
+          path: kora-${{ needs.prepare.outputs.version }}-${{ matrix.artifact }}.${{ matrix.extension }}
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+      - name: Render release notes
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/release/render_release.py --repo "$GITHUB_REPOSITORY" --version "${{ needs.prepare.outputs.version }}" --output release.md --github-output "$GITHUB_OUTPUT"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ steps.notes.outputs.channel }}
+          STABLE: ${{ steps.notes.outputs.stable }}
+        run: |
+          args=("$TAG" dist/* --title "KORA ${TAG} (${CHANNEL})" --notes-file release.md --verify-tag)
+          if [[ "$STABLE" != "true" ]]; then args+=(--prerelease); fi
+          gh release create "${args[@]}"

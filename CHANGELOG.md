@@ -15,5 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   foundations.
 - Categorized GoogleTest/CTest framework with software Vulkan ICD and capability-skip support.
 - Initial build, testing, API, governance, security, and agent documentation.
+- Cross-platform CI, automatic semantic patch releases, platform package archives, and
+  milestone-driven Beta/Stable release notes.
 
 [Unreleased]: https://github.com/varunkarthic/kora/compare/main...HEAD

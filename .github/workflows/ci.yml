@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux / GCC / lavapipe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and Vulkan dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang-format ninja-build libvulkan-dev mesa-vulkan-drivers python3-yaml spirv-tools
+      - name: Check C++ formatting
+        run: find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --dry-run --Werror
+      - name: Configure
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug --parallel
+      - name: Test
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ctest --preset debug --output-on-failure
+      - name: Validate installed package
+        run: tools/ci/check_install.sh
+      - name: Validate workflow and release tooling
+        run: |
+          python3 tools/ci/check_workflows.py
+          python3 -m unittest discover -s tests/release -v
+
+  platform:
+    name: ${{ matrix.name }}
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS / AppleClang
+            os: macos-14
+          - name: Windows / MSVC
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Configure
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug --parallel
+      - name: Test
+        run: ctest --preset debug --output-on-failure
