@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Vulkan instance creation with API-version clamping, portability-extension negotiation, optional
+  validation diagnostics, and deterministic lifecycle tests.
+
 ## [0.1.4] - 2026-10-10
 
 ### Added
