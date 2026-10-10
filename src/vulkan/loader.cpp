@@ -143,6 +143,305 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debug_message(VkDebugUtilsMessageSeverityFlagBits
     return VK_FALSE;
 }
 
+template <class T>
+void append_query_structure(void*& chain, T& structure, VkStructureType type) {
+    structure.sType = type;
+    structure.pNext = chain;
+    chain = &structure;
+}
+
+Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_proc, VkInstance instance,
+                                                 uint32_t instance_api_version, bool properties2_enabled,
+                                                 VkPhysicalDevice physical_device) {
+    PhysicalDeviceInfo info;
+    info.handle = physical_device;
+
+    const auto enumerate_extensions = load_instance_function<PFN_vkEnumerateDeviceExtensionProperties>(
+        get_proc, instance, "vkEnumerateDeviceExtensionProperties");
+    if (enumerate_extensions == nullptr) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide vkEnumerateDeviceExtensionProperties");
+    }
+    auto extensions = enumerate<VkExtensionProperties>(
+        [enumerate_extensions, physical_device](uint32_t* count, VkExtensionProperties* values) {
+            return enumerate_extensions(physical_device, nullptr, count, values);
+        },
+        "device extensions");
+    if (!extensions) return std::move(extensions).error();
+    info.extensions = std::move(extensions).value();
+
+    PFN_vkGetPhysicalDeviceProperties2 get_properties2 = nullptr;
+    PFN_vkGetPhysicalDeviceFeatures2 get_features2 = nullptr;
+    PFN_vkGetPhysicalDeviceMemoryProperties2 get_memory_properties2 = nullptr;
+    if (properties2_enabled) {
+        get_properties2 = load_instance_function<PFN_vkGetPhysicalDeviceProperties2>(
+            get_proc, instance, "vkGetPhysicalDeviceProperties2");
+        if (get_properties2 == nullptr) {
+            get_properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                get_proc(instance, "vkGetPhysicalDeviceProperties2KHR"));
+        }
+        get_features2 = load_instance_function<PFN_vkGetPhysicalDeviceFeatures2>(
+            get_proc, instance, "vkGetPhysicalDeviceFeatures2");
+        if (get_features2 == nullptr) {
+            get_features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                get_proc(instance, "vkGetPhysicalDeviceFeatures2KHR"));
+        }
+        get_memory_properties2 = load_instance_function<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+            get_proc, instance, "vkGetPhysicalDeviceMemoryProperties2");
+        if (get_memory_properties2 == nullptr) {
+            get_memory_properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(
+                get_proc(instance, "vkGetPhysicalDeviceMemoryProperties2KHR"));
+        }
+    }
+    if (properties2_enabled &&
+        (get_properties2 == nullptr || get_features2 == nullptr || get_memory_properties2 == nullptr)) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance is missing a required properties2 entry point");
+    }
+
+    const auto get_properties = load_instance_function<PFN_vkGetPhysicalDeviceProperties>(
+        get_proc, instance, "vkGetPhysicalDeviceProperties");
+    const auto get_features = load_instance_function<PFN_vkGetPhysicalDeviceFeatures>(
+        get_proc, instance, "vkGetPhysicalDeviceFeatures");
+    const auto get_memory_properties = load_instance_function<PFN_vkGetPhysicalDeviceMemoryProperties>(
+        get_proc, instance, "vkGetPhysicalDeviceMemoryProperties");
+    if (get_properties2 != nullptr) {
+        VkPhysicalDeviceProperties2 properties{};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        get_properties2(physical_device, &properties);
+        info.properties = properties.properties;
+    } else if (get_properties != nullptr) {
+        get_properties(physical_device, &info.properties);
+    } else {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide physical-device properties");
+    }
+    info.api_version = std::min(instance_api_version, info.properties.apiVersion);
+
+    if (!properties2_enabled && get_features == nullptr) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide physical-device features");
+    }
+    if (!properties2_enabled && get_memory_properties == nullptr) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide physical-device memory properties");
+    }
+
+    const bool core11 = info.api_version >= VK_API_VERSION_1_1;
+    const bool core12 = info.api_version >= VK_API_VERSION_1_2;
+    const bool core13 = info.api_version >= VK_API_VERSION_1_3;
+    const bool has_timeline = has_extension(info.extensions, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    const bool has_bda_khr = has_extension(info.extensions, VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+    const bool has_bda_ext = has_extension(info.extensions, VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+    const bool has_descriptor_indexing =
+        has_extension(info.extensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+    const bool has_sync2 = has_extension(info.extensions, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    const bool has_subgroup_size_control =
+        has_extension(info.extensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+    const bool has_memory_budget = has_extension(info.extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    const bool has_memory_priority = has_extension(info.extensions, VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+#ifdef VK_KHR_device_fault
+    const bool has_device_fault_khr = has_extension(info.extensions, VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
+#else
+    const bool has_device_fault_khr = false;
+#endif
+#ifdef VK_EXT_device_fault
+    const bool has_device_fault_ext = has_extension(info.extensions, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+#else
+    const bool has_device_fault_ext = false;
+#endif
+    const bool has_portability_subset =
+        has_extension(info.extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    bool has_robustness2 = has_extension(info.extensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+#ifdef VK_KHR_robustness2
+    has_robustness2 = has_robustness2 || has_extension(info.extensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME);
+#endif
+
+    if (get_features2 != nullptr) {
+        void* chain = nullptr;
+        if (core11) {
+            append_query_structure(chain, info.vulkan11_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES);
+        }
+        if (core12) {
+            append_query_structure(chain, info.vulkan12_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
+        } else {
+            if (has_timeline) {
+                append_query_structure(chain, info.timeline_semaphore_features,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES);
+            }
+            if (has_bda_khr) {
+                append_query_structure(chain, info.buffer_device_address_features,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES);
+            } else if (has_bda_ext) {
+                append_query_structure(chain, info.buffer_device_address_features_ext,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT);
+            }
+            if (has_descriptor_indexing) {
+                append_query_structure(chain, info.descriptor_indexing_features,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES);
+            }
+        }
+        if (core13) {
+            append_query_structure(chain, info.vulkan13_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+        } else {
+            if (has_sync2) {
+                append_query_structure(chain, info.synchronization2_features,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES);
+            }
+            if (has_subgroup_size_control) {
+                append_query_structure(chain, info.subgroup_size_control_features,
+                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES);
+            }
+        }
+        if (has_memory_priority) {
+            append_query_structure(chain, info.memory_priority_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT);
+        }
+#ifdef VK_KHR_device_fault
+        if (has_device_fault_khr) {
+            append_query_structure(chain, info.device_fault_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_KHR);
+        }
+#endif
+#ifdef VK_EXT_device_fault
+        if (
+#ifdef VK_KHR_device_fault
+            !has_device_fault_khr &&
+#endif
+            has_device_fault_ext) {
+            append_query_structure(chain, info.device_fault_features_ext,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT);
+        }
+#endif
+        if (has_portability_subset) {
+            append_query_structure(chain, info.portability_subset_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR);
+        }
+        if (has_robustness2) {
+            append_query_structure(chain, info.robustness2_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT);
+        }
+
+        VkPhysicalDeviceFeatures2 features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = chain;
+        get_features2(physical_device, &features);
+        info.features = features.features;
+    } else {
+        get_features(physical_device, &info.features);
+    }
+
+    if (get_properties2 != nullptr) {
+        void* chain = nullptr;
+        if (core11) {
+            append_query_structure(chain, info.vulkan11_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES);
+        }
+        if (core12) {
+            append_query_structure(chain, info.vulkan12_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES);
+        }
+        if (core13) {
+            append_query_structure(chain, info.vulkan13_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES);
+        } else if (has_subgroup_size_control) {
+            append_query_structure(chain, info.subgroup_size_control_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES);
+        }
+#ifdef VK_KHR_device_fault
+        if (has_device_fault_khr) {
+            append_query_structure(chain, info.device_fault_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_PROPERTIES_KHR);
+        }
+#endif
+        if (has_portability_subset) {
+            append_query_structure(chain, info.portability_subset_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_PROPERTIES_KHR);
+        }
+        if (has_robustness2) {
+            append_query_structure(chain, info.robustness2_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_PROPERTIES_EXT);
+        }
+
+        VkPhysicalDeviceProperties2 properties{};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties.pNext = chain;
+        get_properties2(physical_device, &properties);
+        info.properties = properties.properties;
+    } else {
+        get_properties(physical_device, &info.properties);
+    }
+
+    if (get_memory_properties2 != nullptr) {
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT memory_budget{};
+        void* chain = nullptr;
+        if (has_memory_budget) {
+            append_query_structure(chain, memory_budget,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT);
+        }
+        VkPhysicalDeviceMemoryProperties2 memory{};
+        memory.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        memory.pNext = chain;
+        get_memory_properties2(physical_device, &memory);
+        info.memory_properties = memory.memoryProperties;
+        info.memory_budget_properties = memory_budget;
+        info.memory_budget_properties.pNext = nullptr;
+    } else {
+        get_memory_properties(physical_device, &info.memory_properties);
+    }
+
+    if (has_extension(info.extensions, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ||
+        has_extension(info.extensions, "VK_EXT_calibrated_timestamps")) {
+        auto get_time_domains = load_instance_function<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+            get_proc, instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR");
+        if (get_time_domains == nullptr) {
+            get_time_domains = reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+                get_proc(instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT"));
+        }
+        if (get_time_domains == nullptr) {
+            return Error(ErrorCode::UnsupportedFeature,
+                         "Calibrated timestamp extension is advertised without its query entry point");
+        }
+        auto domains = enumerate<VkTimeDomainKHR>(
+            [get_time_domains, physical_device](uint32_t* count, VkTimeDomainKHR* values) {
+                return get_time_domains(physical_device, count, values);
+            },
+            "calibrated timestamp domains");
+        if (!domains) return std::move(domains).error();
+        info.calibrated_time_domains = std::move(domains).value();
+    }
+
+    info.vulkan11_features.pNext = nullptr;
+    info.vulkan11_properties.pNext = nullptr;
+    info.vulkan12_features.pNext = nullptr;
+    info.vulkan12_properties.pNext = nullptr;
+    info.vulkan13_features.pNext = nullptr;
+    info.vulkan13_properties.pNext = nullptr;
+    info.timeline_semaphore_features.pNext = nullptr;
+    info.buffer_device_address_features.pNext = nullptr;
+    info.buffer_device_address_features_ext.pNext = nullptr;
+    info.descriptor_indexing_features.pNext = nullptr;
+    info.synchronization2_features.pNext = nullptr;
+    info.subgroup_size_control_features.pNext = nullptr;
+    info.subgroup_size_control_properties.pNext = nullptr;
+    info.memory_priority_features.pNext = nullptr;
+#ifdef VK_KHR_device_fault
+    info.device_fault_features.pNext = nullptr;
+    info.device_fault_properties.pNext = nullptr;
+#endif
+#ifdef VK_EXT_device_fault
+    info.device_fault_features_ext.pNext = nullptr;
+#endif
+    info.portability_subset_features.pNext = nullptr;
+    info.portability_subset_properties.pNext = nullptr;
+    info.robustness2_features.pNext = nullptr;
+    info.robustness2_properties.pNext = nullptr;
+    return info;
+}
+
 }  // namespace
 
 struct Instance::State {
@@ -153,6 +452,7 @@ struct Instance::State {
     PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_messenger = nullptr;
     uint32_t api_version = VK_API_VERSION_1_0;
     bool validation_enabled = false;
+    bool properties2_enabled = false;
 
     ~State() {
         if (instance != VK_NULL_HANDLE && debug_messenger != VK_NULL_HANDLE &&
@@ -239,8 +539,10 @@ Result<Instance> Loader::create_instance(const InstanceOptions& options) const {
         enabled_extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
         flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
-    if (api_version == VK_API_VERSION_1_0 &&
-        has_extension(available_extensions, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+    const bool properties2_extension_enabled =
+        api_version == VK_API_VERSION_1_0 &&
+        has_extension(available_extensions, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    if (properties2_extension_enabled) {
         enabled_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     }
 
@@ -288,6 +590,7 @@ Result<Instance> Loader::create_instance(const InstanceOptions& options) const {
     instance_state->loader = loader;
     instance_state->api_version = api_version;
     instance_state->validation_enabled = enable_validation;
+    instance_state->properties2_enabled = api_version >= VK_API_VERSION_1_1 || properties2_extension_enabled;
     VkResult result = create_instance(&instance_info, nullptr, &instance_state->instance);
     if (result != VK_SUCCESS) {
         return Error(ErrorCode::NoVulkanImplementation, "Failed to create Vulkan instance").with_vk(result);
@@ -344,6 +647,36 @@ uint32_t Instance::api_version() const noexcept {
 
 bool Instance::validation_enabled() const noexcept {
     return state_ && state_->validation_enabled;
+}
+
+Result<std::vector<PhysicalDeviceInfo>> Instance::physical_devices() const {
+    if (!state_ || state_->instance == VK_NULL_HANDLE) {
+        return Error(ErrorCode::NoVulkanImplementation, "Vulkan instance is not initialized");
+    }
+    const auto get_proc = state_->loader->get_instance_proc_addr;
+    const auto enumerate_physical_devices = load_instance_function<PFN_vkEnumeratePhysicalDevices>(
+        get_proc, state_->instance, "vkEnumeratePhysicalDevices");
+    if (enumerate_physical_devices == nullptr) {
+        return Error(ErrorCode::NoVulkanImplementation,
+                     "Vulkan instance does not provide vkEnumeratePhysicalDevices");
+    }
+    auto handles = enumerate<VkPhysicalDevice>(
+        [enumerate_physical_devices, instance = state_->instance](uint32_t* count,
+                                                                  VkPhysicalDevice* devices) {
+            return enumerate_physical_devices(instance, count, devices);
+        },
+        "physical devices");
+    if (!handles) return std::move(handles).error();
+
+    std::vector<PhysicalDeviceInfo> devices;
+    devices.reserve(handles.value().size());
+    for (const auto handle : handles.value()) {
+        auto info = query_physical_device(get_proc, state_->instance, state_->api_version,
+                                          state_->properties2_enabled, handle);
+        if (!info) return std::move(info).error();
+        devices.push_back(std::move(info).value());
+    }
+    return devices;
 }
 
 Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
