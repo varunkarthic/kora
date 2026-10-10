@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-10-10
+
 ### Added
 
 - Vendor-neutral memory topology classification, benchmark-needed signaling for discrete BAR-like
@@ -92,7 +94,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/varunkarthic/kora/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/varunkarthic/kora/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/varunkarthic/kora/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/varunkarthic/kora/compare/v0.1.6...v0.1.7
