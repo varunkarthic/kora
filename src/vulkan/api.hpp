@@ -48,32 +48,12 @@ struct Api {
 private:
     friend class Loader;
     friend class FaultInjector;
+    friend class Instance;
     std::shared_ptr<const void> lifetime_;
 };
 
 class Loader;
 struct PhysicalDeviceInfo;
-
-class Instance {
-public:
-    Instance() = default;
-    ~Instance();
-    Instance(const Instance&) = delete;
-    Instance& operator=(const Instance&) = delete;
-    Instance(Instance&&) noexcept;
-    Instance& operator=(Instance&&) noexcept;
-
-    VkInstance handle() const noexcept;
-    uint32_t api_version() const noexcept;
-    bool validation_enabled() const noexcept;
-    Result<std::vector<PhysicalDeviceInfo>> physical_devices() const;
-
-private:
-    friend class Loader;
-    struct State;
-    explicit Instance(std::shared_ptr<State> state) : state_(std::move(state)) {}
-    std::shared_ptr<State> state_;
-};
 
 /// Raw queried capabilities for a physical device. The handle remains owned by its Instance.
 struct PhysicalDeviceInfo {
@@ -114,6 +94,67 @@ struct PhysicalDeviceInfo {
     VkPhysicalDevicePortabilitySubsetPropertiesKHR portability_subset_properties{};
     VkPhysicalDeviceRobustness2FeaturesEXT robustness2_features{};
     VkPhysicalDeviceRobustness2PropertiesEXT robustness2_properties{};
+};
+
+struct DeviceOptions {
+    bool enable_dedicated_transfer_queue = true;
+};
+
+/// Owned logical device, selected queues, and device-level dispatch table.
+class Device {
+public:
+    struct EnabledFeatures {
+        bool timeline_semaphore = false;
+        bool buffer_device_address = false;
+        bool descriptor_indexing = false;
+        bool synchronization2 = false;
+    };
+
+    Device() = default;
+    ~Device();
+    Device(const Device&) = delete;
+    Device& operator=(const Device&) = delete;
+    Device(Device&&) noexcept;
+    Device& operator=(Device&&) noexcept;
+
+    VkDevice handle() const noexcept;
+    VkQueue compute_queue() const noexcept;
+    VkQueue transfer_queue() const noexcept;
+    uint32_t compute_queue_family() const noexcept;
+    uint32_t transfer_queue_family() const noexcept;
+    const EnabledFeatures& enabled_features() const noexcept;
+    const std::vector<std::string>& enabled_extensions() const noexcept;
+    const Api& api() const noexcept;
+
+private:
+    friend class Instance;
+    struct State;
+    explicit Device(std::shared_ptr<State> state, Api api) : state_(std::move(state)), api_(std::move(api)) {}
+    std::shared_ptr<State> state_;
+    Api api_;
+};
+
+class Instance {
+public:
+    Instance() = default;
+    ~Instance();
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) noexcept;
+    Instance& operator=(Instance&&) noexcept;
+
+    VkInstance handle() const noexcept;
+    uint32_t api_version() const noexcept;
+    bool validation_enabled() const noexcept;
+    Result<std::vector<PhysicalDeviceInfo>> physical_devices() const;
+    Result<Device> create_device(const PhysicalDeviceInfo& physical_device,
+                                 const DeviceOptions& options = {}) const;
+
+private:
+    friend class Loader;
+    struct State;
+    explicit Instance(std::shared_ptr<State> state) : state_(std::move(state)) {}
+    std::shared_ptr<State> state_;
 };
 
 /// Owns a dynamically loaded Vulkan loader and creates instances and device dispatch tables.

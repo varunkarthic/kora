@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -516,6 +517,23 @@ struct Instance::State {
     }
 };
 
+struct Device::State {
+    std::shared_ptr<const void> instance_lifetime;
+    std::shared_ptr<LoaderState> loader;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue compute_queue = VK_NULL_HANDLE;
+    VkQueue transfer_queue = VK_NULL_HANDLE;
+    uint32_t compute_queue_family = std::numeric_limits<uint32_t>::max();
+    uint32_t transfer_queue_family = std::numeric_limits<uint32_t>::max();
+    EnabledFeatures enabled_features;
+    std::vector<std::string> enabled_extensions;
+    PFN_vkDestroyDevice destroy_device = nullptr;
+
+    ~State() {
+        if (device != VK_NULL_HANDLE && destroy_device != nullptr) destroy_device(device, nullptr);
+    }
+};
+
 Result<Loader> Loader::load() {
     auto state = std::make_shared<LoaderState>();
     state->library = open_vulkan_library();
@@ -730,6 +748,235 @@ Result<std::vector<PhysicalDeviceInfo>> Instance::physical_devices() const {
         devices.push_back(std::move(info).value());
     }
     return devices;
+}
+
+Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device,
+                                       const DeviceOptions& options) const {
+    if (!state_ || state_->instance == VK_NULL_HANDLE || physical_device.handle == VK_NULL_HANDLE) {
+        return Error(ErrorCode::InvalidArgument, "An initialized instance and physical device are required");
+    }
+
+    uint32_t compute_family = std::numeric_limits<uint32_t>::max();
+    uint32_t dedicated_transfer_family = std::numeric_limits<uint32_t>::max();
+    for (uint32_t i = 0; i < physical_device.queue_family_properties.size(); ++i) {
+        const auto& family = physical_device.queue_family_properties[i];
+        if (family.queueCount == 0) continue;
+        if (compute_family == std::numeric_limits<uint32_t>::max() &&
+            (family.queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+            compute_family = i;
+        }
+        if (dedicated_transfer_family == std::numeric_limits<uint32_t>::max() &&
+            (family.queueFlags & VK_QUEUE_TRANSFER_BIT) != 0 &&
+            (family.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) == 0) {
+            dedicated_transfer_family = i;
+        }
+    }
+    if (compute_family == std::numeric_limits<uint32_t>::max()) {
+        return Error(ErrorCode::NoComputeQueue, "Physical device exposes no compute-capable queue")
+            .with_device(physical_device.properties.deviceName);
+    }
+    const uint32_t transfer_family = options.enable_dedicated_transfer_queue &&
+                                             dedicated_transfer_family != std::numeric_limits<uint32_t>::max()
+                                         ? dedicated_transfer_family
+                                         : compute_family;
+
+    const float priority = 1.0F;
+    std::vector<VkDeviceQueueCreateInfo> queue_infos;
+    VkDeviceQueueCreateInfo compute_queue_info{};
+    compute_queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    compute_queue_info.queueFamilyIndex = compute_family;
+    compute_queue_info.queueCount = 1;
+    compute_queue_info.pQueuePriorities = &priority;
+    queue_infos.push_back(compute_queue_info);
+    if (transfer_family != compute_family) {
+        VkDeviceQueueCreateInfo transfer_queue_info = compute_queue_info;
+        transfer_queue_info.queueFamilyIndex = transfer_family;
+        queue_infos.push_back(transfer_queue_info);
+    }
+
+    const bool core12 = physical_device.api_version >= VK_API_VERSION_1_2;
+    const bool core13 = physical_device.api_version >= VK_API_VERSION_1_3;
+    const bool timeline = core12 ? physical_device.vulkan12_features.timelineSemaphore == VK_TRUE
+                                 : physical_device.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
+    const bool bda_khr = physical_device.buffer_device_address_features.bufferDeviceAddress == VK_TRUE;
+    const bool bda_ext = physical_device.buffer_device_address_features_ext.bufferDeviceAddress == VK_TRUE;
+    const bool bda =
+        core12 ? physical_device.vulkan12_features.bufferDeviceAddress == VK_TRUE : bda_khr || bda_ext;
+    const bool descriptor_indexing =
+        core12 ? physical_device.vulkan12_features.descriptorIndexing == VK_TRUE
+               : physical_device.descriptor_indexing_features.runtimeDescriptorArray == VK_TRUE;
+    const bool sync2 = core13 ? physical_device.vulkan13_features.synchronization2 == VK_TRUE
+                              : physical_device.synchronization2_features.synchronization2 == VK_TRUE;
+
+    std::vector<const char*> extensions;
+    auto enable_extension = [&](const char* name) {
+        if (has_extension(physical_device.extensions, name)) extensions.push_back(name);
+    };
+    if (!core12 && timeline) enable_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    if (!core12 && bda) {
+        enable_extension(bda_khr ? VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME
+                                 : VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+    }
+    if (!core12 && descriptor_indexing) enable_extension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+    if (!core13 && sync2) enable_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    enable_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+
+    void* feature_chain = nullptr;
+    VkPhysicalDeviceVulkan12Features features12{};
+    VkPhysicalDeviceVulkan13Features features13{};
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{};
+    VkPhysicalDeviceBufferDeviceAddressFeatures bda_features{};
+    VkPhysicalDeviceBufferDeviceAddressFeaturesEXT bda_features_ext{};
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptor_features{};
+    VkPhysicalDeviceSynchronization2Features sync2_features{};
+    if (core12) {
+        features12.timelineSemaphore = timeline;
+        features12.bufferDeviceAddress = bda;
+        features12.descriptorIndexing = descriptor_indexing;
+        features12.runtimeDescriptorArray =
+            descriptor_indexing && physical_device.vulkan12_features.runtimeDescriptorArray;
+        features12.descriptorBindingPartiallyBound =
+            descriptor_indexing && physical_device.vulkan12_features.descriptorBindingPartiallyBound;
+        features12.descriptorBindingVariableDescriptorCount =
+            descriptor_indexing && physical_device.vulkan12_features.descriptorBindingVariableDescriptorCount;
+        append_query_structure(feature_chain, features12,
+                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
+    } else {
+        if (timeline) {
+            timeline_features.timelineSemaphore = VK_TRUE;
+            append_query_structure(feature_chain, timeline_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES);
+        }
+        if (bda_khr) {
+            bda_features.bufferDeviceAddress = VK_TRUE;
+            append_query_structure(feature_chain, bda_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES);
+        } else if (bda_ext) {
+            bda_features_ext.bufferDeviceAddress = VK_TRUE;
+            append_query_structure(feature_chain, bda_features_ext,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT);
+        }
+        if (descriptor_indexing) {
+            descriptor_features.runtimeDescriptorArray =
+                physical_device.descriptor_indexing_features.runtimeDescriptorArray;
+            descriptor_features.descriptorBindingPartiallyBound =
+                physical_device.descriptor_indexing_features.descriptorBindingPartiallyBound;
+            descriptor_features.descriptorBindingVariableDescriptorCount =
+                physical_device.descriptor_indexing_features.descriptorBindingVariableDescriptorCount;
+            append_query_structure(feature_chain, descriptor_features,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES);
+        }
+    }
+    if (core13) {
+        features13.synchronization2 = sync2;
+        append_query_structure(feature_chain, features13,
+                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+    } else if (sync2) {
+        sync2_features.synchronization2 = VK_TRUE;
+        append_query_structure(feature_chain, sync2_features,
+                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES);
+    }
+
+    VkPhysicalDeviceFeatures base_features{};
+    base_features.robustBufferAccess = physical_device.features.robustBufferAccess;
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = feature_chain;
+    features.features = base_features;
+
+    VkDeviceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    if (physical_device.api_version >= VK_API_VERSION_1_1 || state_->properties2_enabled) {
+        create_info.pNext = &features;
+    } else {
+        create_info.pEnabledFeatures = &base_features;
+    }
+    create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_infos.size());
+    create_info.pQueueCreateInfos = queue_infos.data();
+    create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    create_info.ppEnabledExtensionNames = extensions.data();
+
+    const auto get_proc = state_->loader->get_instance_proc_addr;
+    const auto create_device =
+        load_instance_function<PFN_vkCreateDevice>(get_proc, state_->instance, "vkCreateDevice");
+    if (create_device == nullptr) {
+        return Error(ErrorCode::UnsupportedFeature, "Vulkan instance does not provide vkCreateDevice");
+    }
+    const auto get_device_proc =
+        reinterpret_cast<PFN_vkGetDeviceProcAddr>(get_proc(state_->instance, "vkGetDeviceProcAddr"));
+    if (get_device_proc == nullptr) {
+        return Error(ErrorCode::UnsupportedFeature, "Vulkan instance does not provide vkGetDeviceProcAddr");
+    }
+    auto device_state = std::make_shared<Device::State>();
+    device_state->instance_lifetime = state_;
+    device_state->loader = state_->loader;
+    VkResult result = create_device(physical_device.handle, &create_info, nullptr, &device_state->device);
+    if (result != VK_SUCCESS) {
+        return Error(ErrorCode::NoEligibleDevice, "Failed to create Vulkan logical device")
+            .with_vk(result)
+            .with_device(physical_device.properties.deviceName);
+    }
+
+    device_state->destroy_device =
+        load_device_function<PFN_vkDestroyDevice>(get_device_proc, device_state->device, "vkDestroyDevice");
+    const auto get_device_queue =
+        load_device_function<PFN_vkGetDeviceQueue>(get_device_proc, device_state->device, "vkGetDeviceQueue");
+    if (device_state->destroy_device == nullptr || get_device_queue == nullptr) {
+        return Error(ErrorCode::UnsupportedFeature,
+                     "Vulkan device is missing required lifecycle or queue entry points");
+    }
+    get_device_queue(device_state->device, compute_family, 0, &device_state->compute_queue);
+    get_device_queue(device_state->device, transfer_family, 0, &device_state->transfer_queue);
+    device_state->compute_queue_family = compute_family;
+    device_state->transfer_queue_family = transfer_family;
+    device_state->enabled_features = {timeline, bda, descriptor_indexing, sync2};
+    for (const char* extension : extensions) device_state->enabled_extensions.emplace_back(extension);
+
+    auto api_state = std::make_shared<DeviceState>();
+    api_state->loader = state_->loader;
+    api_state->allocate_memory =
+        load_device_function<PFN_vkAllocateMemory>(get_device_proc, device_state->device, "vkAllocateMemory");
+    api_state->queue_submit =
+        load_device_function<PFN_vkQueueSubmit>(get_device_proc, device_state->device, "vkQueueSubmit");
+    if (api_state->allocate_memory == nullptr || api_state->queue_submit == nullptr) {
+        return Error(ErrorCode::UnsupportedFeature, "Vulkan device is missing required backend entry points");
+    }
+    Api api;
+    api.allocate_memory = {api_state.get(), allocate_memory};
+    api.queue_submit = {api_state.get(), queue_submit};
+    api.lifetime_ = std::move(api_state);
+    return Device(std::move(device_state), std::move(api));
+}
+
+Device::~Device() = default;
+Device::Device(Device&&) noexcept = default;
+Device& Device::operator=(Device&&) noexcept = default;
+
+VkDevice Device::handle() const noexcept {
+    return state_ ? state_->device : VK_NULL_HANDLE;
+}
+VkQueue Device::compute_queue() const noexcept {
+    return state_ ? state_->compute_queue : VK_NULL_HANDLE;
+}
+VkQueue Device::transfer_queue() const noexcept {
+    return state_ ? state_->transfer_queue : VK_NULL_HANDLE;
+}
+uint32_t Device::compute_queue_family() const noexcept {
+    return state_ ? state_->compute_queue_family : std::numeric_limits<uint32_t>::max();
+}
+uint32_t Device::transfer_queue_family() const noexcept {
+    return state_ ? state_->transfer_queue_family : std::numeric_limits<uint32_t>::max();
+}
+const Device::EnabledFeatures& Device::enabled_features() const noexcept {
+    static const EnabledFeatures empty;
+    return state_ ? state_->enabled_features : empty;
+}
+const std::vector<std::string>& Device::enabled_extensions() const noexcept {
+    static const std::vector<std::string> empty;
+    return state_ ? state_->enabled_extensions : empty;
+}
+const Api& Device::api() const noexcept {
+    return api_;
 }
 
 Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {

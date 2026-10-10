@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -126,4 +127,58 @@ TEST(VulkanPhysicalDevice, EnumeratesAndQueriesEveryDevice) {
     for (const auto& message : errors.messages()) {
         ADD_FAILURE() << message;
     }
+}
+
+TEST(VulkanPhysicalDevice, CreatesLogicalDeviceForEveryComputeCapableDevice) {
+    ValidationErrors errors;
+    auto loader = kora::vk::Loader::load();
+    if (!loader) KORA_REQUIRE_VULKAN(loader);
+
+    kora::vk::Loader::InstanceOptions options;
+    options.enable_validation = true;
+    auto instance = loader.value().create_instance(options);
+    if (!instance && instance.error().code == kora::ErrorCode::NoVulkanImplementation)
+        KORA_REQUIRE_VULKAN(false);
+    ASSERT_TRUE(instance) << instance.error().describe();
+
+    auto devices = instance.value().physical_devices();
+    ASSERT_TRUE(devices) << devices.error().describe();
+    std::size_t eligible = 0;
+    for (const auto& physical_device : devices.value()) {
+        const bool has_compute = std::any_of(
+            physical_device.queue_family_properties.begin(), physical_device.queue_family_properties.end(),
+            [](const VkQueueFamilyProperties& family) {
+                return family.queueCount != 0 && (family.queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
+            });
+        if (!has_compute) continue;
+        ++eligible;
+        SCOPED_TRACE(physical_device.properties.deviceName);
+        auto device = instance.value().create_device(physical_device);
+        ASSERT_TRUE(device) << device.error().describe();
+        EXPECT_NE(device.value().handle(), VK_NULL_HANDLE);
+        EXPECT_NE(device.value().compute_queue(), VK_NULL_HANDLE);
+        EXPECT_NE(device.value().transfer_queue(), VK_NULL_HANDLE);
+        EXPECT_TRUE(device.value().api().allocate_memory);
+        EXPECT_TRUE(device.value().api().queue_submit);
+
+        for (const auto& extension : device.value().enabled_extensions()) {
+            EXPECT_NE(std::find_if(physical_device.extensions.begin(), physical_device.extensions.end(),
+                                   [&](const VkExtensionProperties& available) {
+                                       return extension == available.extensionName;
+                                   }),
+                      physical_device.extensions.end());
+        }
+        const bool portability_advertised = std::any_of(
+            physical_device.extensions.begin(), physical_device.extensions.end(),
+            [](const VkExtensionProperties& extension) {
+                return std::string_view(extension.extensionName) == VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+            });
+        EXPECT_EQ(
+            std::find(device.value().enabled_extensions().begin(), device.value().enabled_extensions().end(),
+                      VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) != device.value().enabled_extensions().end(),
+            portability_advertised);
+    }
+    if (eligible == 0) KORA_REQUIRE_VULKAN(false);
+
+    for (const auto& message : errors.messages()) ADD_FAILURE() << message;
 }
