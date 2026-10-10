@@ -8,13 +8,35 @@ if(NOT GTest_FOUND)
 endif()
 include(GoogleTest)
 
-# kora_add_tests(<exe> <label> sources...): one executable per category, discovered into ctest with a label.
-function(kora_add_tests exe label)
-  add_executable(${exe} ${ARGN})
+set(KORA_TEST_VULKAN_ICD "" CACHE FILEPATH
+  "Software Vulkan ICD JSON used by tests declared with USES_VULKAN")
+
+# kora_add_test(<exe> <label> [USES_VULKAN] SOURCES <sources...>): create and discover a
+# GoogleTest executable. Vulkan tests inherit the requested software ICD without affecting other tests.
+function(kora_add_test exe label)
+  cmake_parse_arguments(KORA_TEST "USES_VULKAN" "" "SOURCES" ${ARGN})
+  if(KORA_TEST_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "kora_add_test(${exe}): unknown arguments: ${KORA_TEST_UNPARSED_ARGUMENTS}")
+  endif()
+  if(NOT KORA_TEST_SOURCES)
+    message(FATAL_ERROR "kora_add_test(${exe}): SOURCES must not be empty")
+  endif()
+
+  add_executable(${exe} ${KORA_TEST_SOURCES})
   target_link_libraries(${exe} PRIVATE kora::kora GTest::gtest_main)
-  target_include_directories(${exe} PRIVATE ${PROJECT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})
+  target_include_directories(${exe} PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/tests)
   kora_configure_target(${exe})
-  gtest_discover_tests(${exe} PROPERTIES LABELS ${label} DISCOVERY_TIMEOUT 60)
+
+  set(_properties LABELS ${label})
+  if(KORA_TEST_USES_VULKAN AND KORA_TEST_VULKAN_ICD)
+    list(APPEND _properties ENVIRONMENT "VK_ICD_FILENAMES=${KORA_TEST_VULKAN_ICD}")
+  endif()
+  gtest_discover_tests(${exe} PROPERTIES ${_properties} DISCOVERY_TIMEOUT 60)
 endfunction()
 
 add_subdirectory(unit)
+add_subdirectory(integration)
+add_subdirectory(stress)
+add_subdirectory(fault_injection)
