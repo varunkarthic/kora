@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-10
+
 ### Fixed
 
 - Windows release archives now use the documented MSVC ABI and fail packaging if CMake selects a
@@ -51,7 +53,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/varunkarthic/kora/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/varunkarthic/kora/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/varunkarthic/kora/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/varunkarthic/kora/releases/tag/v0.1.0
