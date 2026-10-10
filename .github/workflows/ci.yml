@@ -15,7 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build and Vulkan dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang-format ninja-build libvulkan-dev mesa-vulkan-drivers python3-yaml spirv-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang-format \
+            ninja-build \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-validationlayers \
+            python3-yaml \
+            spirv-tools
       - name: Locate lavapipe ICD
         run: |
           icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
