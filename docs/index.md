@@ -31,6 +31,7 @@ internals/instance
 internals/physical-device
 internals/capabilities
 internals/queues
+internals/logical-device
 memory-model
 ci-cd
 releases

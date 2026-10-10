@@ -11,6 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Vendor-neutral memory topology classification, benchmark-needed signaling for discrete BAR-like
   memory, and ordered per-policy memory-type preferences.
+- Capability-gated logical-device creation with compute and optional dedicated-transfer queues,
+  portability-subset support, RAII ownership, and a device-level dispatch table.
 
 ## [0.1.9] - 2026-10-10
 
