@@ -23,6 +23,7 @@ configuration
 :caption: Design and operation
 
 architecture
+debugging
 internals/core
 ci-cd
 releases
