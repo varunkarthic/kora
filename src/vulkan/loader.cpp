@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -30,6 +31,7 @@ struct LoaderState {
     void* library = nullptr;
 #endif
     PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
+    uint32_t supported_api_version = VK_API_VERSION_1_0;
 
     ~LoaderState() {
 #if defined(_WIN32)
@@ -67,6 +69,36 @@ const char* library_name() {
     return "libvulkan.so.1";
 #endif
 }
+
+#if defined(_WIN32)
+HMODULE open_vulkan_library() {
+    return LoadLibraryA(library_name());
+}
+#else
+void* open_vulkan_library() {
+    constexpr int flags = RTLD_NOW | RTLD_LOCAL;
+    if (void* library = dlopen(library_name(), flags)) return library;
+#if defined(__APPLE__)
+    if (const char* sdk = std::getenv("VULKAN_SDK"); sdk != nullptr && sdk[0] != '\0') {
+        const std::array<std::string, 2> sdk_paths = {
+            std::string(sdk) + "/lib/libvulkan.1.dylib",
+            std::string(sdk) + "/macOS/lib/libvulkan.1.dylib",
+        };
+        for (const auto& path : sdk_paths) {
+            if (void* library = dlopen(path.c_str(), flags)) return library;
+        }
+    }
+    constexpr std::array<const char*, 2> package_paths = {
+        "/opt/homebrew/lib/libvulkan.1.dylib",
+        "/usr/local/lib/libvulkan.1.dylib",
+    };
+    for (const auto* path : package_paths) {
+        if (void* library = dlopen(path, flags)) return library;
+    }
+#endif
+    return nullptr;
+}
+#endif
 
 #if defined(_WIN32)
 template <class T>
@@ -465,11 +497,7 @@ struct Instance::State {
 
 Result<Loader> Loader::load() {
     auto state = std::make_shared<LoaderState>();
-#if defined(_WIN32)
-    state->library = LoadLibraryA(library_name());
-#else
-    state->library = dlopen(library_name(), RTLD_NOW | RTLD_LOCAL);
-#endif
+    state->library = open_vulkan_library();
     if (state->library == nullptr) {
         return Error(ErrorCode::NoVulkanImplementation,
                      std::string("Unable to load Vulkan loader: ") + library_name());
@@ -483,6 +511,15 @@ Result<Loader> Loader::load() {
     }
 
     state->get_instance_proc_addr = get_instance_proc;
+    const auto enumerate_version = load_instance_function<PFN_vkEnumerateInstanceVersion>(
+        get_instance_proc, VK_NULL_HANDLE, "vkEnumerateInstanceVersion");
+    if (enumerate_version != nullptr) {
+        const VkResult result = enumerate_version(&state->supported_api_version);
+        if (result != VK_SUCCESS) {
+            return Error(ErrorCode::NoVulkanImplementation, "Failed to query Vulkan loader version")
+                .with_vk(result);
+        }
+    }
     return Loader(std::move(state));
 }
 
@@ -493,20 +530,10 @@ Result<Instance> Loader::create_instance() const {
 Result<Instance> Loader::create_instance(const InstanceOptions& options) const {
     if (!state_) return Error(ErrorCode::NoVulkanImplementation, "Vulkan loader is not initialized");
     auto loader = std::static_pointer_cast<LoaderState>(state_);
-    auto enumerate_version = load_instance_function<PFN_vkEnumerateInstanceVersion>(
-        loader->get_instance_proc_addr, VK_NULL_HANDLE, "vkEnumerateInstanceVersion");
-    uint32_t supported_version = VK_API_VERSION_1_0;
-    if (enumerate_version != nullptr) {
-        const VkResult result = enumerate_version(&supported_version);
-        if (result != VK_SUCCESS) {
-            return Error(ErrorCode::NoVulkanImplementation, "Failed to query Vulkan loader version")
-                .with_vk(result);
-        }
-    }
     const uint32_t requested =
         options.requested_api_version == 0 ? VK_API_VERSION_1_0 : options.requested_api_version;
     const uint32_t api_version =
-        std::min({requested, supported_version, static_cast<uint32_t>(VK_API_VERSION_1_3)});
+        std::min({requested, loader->supported_api_version, static_cast<uint32_t>(VK_API_VERSION_1_3)});
 
     auto enumerate_extensions = load_instance_function<PFN_vkEnumerateInstanceExtensionProperties>(
         loader->get_instance_proc_addr, VK_NULL_HANDLE, "vkEnumerateInstanceExtensionProperties");
@@ -647,6 +674,11 @@ uint32_t Instance::api_version() const noexcept {
 
 bool Instance::validation_enabled() const noexcept {
     return state_ && state_->validation_enabled;
+}
+
+uint32_t Loader::supported_api_version() const noexcept {
+    if (!state_) return VK_API_VERSION_1_0;
+    return std::static_pointer_cast<LoaderState>(state_)->supported_api_version;
 }
 
 Result<std::vector<PhysicalDeviceInfo>> Instance::physical_devices() const {

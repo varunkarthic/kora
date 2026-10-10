@@ -37,6 +37,13 @@ maintenance
 
 ```{toctree}
 :maxdepth: 2
+:caption: Tools
+
+tools/kora-info
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: API reference
 
 api/errors

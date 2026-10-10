@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- `kora-info`, a command-line report for KORA version, Vulkan loader/instance versions, and devices.
 - Raw physical-device discovery with versioned core and extension property/feature queries.
 
 ## [0.1.5] - 2026-10-10
