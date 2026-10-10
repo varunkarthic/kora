@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Raw physical-device discovery with versioned core and extension property/feature queries.
+
 ## [0.1.5] - 2026-10-10
 
 ### Added

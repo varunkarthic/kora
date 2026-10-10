@@ -1,11 +1,15 @@
 #pragma once
 
+#ifndef VK_ENABLE_BETA_EXTENSIONS
+#define VK_ENABLE_BETA_EXTENSIONS
+#endif
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "kora/errors.hpp"
 
@@ -48,6 +52,7 @@ private:
 };
 
 class Loader;
+struct PhysicalDeviceInfo;
 
 class Instance {
 public:
@@ -61,12 +66,52 @@ public:
     VkInstance handle() const noexcept;
     uint32_t api_version() const noexcept;
     bool validation_enabled() const noexcept;
+    Result<std::vector<PhysicalDeviceInfo>> physical_devices() const;
 
 private:
     friend class Loader;
     struct State;
     explicit Instance(std::shared_ptr<State> state) : state_(std::move(state)) {}
     std::shared_ptr<State> state_;
+};
+
+/// Raw queried capabilities for a physical device. The handle remains owned by its Instance.
+struct PhysicalDeviceInfo {
+    VkPhysicalDevice handle = VK_NULL_HANDLE;
+    uint32_t api_version = VK_API_VERSION_1_0;
+    VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceFeatures features{};
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    std::vector<VkExtensionProperties> extensions;
+    std::vector<VkTimeDomainKHR> calibrated_time_domains;
+
+    VkPhysicalDeviceVulkan11Features vulkan11_features{};
+    VkPhysicalDeviceVulkan11Properties vulkan11_properties{};
+    VkPhysicalDeviceVulkan12Features vulkan12_features{};
+    VkPhysicalDeviceVulkan12Properties vulkan12_properties{};
+    VkPhysicalDeviceVulkan13Features vulkan13_features{};
+    VkPhysicalDeviceVulkan13Properties vulkan13_properties{};
+
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features{};
+    VkPhysicalDeviceBufferDeviceAddressFeatures buffer_device_address_features{};
+    VkPhysicalDeviceBufferDeviceAddressFeaturesEXT buffer_device_address_features_ext{};
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{};
+    VkPhysicalDeviceSynchronization2Features synchronization2_features{};
+    VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_control_features{};
+    VkPhysicalDeviceSubgroupSizeControlProperties subgroup_size_control_properties{};
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_properties{};
+    VkPhysicalDeviceMemoryPriorityFeaturesEXT memory_priority_features{};
+#ifdef VK_KHR_device_fault
+    VkPhysicalDeviceFaultFeaturesKHR device_fault_features{};
+    VkPhysicalDeviceFaultPropertiesKHR device_fault_properties{};
+#endif
+#ifdef VK_EXT_device_fault
+    VkPhysicalDeviceFaultFeaturesEXT device_fault_features_ext{};
+#endif
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portability_subset_features{};
+    VkPhysicalDevicePortabilitySubsetPropertiesKHR portability_subset_properties{};
+    VkPhysicalDeviceRobustness2FeaturesEXT robustness2_features{};
+    VkPhysicalDeviceRobustness2PropertiesEXT robustness2_properties{};
 };
 
 /// Owns a dynamically loaded Vulkan loader and creates instances and device dispatch tables.
