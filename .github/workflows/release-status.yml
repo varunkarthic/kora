@@ -26,17 +26,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release list --limit 100 --json tagName,isDraft --jq '[.[] | select(.isDraft == false)][0].tagName')
-          [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "no semantic release found" >&2; exit 1; }
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "No semantic release exists yet; status refresh is not needed."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           {
+            echo "found=true"
             echo "tag=$tag"
             echo "version=${BASH_REMATCH[1]}"
           } >> "$GITHUB_OUTPUT"
       - name: Render current status
+        if: steps.release.outputs.found == 'true'
         id: notes
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 tools/release/render_release.py --repo "$GITHUB_REPOSITORY" --version "${{ steps.release.outputs.version }}" --output release.md --github-output "$GITHUB_OUTPUT"
       - name: Update release
+        if: steps.release.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}

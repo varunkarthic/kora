@@ -13,6 +13,11 @@ else()
     set(KORA_VULKAN_HEADERS Vulkan::Headers)
   else()
     message(STATUS "KORA: fetching Vulkan-Headers")
+    # KORA consumes Vulkan-Headers as headers only.  Disable the optional Vulkan-Hpp module target
+    # before making the dependency available: building it adds an unused C++ module toolchain
+    # requirement and currently fails with some Windows/MinGW combinations.
+    set(VULKAN_HEADERS_ENABLE_MODULE OFF CACHE BOOL "Build Vulkan-Hpp C++ module" FORCE)
+    set(VULKAN_HEADERS_ENABLE_TESTS OFF CACHE BOOL "Build Vulkan-Headers tests" FORCE)
     FetchContent_Declare(vulkan_headers
       URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.296.tar.gz)
     FetchContent_MakeAvailable(vulkan_headers)

@@ -22,4 +22,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Complete environment resolution for deterministic mode, shutdown policy, legacy synchronization,
   and trace telemetry.
 
+### Fixed
+
+- Hosted Windows CI now initializes and verifies MSVC explicitly, while the fetched header-only
+  Vulkan dependency no longer builds its unused experimental C++ module.
+- Release-status refreshes now exit successfully before the repository has its first release.
+
 [Unreleased]: https://github.com/varunkarthic/kora/compare/main...HEAD
