@@ -32,9 +32,17 @@ TEST(Errors, MapAndThen) {
 TEST(Errors, StatusDefaultsOk) {
     Status s;
     EXPECT_TRUE(s.ok());
+    EXPECT_NO_THROW(throw_if_error(s));
     Status f = Error(ErrorCode::DeviceLost, "gone");
     EXPECT_FALSE(f.ok());
     EXPECT_THROW(f.value_or_throw(), Exception);
+    try {
+        throw_if_error(f);
+        FAIL() << "throw_if_error must throw for a failed Status";
+    } catch (const Exception& e) {
+        EXPECT_EQ(e.error().code, ErrorCode::DeviceLost);
+        EXPECT_STREQ(e.what(), "DeviceLost: gone");
+    }
 }
 
 TEST(Errors, CauseChainDescribe) {
