@@ -3,6 +3,7 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 namespace kora::log {
@@ -12,7 +13,12 @@ constexpr int kCats = static_cast<int>(Category::kCount_);
 std::array<std::atomic<int>, kCats>& levels() {
     static std::array<std::atomic<int>, kCats> l{};
     static const bool init = [] {
-        for (auto& x : l) x.store(static_cast<int>(Level::Warn));
+        Level initial = Level::Warn;
+        if (const char* configured = std::getenv("KORA_LOG_LEVEL")) {
+            Level parsed{};
+            if (parse_level(configured, parsed)) initial = parsed;
+        }
+        for (auto& x : l) x.store(static_cast<int>(initial));
         return true;
     }();
     (void)init;
@@ -68,6 +74,14 @@ bool parse_level(std::string_view s, Level& out) noexcept {
     return false;
 }
 
+bool configure_from_environment() noexcept {
+    const char* configured = std::getenv("KORA_LOG_LEVEL");
+    Level parsed{};
+    if (!configured || !parse_level(configured, parsed)) return false;
+    set_level(parsed);
+    return true;
+}
+
 void set_sink(Sink s) {
     std::lock_guard lk(sink_mutex());
     sink() = std::move(s);
@@ -76,10 +90,13 @@ void set_level(Level l) noexcept {
     for (auto& x : levels()) x.store(static_cast<int>(l));
 }
 void set_category_level(Category c, Level l) noexcept {
-    levels()[static_cast<int>(c)].store(static_cast<int>(l));
+    const auto index = static_cast<int>(c);
+    if (index >= 0 && index < kCats) levels()[index].store(static_cast<int>(l));
 }
 Level level(Category c) noexcept {
-    return static_cast<Level>(levels()[static_cast<int>(c)].load(std::memory_order_relaxed));
+    const auto index = static_cast<int>(c);
+    if (index < 0 || index >= kCats) return Level::Off;
+    return static_cast<Level>(levels()[index].load(std::memory_order_relaxed));
 }
 
 void write(Level l, Category c, std::string_view msg) {

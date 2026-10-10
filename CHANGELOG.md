@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Completed structured logging with automatic `KORA_LOG_LEVEL` initialization, portable
+  zero-dependency fallback formatting, defensive category handling, expanded tests, and a debugging
+  guide.
+
 ## [0.1.0] - 2026-10-10
 
 ### Added
