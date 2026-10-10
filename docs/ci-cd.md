@@ -11,7 +11,9 @@ Pull requests run the Linux job with GCC and Mesa lavapipe. The job configures a
 runs CTest, validates the installed CMake package with a standalone consumer, parses every workflow,
 and runs the release-tool unit tests. It discovers the lavapipe ICD manifest installed by Mesa and
 installs the Vulkan validation layer so the integration suite exercises both software-device
-enumeration and validation-enabled instance creation.
+enumeration and validation-enabled instance creation. On other platforms, the successful `kora-info` output check is skipped only
+when the CLI reports `NoVulkanImplementation`; failures unrelated to Vulkan availability remain
+test failures.
 
 Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These jobs use the same
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete

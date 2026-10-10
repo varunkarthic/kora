@@ -11,7 +11,8 @@ if(TARGET kora-info)
   add_test(NAME KoraInfo.ListsDevices COMMAND $<TARGET_FILE:kora-info>)
   set_tests_properties(KoraInfo.ListsDevices PROPERTIES
     LABELS integration
-    PASS_REGULAR_EXPRESSION "Physical devices: [0-9]+")
+    PASS_REGULAR_EXPRESSION "Physical devices: [0-9]+"
+    SKIP_REGULAR_EXPRESSION "NoVulkanImplementation")
 
   add_test(NAME KoraInfo.MissingVulkan
     COMMAND ${CMAKE_COMMAND}

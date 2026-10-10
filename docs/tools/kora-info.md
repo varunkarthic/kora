@@ -33,4 +33,6 @@ for scripting and health checks without treating a missing Vulkan implementation
 successful result.
 
 The CTest integration checks verify the successful output contains the device count and that a
-missing ICD produces a non-zero exit with a Vulkan diagnostic.
+missing ICD produces a non-zero exit with a Vulkan diagnostic. The successful-output check is
+reported as skipped when a host has no Vulkan implementation; Linux CI installs lavapipe and
+requires this check to pass against a real implementation.
