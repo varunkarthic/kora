@@ -15,6 +15,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   memory, and ordered per-policy memory-type preferences.
 - Capability-gated logical-device creation with compute and optional dedicated-transfer queues,
   portability-subset support, RAII ownership, and a device-level dispatch table.
+- Deterministic, vendor-neutral device eligibility and selection for automatic, device-kind
+  preference, explicit index/UUID, and all-eligible policies.
 
 ## [0.1.9] - 2026-10-10
 
