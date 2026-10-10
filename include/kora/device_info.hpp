@@ -13,6 +13,7 @@ class DeviceCaps;
 }
 
 enum class CapabilityTier : std::uint8_t { A, B, C, D };
+enum class MemoryTopology : std::uint8_t { Discrete, Uma, DiscreteWithBar, Unknown };
 
 /// Immutable, vendor-neutral snapshot of a Vulkan physical device's capabilities.
 class DeviceInfo final {
@@ -86,6 +87,16 @@ public:
         bool protected_memory = false;
     };
 
+    struct MemoryTypePreferences {
+        std::vector<std::uint32_t> automatic;
+        std::vector<std::uint32_t> device_preferred;
+        std::vector<std::uint32_t> host_visible;
+        std::vector<std::uint32_t> read_mostly;
+        std::vector<std::uint32_t> write_mostly;
+        std::vector<std::uint32_t> streaming;
+        std::vector<std::uint32_t> readback;
+    };
+
     DeviceInfo(const DeviceInfo&) = default;
     DeviceInfo(DeviceInfo&&) noexcept = default;
     DeviceInfo& operator=(const DeviceInfo&) = delete;
@@ -102,6 +113,11 @@ public:
     const std::vector<QueueFamily>& queue_families() const noexcept { return data_.queue_families; }
     const std::vector<MemoryHeap>& memory_heaps() const noexcept { return data_.memory_heaps; }
     const std::vector<MemoryType>& memory_types() const noexcept { return data_.memory_types; }
+    MemoryTopology memory_topology() const noexcept { return data_.memory_topology; }
+    bool memory_topology_needs_benchmark() const noexcept { return data_.memory_topology_needs_benchmark; }
+    const MemoryTypePreferences& memory_type_preferences() const noexcept {
+        return data_.memory_type_preferences;
+    }
     CapabilityTier tier() const noexcept { return data_.tier; }
 
 private:
@@ -117,6 +133,9 @@ private:
         std::vector<QueueFamily> queue_families;
         std::vector<MemoryHeap> memory_heaps;
         std::vector<MemoryType> memory_types;
+        MemoryTopology memory_topology = MemoryTopology::Unknown;
+        bool memory_topology_needs_benchmark = false;
+        MemoryTypePreferences memory_type_preferences;
         CapabilityTier tier = CapabilityTier::A;
     };
 

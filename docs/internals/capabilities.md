@@ -10,8 +10,9 @@ headers to inspect capabilities.
 The snapshot includes the public device name and identifiers, the device API version, compute
 workgroup and storage/push-constant limits, timestamp period in nanoseconds, subgroup size and
 operation flags, queue-family flags/counts, memory heaps and memory-type properties, and a focused
-set of Vulkan feature booleans. All accessors are const-only and references returned for nested
-records and vectors are read-only.
+set of Vulkan feature booleans. Memory snapshots also include a conservative topology classification
+and policy-specific ordered memory-type preferences. All accessors are const-only and references
+returned for nested records and vectors are read-only.
 
 `DeviceCaps::from_vulkan()` performs the conversion. Promoted timeline-semaphore, buffer-device
 address, descriptor-indexing, and synchronization2 features are read from the core 1.2/1.3 query
@@ -46,4 +47,5 @@ uses `vendorID`, device name, or other vendor identity to classify hardware.
 - CI scans `src/` to reject conditional branches or direct comparisons on `vendorID`.
 
 The raw query path and its Vulkan entry-point references are documented in
-[physical-device discovery](./physical-device.md).
+[physical-device discovery](./physical-device.md). Memory topology heuristics and type-preference
+ordering are documented in the [memory model](../memory-model.md).
