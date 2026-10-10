@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "kora/errors.hpp"
@@ -46,11 +47,42 @@ private:
     std::shared_ptr<const void> lifetime_;
 };
 
-/// Owns a dynamically loaded Vulkan loader and creates device-scoped dispatch tables.
+class Loader;
+
+class Instance {
+public:
+    Instance() = default;
+    ~Instance();
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) noexcept;
+    Instance& operator=(Instance&&) noexcept;
+
+    VkInstance handle() const noexcept;
+    uint32_t api_version() const noexcept;
+    bool validation_enabled() const noexcept;
+
+private:
+    friend class Loader;
+    struct State;
+    explicit Instance(std::shared_ptr<State> state) : state_(std::move(state)) {}
+    std::shared_ptr<State> state_;
+};
+
+/// Owns a dynamically loaded Vulkan loader and creates instances and device dispatch tables.
 class Loader {
 public:
     static Result<Loader> load();
 
+    struct InstanceOptions {
+        uint32_t requested_api_version = VK_API_VERSION_1_3;
+        std::string application_name = "KORA";
+        uint32_t application_version = VK_MAKE_VERSION(0, 1, 0);
+        bool enable_validation = false;
+    };
+
+    Result<Instance> create_instance(const InstanceOptions& options) const;
+    Result<Instance> create_instance() const;
     Result<Api> device_api(VkInstance instance, VkDevice device) const;
 
 private:
