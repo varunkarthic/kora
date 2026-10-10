@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-10
+
 ### Added
 
 - Initial runtime-loaded Vulkan device dispatch table and deterministic fault injection for memory
@@ -58,7 +60,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/varunkarthic/kora/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/varunkarthic/kora/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/varunkarthic/kora/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/varunkarthic/kora/compare/v0.1.0...v0.1.1
