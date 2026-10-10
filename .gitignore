@@ -1,0 +1,12 @@
+build/
+.cache/
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+docs/_build/
+compile_commands.json
+.DS_Store
+graphify-out/
+context/
+.kora-cache/
