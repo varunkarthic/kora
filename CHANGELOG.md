@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [0.1.15] - 2026-10-11
 
+## [Unreleased]
+
+### Added
+
+- Allocation-time memory-policy selection that filters policy rankings by Vulkan resource
+  compatibility and required properties, with per-heap reservation accounting from
+  `VK_EXT_memory_budget` or a conservative heap-size fallback.
 ## [0.1.14] - 2026-10-10
 
 ## [0.1.13] - 2026-10-10

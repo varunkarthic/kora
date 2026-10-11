@@ -54,16 +54,52 @@ The order prefers, respectively:
 These rankings are deterministic hints, not final type selection. In particular, the `read_mostly`
 and `write_mostly` rankings do not claim workload-specific performance.
 
+## Allocation-time policy and budget accounting
+
+The internal `kora::detail::MemoryManager` turns those rankings into a legal candidate for a
+particular resource. `select_memory_type(policy, compatible_type_bits, required)` walks the selected
+policy order and returns the first index that is both present in the Vulkan `memoryTypeBits` mask and
+has every requested property (`device_local`, `host_visible`, `host_coherent`, and/or `host_cached`).
+The mask is authoritative: a preferred type that is not permitted for the resource is skipped. An
+empty mask is `InvalidArgument`; if no candidate satisfies the mask and property requirements, the
+operation returns `UnsupportedFeature` rather than weakening the requirements.
+
+The seven policy values map directly to the corresponding `DeviceInfo::MemoryTypePreferences` order:
+`Auto` to `automatic`, `DevicePreferred` to `device_preferred`, and the remaining policies to their
+same-named list. These are hints rather than strict residency requirements; callers express required
+properties separately. Topology affects selection through the rankings created by `DeviceCaps`, not
+through vendor or device identifiers.
+
+`MemoryManager::create()` also establishes one reservation ledger per reported heap. When the
+physical-device snapshot advertises `VK_EXT_memory_budget`, the ledger limit is
+`max(heapBudget - heapUsage, 0)` and records `heapUsage` as external usage. Otherwise the default
+limit is 80% of the Vulkan heap size; callers may provide a finite fallback fraction from 0 through
+1. The fallback is intentionally conservative because heap size does not report current OS or other
+process usage. `available_bytes` in the ledger means the selected KORA reservation limit minus KORA
+reservations; it is not a promise that Vulkan allocation will succeed.
+
+`reserve(heap_index, bytes)` uses checked addition and changes the ledger only if the result is
+within its limit. Arithmetic overflow returns `Overflow`; a valid sum over the limit returns
+`OutOfMemoryBudget`. `release(heap_index, bytes)` rejects a release greater than the current
+reservation with `InternalInvariantViolation`, preserving state on failure. Debug builds assert
+after each successful mutation that reserved bytes do not exceed the limit. Invalid heap indices
+return `InvalidArgument`. The ledger accounts for KORA reservations only; callers must reserve and
+release around successful allocation and destruction, and must not interpret these estimates as a
+replacement for Vulkan allocation error handling.
+
 ## Tests
 
 Synthetic memory-property tests cover discrete, UMA, BAR-like, and unknown layouts, including the
-BAR benchmark flag and stable per-policy orderings. The `DeviceInfo` mapping test also verifies heap
-size and per-type flags survive conversion from Vulkan properties.
+BAR benchmark flag and stable per-policy orderings. Memory-manager tests cover memoryTypeBits and
+required-property filtering, topology-dependent candidate ordering, budget-extension and fallback
+limits, over-budget and overflow reservations, invalid indices, and release underflow. The
+`DeviceInfo` mapping test also verifies heap size and per-type flags survive conversion from Vulkan
+properties.
 
 Run the focused tests with:
 
 ```sh
 cmake --preset debug
 cmake --build --preset debug --parallel
-ctest --preset debug --output-on-failure -R DeviceCaps
+ctest --preset debug --output-on-failure -R 'DeviceCaps|MemoryManager|BudgetLedger'
 ```
