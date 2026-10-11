@@ -13,6 +13,7 @@ add_library(kora
   memory/dirty_ranges.cpp
   memory/residency.cpp
   vulkan/loader.cpp
+  vulkan/command_pool_set.cpp
 )
 add_library(kora::kora ALIAS kora)
 target_include_directories(kora PUBLIC

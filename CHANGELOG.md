@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add a thread-owned Vulkan command-pool set with preallocated reusable command buffers, per-slot
+  completion tracking, one-time recording, and mock plus 10,000-submission integration coverage.
+
 ## [0.1.20] - 2026-10-11
 
 - Extend memory-pool fragmentation snapshots, add checked cross-pool telemetry aggregation, and add a

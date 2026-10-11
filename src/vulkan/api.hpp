@@ -56,6 +56,22 @@ struct Api {
     DispatchFunction<VkResult(VkDevice, uint32_t, const VkMappedMemoryRange*)>
         invalidate_mapped_memory_ranges;
     DispatchFunction<VkResult(VkQueue, uint32_t, const VkSubmitInfo*, VkFence)> queue_submit;
+    DispatchFunction<VkResult(VkDevice, const VkCommandPoolCreateInfo*, const VkAllocationCallbacks*,
+                              VkCommandPool*)>
+        create_command_pool;
+    DispatchFunction<void(VkDevice, VkCommandPool, const VkAllocationCallbacks*)> destroy_command_pool;
+    DispatchFunction<VkResult(VkDevice, VkCommandPool, VkCommandPoolResetFlags)> reset_command_pool;
+    DispatchFunction<VkResult(VkDevice, const VkCommandBufferAllocateInfo*, VkCommandBuffer*)>
+        allocate_command_buffers;
+    DispatchFunction<void(VkDevice, VkCommandPool, uint32_t, const VkCommandBuffer*)> free_command_buffers;
+    DispatchFunction<VkResult(VkCommandBuffer, const VkCommandBufferBeginInfo*)> begin_command_buffer;
+    DispatchFunction<VkResult(VkCommandBuffer)> end_command_buffer;
+    DispatchFunction<VkResult(VkDevice, const VkSemaphoreCreateInfo*, const VkAllocationCallbacks*,
+                              VkSemaphore*)>
+        create_semaphore;
+    DispatchFunction<void(VkDevice, VkSemaphore, const VkAllocationCallbacks*)> destroy_semaphore;
+    DispatchFunction<VkResult(VkDevice, VkSemaphore, uint64_t*)> get_semaphore_counter_value;
+    DispatchFunction<VkResult(VkDevice, const VkSemaphoreWaitInfo*, uint64_t)> wait_semaphores;
 
 private:
     friend class Loader;

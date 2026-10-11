@@ -52,6 +52,17 @@ struct DeviceState {
     PFN_vkFlushMappedMemoryRanges flush_mapped_memory_ranges = nullptr;
     PFN_vkInvalidateMappedMemoryRanges invalidate_mapped_memory_ranges = nullptr;
     PFN_vkQueueSubmit queue_submit = nullptr;
+    PFN_vkCreateCommandPool create_command_pool = nullptr;
+    PFN_vkDestroyCommandPool destroy_command_pool = nullptr;
+    PFN_vkResetCommandPool reset_command_pool = nullptr;
+    PFN_vkAllocateCommandBuffers allocate_command_buffers = nullptr;
+    PFN_vkFreeCommandBuffers free_command_buffers = nullptr;
+    PFN_vkBeginCommandBuffer begin_command_buffer = nullptr;
+    PFN_vkEndCommandBuffer end_command_buffer = nullptr;
+    PFN_vkCreateSemaphore create_semaphore = nullptr;
+    PFN_vkDestroySemaphore destroy_semaphore = nullptr;
+    PFN_vkGetSemaphoreCounterValue get_semaphore_counter_value = nullptr;
+    PFN_vkWaitSemaphores wait_semaphores = nullptr;
 };
 
 VkResult VKAPI_PTR allocate_memory(void* context, VkDevice device, const VkMemoryAllocateInfo* info,
@@ -95,6 +106,62 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue queue, uint32_t count, co
     return state.queue_submit(queue, count, submits, fence);
 }
 
+VkResult VKAPI_PTR create_command_pool(void* context, VkDevice device, const VkCommandPoolCreateInfo* info,
+                                       const VkAllocationCallbacks* allocator, VkCommandPool* pool) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->create_command_pool;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, allocator, pool);
+}
+void VKAPI_PTR destroy_command_pool(void* context, VkDevice device, VkCommandPool pool,
+                                    const VkAllocationCallbacks* allocator) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->destroy_command_pool;
+    if (function != nullptr) function(device, pool, allocator);
+}
+VkResult VKAPI_PTR reset_command_pool(void* context, VkDevice device, VkCommandPool pool,
+                                      VkCommandPoolResetFlags flags) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->reset_command_pool;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, pool, flags);
+}
+VkResult VKAPI_PTR allocate_command_buffers(void* context, VkDevice device,
+                                            const VkCommandBufferAllocateInfo* info,
+                                            VkCommandBuffer* buffers) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->allocate_command_buffers;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, buffers);
+}
+void VKAPI_PTR free_command_buffers(void* context, VkDevice device, VkCommandPool pool, uint32_t count,
+                                    const VkCommandBuffer* buffers) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->free_command_buffers;
+    if (function != nullptr) function(device, pool, count, buffers);
+}
+VkResult VKAPI_PTR begin_command_buffer(void* context, VkCommandBuffer buffer,
+                                        const VkCommandBufferBeginInfo* info) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->begin_command_buffer;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(buffer, info);
+}
+VkResult VKAPI_PTR end_command_buffer(void* context, VkCommandBuffer buffer) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->end_command_buffer;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(buffer);
+}
+VkResult VKAPI_PTR create_semaphore(void* context, VkDevice device, const VkSemaphoreCreateInfo* info,
+                                    const VkAllocationCallbacks* allocator, VkSemaphore* semaphore) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->create_semaphore;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED
+                               : function(device, info, allocator, semaphore);
+}
+void VKAPI_PTR destroy_semaphore(void* context, VkDevice device, VkSemaphore semaphore,
+                                 const VkAllocationCallbacks* allocator) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->destroy_semaphore;
+    if (function != nullptr) function(device, semaphore, allocator);
+}
+VkResult VKAPI_PTR get_semaphore_counter_value(void* context, VkDevice device, VkSemaphore semaphore,
+                                               uint64_t* value) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->get_semaphore_counter_value;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, semaphore, value);
+}
+VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice device, const VkSemaphoreWaitInfo* info,
+                                   uint64_t timeout) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->wait_semaphores;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, timeout);
+}
 const char* library_name() {
 #if defined(_WIN32)
     return "vulkan-1.dll";
@@ -987,6 +1054,34 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkInvalidateMappedMemoryRanges");
     api_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device_state->device, "vkQueueSubmit");
+    api_state->create_command_pool = load_device_function<PFN_vkCreateCommandPool>(
+        get_device_proc, device_state->device, "vkCreateCommandPool");
+    api_state->destroy_command_pool = load_device_function<PFN_vkDestroyCommandPool>(
+        get_device_proc, device_state->device, "vkDestroyCommandPool");
+    api_state->reset_command_pool = load_device_function<PFN_vkResetCommandPool>(
+        get_device_proc, device_state->device, "vkResetCommandPool");
+    api_state->allocate_command_buffers = load_device_function<PFN_vkAllocateCommandBuffers>(
+        get_device_proc, device_state->device, "vkAllocateCommandBuffers");
+    api_state->free_command_buffers = load_device_function<PFN_vkFreeCommandBuffers>(
+        get_device_proc, device_state->device, "vkFreeCommandBuffers");
+    api_state->begin_command_buffer = load_device_function<PFN_vkBeginCommandBuffer>(
+        get_device_proc, device_state->device, "vkBeginCommandBuffer");
+    api_state->end_command_buffer = load_device_function<PFN_vkEndCommandBuffer>(
+        get_device_proc, device_state->device, "vkEndCommandBuffer");
+    api_state->create_semaphore = load_device_function<PFN_vkCreateSemaphore>(
+        get_device_proc, device_state->device, "vkCreateSemaphore");
+    api_state->destroy_semaphore = load_device_function<PFN_vkDestroySemaphore>(
+        get_device_proc, device_state->device, "vkDestroySemaphore");
+    api_state->get_semaphore_counter_value = load_device_function<PFN_vkGetSemaphoreCounterValue>(
+        get_device_proc, device_state->device, "vkGetSemaphoreCounterValue");
+    if (api_state->get_semaphore_counter_value == nullptr)
+        api_state->get_semaphore_counter_value = reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(
+            get_device_proc(device_state->device, "vkGetSemaphoreCounterValueKHR"));
+    api_state->wait_semaphores =
+        load_device_function<PFN_vkWaitSemaphores>(get_device_proc, device_state->device, "vkWaitSemaphores");
+    if (api_state->wait_semaphores == nullptr)
+        api_state->wait_semaphores = reinterpret_cast<PFN_vkWaitSemaphores>(
+            get_device_proc(device_state->device, "vkWaitSemaphoresKHR"));
     if (api_state->allocate_memory == nullptr || api_state->free_memory == nullptr ||
         api_state->map_memory == nullptr || api_state->unmap_memory == nullptr ||
         api_state->flush_mapped_memory_ranges == nullptr ||
@@ -1001,6 +1096,17 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.flush_mapped_memory_ranges = {api_state.get(), flush_mapped_memory_ranges};
     api.invalidate_mapped_memory_ranges = {api_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {api_state.get(), queue_submit};
+    api.create_command_pool = {api_state.get(), create_command_pool};
+    api.destroy_command_pool = {api_state.get(), destroy_command_pool};
+    api.reset_command_pool = {api_state.get(), reset_command_pool};
+    api.allocate_command_buffers = {api_state.get(), allocate_command_buffers};
+    api.free_command_buffers = {api_state.get(), free_command_buffers};
+    api.begin_command_buffer = {api_state.get(), begin_command_buffer};
+    api.end_command_buffer = {api_state.get(), end_command_buffer};
+    api.create_semaphore = {api_state.get(), create_semaphore};
+    api.destroy_semaphore = {api_state.get(), destroy_semaphore};
+    api.get_semaphore_counter_value = {api_state.get(), get_semaphore_counter_value};
+    api.wait_semaphores = {api_state.get(), wait_semaphores};
     api.lifetime_ = std::move(api_state);
     return Device(std::move(device_state), std::move(api));
 }
@@ -1062,6 +1168,34 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         get_device_proc, device, "vkInvalidateMappedMemoryRanges");
     device_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device, "vkQueueSubmit");
+    device_state->create_command_pool =
+        load_device_function<PFN_vkCreateCommandPool>(get_device_proc, device, "vkCreateCommandPool");
+    device_state->destroy_command_pool =
+        load_device_function<PFN_vkDestroyCommandPool>(get_device_proc, device, "vkDestroyCommandPool");
+    device_state->reset_command_pool =
+        load_device_function<PFN_vkResetCommandPool>(get_device_proc, device, "vkResetCommandPool");
+    device_state->allocate_command_buffers = load_device_function<PFN_vkAllocateCommandBuffers>(
+        get_device_proc, device, "vkAllocateCommandBuffers");
+    device_state->free_command_buffers =
+        load_device_function<PFN_vkFreeCommandBuffers>(get_device_proc, device, "vkFreeCommandBuffers");
+    device_state->begin_command_buffer =
+        load_device_function<PFN_vkBeginCommandBuffer>(get_device_proc, device, "vkBeginCommandBuffer");
+    device_state->end_command_buffer =
+        load_device_function<PFN_vkEndCommandBuffer>(get_device_proc, device, "vkEndCommandBuffer");
+    device_state->create_semaphore =
+        load_device_function<PFN_vkCreateSemaphore>(get_device_proc, device, "vkCreateSemaphore");
+    device_state->destroy_semaphore =
+        load_device_function<PFN_vkDestroySemaphore>(get_device_proc, device, "vkDestroySemaphore");
+    device_state->get_semaphore_counter_value = load_device_function<PFN_vkGetSemaphoreCounterValue>(
+        get_device_proc, device, "vkGetSemaphoreCounterValue");
+    if (device_state->get_semaphore_counter_value == nullptr)
+        device_state->get_semaphore_counter_value = reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(
+            get_device_proc(device, "vkGetSemaphoreCounterValueKHR"));
+    device_state->wait_semaphores =
+        load_device_function<PFN_vkWaitSemaphores>(get_device_proc, device, "vkWaitSemaphores");
+    if (device_state->wait_semaphores == nullptr)
+        device_state->wait_semaphores =
+            reinterpret_cast<PFN_vkWaitSemaphores>(get_device_proc(device, "vkWaitSemaphoresKHR"));
     if (device_state->allocate_memory == nullptr || device_state->free_memory == nullptr ||
         device_state->map_memory == nullptr || device_state->unmap_memory == nullptr ||
         device_state->flush_mapped_memory_ranges == nullptr ||
@@ -1078,6 +1212,17 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.flush_mapped_memory_ranges = {device_state.get(), flush_mapped_memory_ranges};
     api.invalidate_mapped_memory_ranges = {device_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {device_state.get(), queue_submit};
+    api.create_command_pool = {device_state.get(), create_command_pool};
+    api.destroy_command_pool = {device_state.get(), destroy_command_pool};
+    api.reset_command_pool = {device_state.get(), reset_command_pool};
+    api.allocate_command_buffers = {device_state.get(), allocate_command_buffers};
+    api.free_command_buffers = {device_state.get(), free_command_buffers};
+    api.begin_command_buffer = {device_state.get(), begin_command_buffer};
+    api.end_command_buffer = {device_state.get(), end_command_buffer};
+    api.create_semaphore = {device_state.get(), create_semaphore};
+    api.destroy_semaphore = {device_state.get(), destroy_semaphore};
+    api.get_semaphore_counter_value = {device_state.get(), get_semaphore_counter_value};
+    api.wait_semaphores = {device_state.get(), wait_semaphores};
     api.lifetime_ = std::move(device_state);
     return api;
 }
@@ -1150,6 +1295,17 @@ Api FaultInjector::api() const {
     result.flush_mapped_memory_ranges = state_->inner.flush_mapped_memory_ranges;
     result.invalidate_mapped_memory_ranges = state_->inner.invalidate_mapped_memory_ranges;
     result.queue_submit = {state_.get(), State::queue_submit};
+    result.create_command_pool = state_->inner.create_command_pool;
+    result.destroy_command_pool = state_->inner.destroy_command_pool;
+    result.reset_command_pool = state_->inner.reset_command_pool;
+    result.allocate_command_buffers = state_->inner.allocate_command_buffers;
+    result.free_command_buffers = state_->inner.free_command_buffers;
+    result.begin_command_buffer = state_->inner.begin_command_buffer;
+    result.end_command_buffer = state_->inner.end_command_buffer;
+    result.create_semaphore = state_->inner.create_semaphore;
+    result.destroy_semaphore = state_->inner.destroy_semaphore;
+    result.get_semaphore_counter_value = state_->inner.get_semaphore_counter_value;
+    result.wait_semaphores = state_->inner.wait_semaphores;
     result.lifetime_ = state_;
     return result;
 }
