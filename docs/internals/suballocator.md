@@ -47,6 +47,19 @@ owner.
 These byte counts avoid unstable percentage conventions. A caller can derive ratios using its own
 denominator while handling zero capacity explicitly.
 
+`MemoryPool::stats()` aggregates each block's byte counters, sums internal and external fragmentation,
+and reports the largest free region across its blocks (the maximum, not the sum). Dedicated allocations
+contribute reserved, allocated, requested, and live-allocation totals; they do not contribute free or
+fragmentation bytes. `MemoryManager::aggregate_stats()` combines pool snapshots with checked arithmetic
+for additive fields and counts, and uses the largest per-pool free block for `largest_free_block`.
+Overflow returns `ErrorCode::Overflow` rather than wrapping. A manager snapshot is point-in-time and
+does not synchronize pool mutation; callers must take it under their pool-ownership synchronization.
+
+`Runtime::memory_stats(device)` exposes these aggregates through the public Vulkan-header-free
+`MemoryStats` type and includes per-heap budget snapshots. Today the host-shadow buffer façade is not
+connected to Vulkan pools, so pool counters remain zero until a pool-allocating runtime subsystem
+registers its pools.
+
 ## Invariants and validation
 
 After every mutation, Debug builds assert that:

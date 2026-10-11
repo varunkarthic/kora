@@ -34,6 +34,18 @@ before invoking its matching CTest preset.
 | `tests/stress` | `stress` | Repetition, memory pressure, and concurrency endurance |
 | `tests/fault_injection` | `fault_injection` | Injected backend failures and recovery paths |
 
+The memory stress test creates a host-visible Vulkan memory pool, then runs three deterministic cycles
+of 3,000 small suballocations and shuffled frees. It reports fragmentation through pool snapshots and
+checks that aggregate memory-manager statistics match the contributing pool totals. It belongs to both
+`integration` and `stress`; when configured with the lavapipe ICD, run only this bounded test with:
+
+```sh
+ctest --preset debug --output-on-failure -R MemoryStress
+```
+
+The test skips when no Vulkan compute implementation or host-visible memory type is available. CTest
+enforces a 29-second timeout.
+
 Tests must not silently move between categories. A test belongs in the narrowest category that
 matches its dependencies and expected runtime.
 

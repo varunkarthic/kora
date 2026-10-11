@@ -165,4 +165,35 @@ Result<HeapBudgetStats> MemoryManager::budget(std::uint32_t heap_index) const {
     return ledger_.stats(heap_index);
 }
 
+Result<kora::MemoryStats> MemoryManager::aggregate_stats(std::span<const MemoryPoolStats> pools) {
+    kora::MemoryStats total{};
+    for (const auto& pool : pools) {
+        const auto add = [](std::uint64_t& destination, std::uint64_t value) {
+            const auto sum = checked::add(destination, value);
+            if (!sum) return false;
+            destination = *sum;
+            return true;
+        };
+        if (!add(total.reserved_bytes, pool.reserved_bytes) ||
+            !add(total.allocated_bytes, pool.allocated_bytes) ||
+            !add(total.requested_bytes, pool.requested_bytes) || !add(total.free_bytes, pool.free_bytes) ||
+            !add(total.internal_fragmentation_bytes, pool.internal_fragmentation_bytes) ||
+            !add(total.external_fragmentation_bytes, pool.external_fragmentation_bytes) ||
+            !add(total.high_water_mark, pool.high_water_mark) ||
+            pool.blocks > std::numeric_limits<std::size_t>::max() - total.blocks ||
+            pool.dedicated_allocations >
+                std::numeric_limits<std::size_t>::max() - total.dedicated_allocations ||
+            pool.live_allocations > std::numeric_limits<std::size_t>::max() - total.live_allocations ||
+            !add(total.device_allocation_calls, pool.device_allocation_calls)) {
+            return Error(ErrorCode::Overflow, "memory pool statistics aggregation overflow");
+        }
+        total.largest_free_block = std::max(total.largest_free_block, pool.largest_free_block);
+        ++total.pools;
+        total.blocks += pool.blocks;
+        total.dedicated_allocations += pool.dedicated_allocations;
+        total.live_allocations += pool.live_allocations;
+    }
+    return total;
+}
+
 }  // namespace kora::detail

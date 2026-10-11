@@ -404,6 +404,10 @@ Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_p
     if (get_properties2 != nullptr) {
         void* chain = nullptr;
         if (core11) {
+            append_query_structure(chain, info.id_properties,
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES);
+        }
+        if (core11) {
             append_query_structure(chain, info.subgroup_properties,
                                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES);
         }
@@ -442,6 +446,7 @@ Result<PhysicalDeviceInfo> query_physical_device(PFN_vkGetInstanceProcAddr get_p
         properties.pNext = chain;
         get_properties2(physical_device, &properties);
         info.properties = properties.properties;
+        info.id_properties.pNext = nullptr;
     } else {
         get_properties(physical_device, &info.properties);
     }

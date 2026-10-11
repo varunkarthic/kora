@@ -111,6 +111,13 @@ Result<PoolAllocation> MemoryPool::allocate_dedicated(const PoolAllocationReques
     }
     const auto token = next_token_++;
     dedicated_.emplace(token, Dedicated{memory, mapped, request.size});
+    auto current = request.size;
+    for (const auto& block : blocks_) current += block->allocator.stats().allocated_bytes;
+    for (const auto& [entry_token, allocation] : dedicated_) {
+        static_cast<void>(entry_token);
+        if (allocation.memory != memory) current += allocation.size;
+    }
+    high_water_mark_ = std::max(high_water_mark_, current);
     return PoolAllocation{memory, 0, request.size, request.size, mapped, 0, token, true};
 }
 
@@ -126,6 +133,13 @@ Result<PoolAllocation> MemoryPool::allocate(const PoolAllocationRequest& request
         auto allocation = blocks_[index]->allocator.allocate(request.size, request.alignment);
         if (allocation) {
             const auto suballocation = allocation.value();
+            std::uint64_t current = 0;
+            for (const auto& block : blocks_) current += block->allocator.stats().allocated_bytes;
+            for (const auto& [token, dedicated] : dedicated_) {
+                static_cast<void>(token);
+                current += dedicated.size;
+            }
+            high_water_mark_ = std::max(high_water_mark_, current);
             auto* mapped = static_cast<std::byte*>(blocks_[index]->mapped);
             return PoolAllocation{blocks_[index]->memory,
                                   suballocation.offset,
@@ -138,11 +152,18 @@ Result<PoolAllocation> MemoryPool::allocate(const PoolAllocationRequest& request
         }
         if (allocation.error().code != ErrorCode::AllocationFailed) return allocation.error();
     }
-    KORA_TRY(block, create_block(block_size_));
-    blocks_.push_back(std::move(block));
+    KORA_TRY(memory_block, create_block(block_size_));
+    blocks_.push_back(std::move(memory_block));
     auto allocation = blocks_.back()->allocator.allocate(request.size, request.alignment);
     if (!allocation) return std::move(allocation).error();
     const auto suballocation = allocation.value();
+    std::uint64_t current = 0;
+    for (const auto& block : blocks_) current += block->allocator.stats().allocated_bytes;
+    for (const auto& [token, dedicated] : dedicated_) {
+        static_cast<void>(token);
+        current += dedicated.size;
+    }
+    high_water_mark_ = std::max(high_water_mark_, current);
     auto* mapped = static_cast<std::byte*>(blocks_.back()->mapped);
     return PoolAllocation{blocks_.back()->memory,
                           suballocation.offset,
@@ -188,6 +209,10 @@ MemoryPoolStats MemoryPool::stats() const noexcept {
         result.reserved_bytes += block_stats.total_bytes;
         result.allocated_bytes += block_stats.allocated_bytes;
         result.requested_bytes += block_stats.requested_bytes;
+        result.free_bytes += block_stats.free_bytes;
+        result.internal_fragmentation_bytes += block_stats.internal_fragmentation_bytes;
+        result.external_fragmentation_bytes += block_stats.external_fragmentation_bytes;
+        result.largest_free_block = std::max(result.largest_free_block, block_stats.largest_free_block);
         result.live_allocations += block_stats.live_allocations;
     }
     for (const auto& [token, allocation] : dedicated_) {
@@ -197,6 +222,7 @@ MemoryPoolStats MemoryPool::stats() const noexcept {
         result.requested_bytes += allocation.size;
         ++result.live_allocations;
     }
+    result.high_water_mark = high_water_mark_;
     return result;
 }
 

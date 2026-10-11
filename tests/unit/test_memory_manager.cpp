@@ -137,6 +137,53 @@ TEST(BudgetLedger, CheckedArithmeticAndInvalidOperationsDoNotMutateState) {
     EXPECT_EQ(ledger.stats(1).error().code, ErrorCode::InvalidArgument);
 }
 
+TEST(MemoryManager, AggregatesPoolTelemetryAndRejectsOverflow) {
+    const std::vector<kora::detail::MemoryPoolStats> pools{
+        {.reserved_bytes = 1024,
+         .allocated_bytes = 256,
+         .requested_bytes = 240,
+         .free_bytes = 768,
+         .internal_fragmentation_bytes = 16,
+         .external_fragmentation_bytes = 128,
+         .largest_free_block = 640,
+         .high_water_mark = 512,
+         .blocks = 1,
+         .dedicated_allocations = 0,
+         .live_allocations = 2,
+         .device_allocation_calls = 1},
+        {.reserved_bytes = 2048,
+         .allocated_bytes = 512,
+         .requested_bytes = 500,
+         .free_bytes = 1536,
+         .internal_fragmentation_bytes = 12,
+         .external_fragmentation_bytes = 256,
+         .largest_free_block = 1280,
+         .high_water_mark = 1024,
+         .blocks = 1,
+         .dedicated_allocations = 1,
+         .live_allocations = 3,
+         .device_allocation_calls = 2},
+    };
+    const auto total = MemoryManager::aggregate_stats(pools);
+    ASSERT_TRUE(total) << total.error().describe();
+    EXPECT_EQ(total.value().reserved_bytes, 3072U);
+    EXPECT_EQ(total.value().allocated_bytes, 768U);
+    EXPECT_EQ(total.value().requested_bytes, 740U);
+    EXPECT_EQ(total.value().free_bytes, 2304U);
+    EXPECT_EQ(total.value().internal_fragmentation_bytes, 28U);
+    EXPECT_EQ(total.value().external_fragmentation_bytes, 384U);
+    EXPECT_EQ(total.value().largest_free_block, 1280U);
+    EXPECT_EQ(total.value().high_water_mark, 1536U);
+    EXPECT_EQ(total.value().blocks, 2U);
+    EXPECT_EQ(total.value().dedicated_allocations, 1U);
+    EXPECT_EQ(total.value().live_allocations, 5U);
+    EXPECT_EQ(total.value().device_allocation_calls, 3U);
+
+    const std::vector<kora::detail::MemoryPoolStats> overflowing{
+        {.reserved_bytes = std::numeric_limits<std::uint64_t>::max()}, {.reserved_bytes = 1}};
+    EXPECT_EQ(MemoryManager::aggregate_stats(overflowing).error().code, ErrorCode::Overflow);
+}
+
 TEST(MemoryManager, UsesBudgetExtensionOrConservativeHeapFraction) {
     auto raw = make_device(make_properties({{VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0}}, 1000));
     const auto info = DeviceCaps::from_vulkan(raw).to_device_info();

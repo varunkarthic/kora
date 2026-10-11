@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Extend memory-pool fragmentation snapshots, add checked cross-pool telemetry aggregation, and add a
+  deterministic lavapipe stress test for repeated small allocation/free cycles. Add a move-only public
+  Runtime that owns selected Vulkan devices and exposes per-device memory and heap-budget snapshots.
+
 ## [0.1.19] - 2026-10-11
 
 ## [0.1.18] - 2026-10-11

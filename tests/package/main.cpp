@@ -2,14 +2,20 @@
 #include <iostream>
 #include <kora/buffer.hpp>
 #include <kora/device_info.hpp>
+#include <kora/runtime.hpp>
 #include <kora/version.hpp>
 #include <type_traits>
 #include <utility>
 
 static_assert(!std::is_default_constructible_v<kora::DeviceInfo>);
 static_assert(!std::is_copy_assignable_v<kora::DeviceInfo>);
+static_assert(!std::is_copy_constructible_v<kora::Runtime>);
+static_assert(std::is_move_constructible_v<kora::Runtime>);
 
 int main() {
+    kora::Runtime empty_runtime;
+    if (!empty_runtime.devices().empty()) return 1;
+
     kora::BufferManager buffers;
     auto created = buffers.create<std::uint32_t>(2, kora::BufferUsage::Storage);
     if (!created) return 1;

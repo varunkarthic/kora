@@ -56,6 +56,7 @@ tools/kora-info
 
 api/errors
 api/options
+api/runtime
 api/logging
 api/version
 api/checked
