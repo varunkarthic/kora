@@ -3,6 +3,7 @@ add_library(kora
   core/event.cpp
   core/device_caps.cpp
   core/buffer_manager.cpp
+  core/calibration.cpp
   core/device_selection.cpp
   core/log.cpp
   core/json.cpp
