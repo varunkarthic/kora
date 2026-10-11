@@ -44,6 +44,7 @@ internals/dirty-ranges
 internals/spirv
 internals/pipelines
 internals/aliasing
+cpu-executor
 device-selection
 memory-model
 ci-cd
