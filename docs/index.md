@@ -53,6 +53,7 @@ internals/performance-db
 scheduler
 cpu-executor
 device-selection
+multi-gpu
 memory-model
 ci-cd
 releases

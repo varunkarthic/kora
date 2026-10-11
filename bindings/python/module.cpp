@@ -298,6 +298,19 @@ std::shared_ptr<PyKernel> load_kernel(const std::shared_ptr<PyRuntime>& runtime,
     return std::make_shared<PyKernel>(PyKernel{value_or_throw(std::move(*result)), runtime});
 }
 
+std::shared_ptr<PyKernel> load_kernel_for_device(const std::shared_ptr<PyRuntime>& runtime,
+                                                 const std::filesystem::path& path, std::string entry_point,
+                                                 kora::KernelMetadata metadata,
+                                                 const kora::DeviceId& device) {
+    std::optional<kora::Result<kora::Kernel>> result;
+    {
+        py::gil_scoped_release release;
+        result.emplace(
+            runtime->value->load_kernel(path, std::move(entry_point), std::move(metadata), device));
+    }
+    return std::make_shared<PyKernel>(PyKernel{value_or_throw(std::move(*result)), runtime});
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_core, module) {
@@ -367,6 +380,11 @@ PYBIND11_MODULE(_core, module) {
         .value("READ", kora::KernelAccess::Read)
         .value("WRITE", kora::KernelAccess::Write)
         .value("READ_WRITE", kora::KernelAccess::ReadWrite);
+    py::class_<kora::DeviceId>(module, "DeviceId")
+        .def(py::init<>())
+        .def(py::init<std::uint32_t, std::string>(), py::arg("index"), py::arg("uuid") = "")
+        .def_readwrite("index", &kora::DeviceId::index)
+        .def_readwrite("uuid", &kora::DeviceId::uuid);
     py::enum_<kora::TaskType>(module, "TaskType")
         .value("UPLOAD", kora::TaskType::Upload)
         .value("DOWNLOAD", kora::TaskType::Download)
@@ -566,9 +584,12 @@ PYBIND11_MODULE(_core, module) {
     py::class_<PyRuntime, std::shared_ptr<PyRuntime>>(module, "Runtime")
         .def_static("create", &create_runtime, py::arg("options") = kora::RuntimeOptions{},
                     "Create the native runtime, releasing the Python GIL during initialization.")
+        .def_property_readonly("devices", [](const PyRuntime& runtime) { return runtime.value->devices(); })
         .def("create_buffer", &create_buffer, py::arg("size_bytes"),
              py::arg("usage") = kora::BufferUsage::Storage)
         .def("load_kernel", &load_kernel, py::arg("spirv_path"), py::arg("entry_point"), py::arg("metadata"))
+        .def("load_kernel", &load_kernel_for_device, py::arg("spirv_path"), py::arg("entry_point"),
+             py::arg("metadata"), py::arg("device"))
         .def("dispatch",
              [](const std::shared_ptr<PyRuntime>& runtime, const PyKernel& kernel) {
                  if (kernel.owner != runtime)
@@ -588,7 +609,23 @@ PYBIND11_MODULE(_core, module) {
                  }
                  auto event = value_or_throw(std::move(*result));
                  return std::make_shared<PyEvent>(PyEvent{std::move(event), runtime, {buffer}});
-             });
+             })
+        .def(
+            "readback",
+            [](const std::shared_ptr<PyRuntime>& runtime, const std::shared_ptr<PyBuffer>& buffer,
+               const kora::DeviceId& device) {
+                if (buffer->owner != runtime)
+                    throw PythonKoraError(kora::Error(kora::ErrorCode::InvalidArgument,
+                                                      "buffer belongs to a different Runtime"));
+                std::optional<kora::Result<kora::Event>> result;
+                {
+                    py::gil_scoped_release release;
+                    result.emplace(runtime->value->readback(buffer->handle, device));
+                }
+                auto event = value_or_throw(std::move(*result));
+                return std::make_shared<PyEvent>(PyEvent{std::move(event), runtime, {buffer}});
+            },
+            py::arg("buffer"), py::arg("device"));
 
     auto scope = module.attr("__dict__");
     scope["asyncio"] = py::module_::import("asyncio");

@@ -159,9 +159,14 @@ public:
     }
     Result<Kernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
                                KernelMetadata metadata);
+    /// Loads and validates a kernel for a specific device owned by this Runtime.
+    Result<Kernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
+                               KernelMetadata metadata, const DeviceId& device);
     DispatchBuilder dispatch(const Kernel& kernel) const;
     /// Schedule a host readback for a device-resident buffer and complete when host bytes are fresh.
     Result<Event> readback(const BufferHandle& buffer) const;
+    /// Read a device-resident version through host memory for CPU-visible or cross-device staging.
+    Result<Event> readback(const BufferHandle& buffer, const DeviceId& device) const;
     /// Register/replace a CPU implementation under a stable semantic key.
     Status register_cpu_fallback(std::string key, CpuFallbackFunction function);
     /// Execute a registered CPU implementation after requested device outputs are visible on host.
@@ -171,6 +176,10 @@ public:
     template <class T>
     Result<Event> readback(const Buffer<T>& buffer) const {
         return readback(buffer.handle());
+    }
+    template <class T>
+    Result<Event> readback(const Buffer<T>& buffer, const DeviceId& device) const {
+        return readback(buffer.handle(), device);
     }
 
 private:
