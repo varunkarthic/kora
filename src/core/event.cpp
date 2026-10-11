@@ -2,7 +2,6 @@
 
 #include "core/event_state.hpp"
 
-
 namespace kora {
 
 bool Event::done() const noexcept {

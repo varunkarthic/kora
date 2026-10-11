@@ -153,10 +153,9 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
     auto promise = std::make_shared<EventPromise>();
     auto event = promise->event();
     auto impl = impl_;
-    Impl::RingState* ring_state =
-        ring == impl->upload_ring.get() ? &impl->upload_state
-        : ring == impl->readback_ring.get() ? &impl->readback_state
-                                            : nullptr;
+    Impl::RingState* ring_state = ring == impl->upload_ring.get()     ? &impl->upload_state
+                                  : ring == impl->readback_ring.get() ? &impl->readback_state
+                                                                      : nullptr;
     if (work->staging && ring_state) {
         std::unique_lock lock(ring_state->mutex);
         if (ring_state->last_enqueued != 0) {
@@ -232,7 +231,7 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
         work->submission_processed.store(true, std::memory_order_release);
     };
     submission.on_complete = [work, promise, complete = std::move(complete)](uint64_t,
-                                                                                   Status status) mutable {
+                                                                             Status status) mutable {
         if (!work->submission_processed.exchange(true, std::memory_order_acq_rel)) {
             if (work->staging && work->ring) (void)work->ring->cancel(*work->staging);
         }
