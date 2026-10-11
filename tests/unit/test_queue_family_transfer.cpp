@@ -60,7 +60,9 @@ TEST(QueueFamilyTransfer, InvalidOrEmptyRangesDoNotProduceBarriers) {
 
 TEST(QueueFamilyTransfer, CachedPolicyOnlyRequiresTransferForDistinctFamilies) {
     EXPECT_FALSE((QueueFamilyPolicy{4, 4}).requires_ownership_transfer());
-    EXPECT_TRUE((QueueFamilyPolicy{1, 6}).requires_ownership_transfer());
+    EXPECT_FALSE((QueueFamilyPolicy{1, 6}).requires_ownership_transfer());
+    EXPECT_TRUE((QueueFamilyPolicy{1, 6, false}).requires_ownership_transfer());
+    EXPECT_TRUE((QueueFamilyPolicy{1, 6}).uses_concurrent_sharing());
     EXPECT_FALSE((QueueFamilyPolicy{VK_QUEUE_FAMILY_IGNORED, 6}).requires_ownership_transfer());
 }
 

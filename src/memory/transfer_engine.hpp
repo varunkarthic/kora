@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,11 @@
 
 namespace kora::detail {
 
+/// Last transfer-queue timeline value that accessed a cross-queue runtime buffer.
+struct QueueTimelineUse {
+    std::atomic<std::uint64_t> transfer_value{0};
+};
+
 /// Vulkan buffer plus optional mapped allocation metadata for the UMA direct path.
 struct TransferBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -24,6 +30,13 @@ struct TransferBuffer {
     std::byte* mapped_data = nullptr;  // Points at byte zero of this buffer.
     bool host_visible = false;
     bool host_coherent = false;
+    std::shared_ptr<QueueTimelineUse> queue_use;
+};
+
+struct QueueWait {
+    VkSemaphore semaphore = VK_NULL_HANDLE;
+    std::uint64_t value = 0;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 };
 
 /// Internal asynchronous upload/download/copy/fill tasks sharing QueueContext submission ordering.
@@ -37,6 +50,7 @@ public:
         MemoryTopology topology = MemoryTopology::Unknown;
         bool measured_staging_benefit = false;
         VkDeviceSize non_coherent_atom_size = 1;
+        bool cross_queue_concurrent = false;
     };
 
     static Result<std::unique_ptr<TransferEngine>> create(const vk::Device& device, vk::QueueContext& queue,
@@ -49,7 +63,7 @@ public:
     Result<Event> upload(TransferBuffer destination, VkDeviceSize destination_offset,
                          std::span<const std::byte> source);
     Result<Event> download(TransferBuffer source, VkDeviceSize source_offset,
-                           std::span<std::byte> destination);
+                           std::span<std::byte> destination, QueueWait dependency = {});
     Result<Event> copy(TransferBuffer source, VkDeviceSize source_offset, TransferBuffer destination,
                        VkDeviceSize destination_offset, VkDeviceSize size);
     Result<Event> fill(TransferBuffer destination, VkDeviceSize offset, VkDeviceSize size,
@@ -59,7 +73,8 @@ private:
     struct Impl;
     explicit TransferEngine(std::shared_ptr<Impl> impl);
     Result<Event> enqueue(std::function<Status(VkCommandBuffer)> record, std::function<Status()> complete,
-                          std::optional<StagingSlice> staging, StagingRing* ring);
+                          std::optional<StagingSlice> staging, StagingRing* ring, QueueWait dependency = {},
+                          std::function<void(std::uint64_t)> on_submitted = {});
     std::shared_ptr<Impl> impl_;
 };
 

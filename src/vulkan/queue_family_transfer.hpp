@@ -11,10 +11,16 @@ namespace kora::vk {
 struct QueueFamilyPolicy {
     std::uint32_t compute_family = VK_QUEUE_FAMILY_IGNORED;
     std::uint32_t transfer_family = VK_QUEUE_FAMILY_IGNORED;
+    bool concurrent_sharing = true;
 
     bool requires_ownership_transfer() const noexcept {
         return compute_family != VK_QUEUE_FAMILY_IGNORED && transfer_family != VK_QUEUE_FAMILY_IGNORED &&
-               compute_family != transfer_family;
+               compute_family != transfer_family && !concurrent_sharing;
+    }
+
+    bool uses_concurrent_sharing() const noexcept {
+        return compute_family != VK_QUEUE_FAMILY_IGNORED && transfer_family != VK_QUEUE_FAMILY_IGNORED &&
+               compute_family != transfer_family && concurrent_sharing;
     }
 };
 

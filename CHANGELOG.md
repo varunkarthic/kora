@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add cached queue-family policy, concurrent runtime-buffer sharing, and timeline semaphore ordering
+  between dedicated transfer and compute queues when their families differ.
+
 - Add capability-selected `vkCmdPipelineBarrier2`/`vkQueueSubmit2` execution with legacy lowering and
   a CI integration pass using Vulkan synchronization validation.
 

@@ -45,6 +45,8 @@ public:
     Result<uint64_t> submit(Submission submission);
     /// Samples or waits on this context's private monotonically increasing queue timeline.
     Result<uint64_t> completed_value() const;
+    /// Borrowed timeline semaphore used to establish a dependency from another queue.
+    VkSemaphore completion_semaphore() const noexcept { return use_timeline_ ? timeline_ : VK_NULL_HANDLE; }
     bool uses_synchronization2() const noexcept { return use_synchronization2_; }
     Status wait_for_value(uint64_t value, uint64_t timeout_ns = UINT64_MAX) const;
     /// Stop accepting work, then drain or cancel work that has not reached vkQueueSubmit.

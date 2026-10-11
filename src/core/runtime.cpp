@@ -28,6 +28,7 @@
 #include "vulkan/api.hpp"
 #include "vulkan/command_pool_set.hpp"
 #include "vulkan/queue_context.hpp"
+#include "vulkan/queue_family_transfer.hpp"
 
 namespace kora {
 
@@ -65,6 +66,8 @@ struct DispatchContext {
     detail::kernel::PipelineManager* pipelines = nullptr;
     detail::TransferEngine* transfers = nullptr;
     vk::QueueContext* queue = nullptr;
+    vk::QueueContext* transfer_queue = nullptr;
+    vk::QueueFamilyPolicy queue_family_policy;
     const vk::Device* device = nullptr;
     std::mutex submit_mutex;
     std::unique_ptr<vk::CommandPoolSet> command_pool;
@@ -140,6 +143,7 @@ struct Runtime::Impl {
               info(std::move(device_info)),
               memory_manager(std::move(manager)),
               device(std::move(logical_device)),
+              queue_family_policy{device.compute_queue_family(), device.transfer_queue_family(), true},
               pipelines(std::move(pipeline_manager)),
               runtime_id(runtime_identity),
               force_legacy_sync(force_fallback) {}
@@ -149,6 +153,14 @@ struct Runtime::Impl {
                                                          device.compute_queue(), force_legacy_sync);
             if (!queue_result) return Status(std::move(queue_result).error());
             queue = std::move(queue_result).value();
+            transfer_queue = queue.get();
+            if (queue_family_policy.compute_family != queue_family_policy.transfer_family) {
+                auto transfer_result = vk::QueueContext::create(device.api(), device.handle(),
+                                                                device.transfer_queue(), force_legacy_sync);
+                if (!transfer_result) return Status(std::move(transfer_result).error());
+                dedicated_transfer_queue = std::move(transfer_result).value();
+                transfer_queue = dedicated_transfer_queue.get();
+            }
 
             const auto memory = device.buffer_memory_info();
             std::optional<std::uint32_t> host_pool_index;
@@ -172,15 +184,17 @@ struct Runtime::Impl {
                     "selected Vulkan device has no memory types suitable for runtime buffers and transfers");
 
             detail::TransferEngine::Options transfer_options;
-            transfer_options.queue_family = device.transfer_queue_family();
+            transfer_options.queue_family = queue_family_policy.transfer_family;
+            transfer_options.cross_queue_concurrent = queue_family_policy.uses_concurrent_sharing();
             // The runtime may select a device-local, non-host-visible pool even on UMA devices.
             // Use staging for this API until buffer placement and measured direct-map eligibility
             // are selected per allocation.
             transfer_options.topology = MemoryTopology::Discrete;
             transfer_options.non_coherent_atom_size =
                 std::max<VkDeviceSize>(memory.properties.limits.nonCoherentAtomSize, 1);
-            auto transfer_result = detail::TransferEngine::create(device, *queue, *pools[*host_pool_index],
-                                                                  *pools[*host_pool_index], transfer_options);
+            auto transfer_result =
+                detail::TransferEngine::create(device, *transfer_queue, *pools[*host_pool_index],
+                                               *pools[*host_pool_index], transfer_options);
             if (!transfer_result) return Status(std::move(transfer_result).error());
             transfers = std::move(transfer_result).value();
 
@@ -200,6 +214,8 @@ struct Runtime::Impl {
             dispatch->pipelines = pipelines.get();
             dispatch->transfers = transfers.get();
             dispatch->queue = queue.get();
+            dispatch->transfer_queue = transfer_queue;
+            dispatch->queue_family_policy = queue_family_policy;
             return {};
         }
 
@@ -239,6 +255,7 @@ struct Runtime::Impl {
         ~DeviceEntry() {
             if (dispatch) dispatch->accepting_work.store(false, std::memory_order_release);
             if (queue) (void)queue->shutdown(ShutdownMode::Graceful);
+            if (dedicated_transfer_queue) (void)dedicated_transfer_queue->shutdown(ShutdownMode::Graceful);
             if (dispatch) dispatch->release_buffers();
         }
 
@@ -246,6 +263,7 @@ struct Runtime::Impl {
         DeviceInfo info;
         detail::MemoryManager memory_manager;
         vk::Device device;
+        vk::QueueFamilyPolicy queue_family_policy;
         std::unique_ptr<detail::kernel::PipelineManager> pipelines;
         mutable std::mutex pools_mutex;
         std::vector<std::unique_ptr<detail::MemoryPool>> pools;
@@ -253,6 +271,8 @@ struct Runtime::Impl {
         std::shared_ptr<detail::DispatchContext> dispatch;
         // Queue destruction drains callbacks before their dispatch/transfer/pool dependencies go away.
         std::unique_ptr<vk::QueueContext> queue;
+        std::unique_ptr<vk::QueueContext> dedicated_transfer_queue;
+        vk::QueueContext* transfer_queue = nullptr;
         std::uint64_t runtime_id = 0;
         bool force_legacy_sync = false;
         std::uint32_t driver_version = 0;
@@ -335,6 +355,7 @@ Result<Event> DispatchBuilder::submit() {
 
     // Host shadows are authoritative at submission time. Upload inputs before the
     // compute submission; readbacks are chained after it and before the public Event.
+    std::uint64_t transfer_wait_value = 0;
     for (std::size_t i = 0; i < buffers_.size(); ++i) {
         if (accesses_[i] == KernelAccess::Write) continue;
         auto contents = buffers_[i].read_bytes();
@@ -343,6 +364,10 @@ Result<Event> DispatchBuilder::submit() {
         if (!uploaded) return std::move(uploaded).error();
         auto upload_status = uploaded.value().wait();
         if (!upload_status) return std::move(upload_status).error();
+        if (context_->transfer_queue != context_->queue && vk_buffers[i].queue_use) {
+            transfer_wait_value = std::max(
+                transfer_wait_value, vk_buffers[i].queue_use->transfer_value.load(std::memory_order_acquire));
+        }
     }
 
     auto queue = context_->queue;
@@ -358,6 +383,15 @@ Result<Event> DispatchBuilder::submit() {
     auto work = std::make_shared<std::pair<VkCommandBuffer, std::uint64_t>>(VK_NULL_HANDLE, 0);
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
+    if (transfer_wait_value != 0) {
+        const auto semaphore = context_->transfer_queue->completion_semaphore();
+        if (semaphore == VK_NULL_HANDLE)
+            return Error(ErrorCode::UnsupportedFeature,
+                         "Cross-family runtime buffers require a transfer queue timeline semaphore");
+        submission.wait_semaphores.push_back(semaphore);
+        submission.wait_stages.push_back(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        submission.wait_values.push_back(transfer_wait_value);
+    }
     submission.record_commands = [ctx, pipeline_ref, bound_buffers, push_constants, groups_copy, work,
                                   record_status, allocated_descriptors](
                                      std::uint64_t, std::vector<VkCommandBuffer>& commands) {
@@ -426,7 +460,8 @@ Result<Event> DispatchBuilder::submit() {
         }
     };
     submission.on_complete = [promise, ctx, pipeline_ref, allocated_descriptors, bound_buffers,
-                              bound_handles = buffers_, accesses = accesses_](std::uint64_t, Status status) {
+                              bound_handles = buffers_,
+                              accesses = accesses_](std::uint64_t compute_value, Status status) {
         (void)pipeline_ref;
         for (const auto descriptor : *allocated_descriptors)
             (void)ctx->pipelines->free_descriptor_set(descriptor);
@@ -438,7 +473,13 @@ Result<Event> DispatchBuilder::submit() {
                 if (accesses[index] == KernelAccess::Read) continue;
                 auto& contents = (*readback_contents)[index];
                 contents.resize(static_cast<std::size_t>((*bound_buffers)[index].size));
-                auto downloaded = ctx->transfers->download((*bound_buffers)[index], 0, contents);
+                detail::QueueWait dependency;
+                if (ctx->transfer_queue != ctx->queue) {
+                    dependency.semaphore = ctx->queue->completion_semaphore();
+                    dependency.value = compute_value;
+                    dependency.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                }
+                auto downloaded = ctx->transfers->download((*bound_buffers)[index], 0, contents, dependency);
                 if (!downloaded) {
                     status = Status(std::move(downloaded).error());
                     break;
@@ -496,7 +537,15 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
     buffer_info.size = size;
     buffer_info.usage = usage | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const std::array queue_families{context->queue_family_policy.compute_family,
+                                    context->queue_family_policy.transfer_family};
+    if (context->queue_family_policy.uses_concurrent_sharing()) {
+        buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        buffer_info.queueFamilyIndexCount = static_cast<std::uint32_t>(queue_families.size());
+        buffer_info.pQueueFamilyIndices = queue_families.data();
+    } else {
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
     VkBuffer buffer = VK_NULL_HANDLE;
     auto result =
         context->device->api().create_buffer(context->device->handle(), &buffer_info, nullptr, &buffer);
@@ -543,7 +592,8 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
             allocation.value().dedicated ? allocation.value().allocated_size : (*pool)->block_size(),
         .mapped_data = static_cast<std::byte*>(allocation.value().mapped_data),
         .host_visible = memory_type_info.host_visible,
-        .host_coherent = memory_type_info.host_coherent};
+        .host_coherent = memory_type_info.host_coherent,
+        .queue_use = std::make_shared<detail::QueueTimelineUse>()};
     context->buffers.emplace(handle.id(), transfer_buffer);
     context->allocations.emplace(handle.id(), allocation.value());
     context->allocation_pools.emplace(handle.id(), *pool);
@@ -695,6 +745,11 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         vk::DeviceOptions device_options;
         device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
         device_options.enable_synchronization2 = !resolved.force_legacy_sync;
+        const bool core_12 = physical.properties.apiVersion >= VK_API_VERSION_1_2;
+        const bool timeline_available =
+            core_12 ? physical.vulkan12_features.timelineSemaphore == VK_TRUE
+                    : physical.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
+        device_options.enable_dedicated_transfer_queue = !resolved.force_legacy_sync && timeline_available;
         auto logical_device = impl->instance.create_device(physical, device_options);
         if (!logical_device) return std::move(logical_device).error();
         auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
