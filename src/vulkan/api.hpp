@@ -45,6 +45,7 @@ private:
 
 /// Device-level Vulkan entry points used by the initial backend and fault-injection seam.
 struct Api {
+    bool synchronization2_enabled() const noexcept { return synchronization2_enabled_; }
     // Pipeline and descriptor entry points are raw Vulkan PFNs. The owning Api still retains the
     // DeviceState through lifetime_, and each consumer checks these optional feature-layer calls.
     PFN_vkCreateShaderModule create_shader_module = nullptr;
@@ -77,6 +78,7 @@ struct Api {
                           uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t,
                           const VkImageMemoryBarrier*)>
         cmd_pipeline_barrier;
+    DispatchFunction<void(VkCommandBuffer, const VkDependencyInfo*)> cmd_pipeline_barrier2;
     DispatchFunction<void(VkCommandBuffer, VkBuffer, VkBuffer, uint32_t, const VkBufferCopy*)>
         cmd_copy_buffer;
     DispatchFunction<void(VkCommandBuffer, VkBuffer, VkDeviceSize, VkDeviceSize, uint32_t)> cmd_fill_buffer;
@@ -92,6 +94,7 @@ struct Api {
     DispatchFunction<VkResult(VkDevice, uint32_t, const VkMappedMemoryRange*)>
         invalidate_mapped_memory_ranges;
     DispatchFunction<VkResult(VkQueue, uint32_t, const VkSubmitInfo*, VkFence)> queue_submit;
+    DispatchFunction<VkResult(VkQueue, uint32_t, const VkSubmitInfo2*, VkFence)> queue_submit2;
     DispatchFunction<VkResult(VkDevice, const VkCommandPoolCreateInfo*, const VkAllocationCallbacks*,
                               VkCommandPool*)>
         create_command_pool;
@@ -119,6 +122,7 @@ private:
     friend class FaultInjector;
     friend class Instance;
     std::shared_ptr<const void> lifetime_;
+    bool synchronization2_enabled_ = false;
 };
 
 class Loader;

@@ -69,6 +69,20 @@ Status mapped_memory_operation(const vk::Api& api, VkDevice device, const Transf
 void record_hazards(const vk::Api& api, VkCommandBuffer command_buffer,
                     const std::vector<vk::BarrierPlan>& plans) {
     for (const auto& plan : plans) {
+        if (api.synchronization2_enabled() && api.cmd_pipeline_barrier2) {
+            VkMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = plan.source_stage;
+            barrier.srcAccessMask = plan.source_access;
+            barrier.dstStageMask = plan.destination_stage;
+            barrier.dstAccessMask = plan.destination_access;
+            VkDependencyInfo dependency{};
+            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependency.memoryBarrierCount = 1;
+            dependency.pMemoryBarriers = &barrier;
+            api.cmd_pipeline_barrier2(command_buffer, &dependency);
+            continue;
+        }
         VkMemoryBarrier barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         barrier.srcAccessMask = plan.source_access;

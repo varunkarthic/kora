@@ -31,9 +31,12 @@ same helper API instead of allocating one fence per dispatch.
 ## Fence fallback
 
 When timeline semaphores are unavailable, or `RuntimeOptions::force_legacy_sync` is enabled for
-validation, QueueContext uses a bounded pool of eight reusable fences. The submission worker acquires
-a fence before queue submission; the completion worker waits for that fence, advances a software
-monotonic completion value, resets the fence, and returns it to the pool. Backpressure waits for a
+validation, QueueContext uses legacy queue submission and a bounded pool of eight reusable fences.
+When synchronization2 was enabled for the logical device, normal queue work uses `vkQueueSubmit2`
+and barriers use `vkCmdPipelineBarrier2`; otherwise the same plans are lowered to `VkSubmitInfo` and
+`vkCmdPipelineBarrier`. The submission worker acquires a fence before queue submission; the
+completion worker waits for that fence, advances a software monotonic completion value, resets the
+fence, and returns it to the pool. Backpressure waits for a
 pooled fence rather than allocating a fence for every request. `completed_value()` and
 `wait_for_value()` retain the same threshold semantics in both modes.
 
@@ -53,9 +56,11 @@ planner uses explicit host, transfer, and compute stages/access masks and return
 to synchronization2 structures when the device path is selected. No normal plan uses `ALL_COMMANDS`.
 
 The transfer engine feeds per-buffer access sequences to this planner for upload, download, copy, and
-fill, replacing its former broad all-commands memory barriers. The tracker is deliberately internal;
-the runtime has not yet exposed arbitrary task access declarations, and queue-family ownership transfer
-is handled by a separate follow-up issue.
+fill, replacing its former broad all-commands memory barriers. The selected path depends on the
+logical-device synchronization2 feature actually enabled, not only on physical-device support;
+`RuntimeOptions::force_legacy_sync` disables it for deterministic fallback testing. The tracker is
+deliberately internal; the runtime has not yet exposed arbitrary task access declarations, and
+queue-family ownership transfer is handled by a separate follow-up issue.
 
 ## Invariants
 

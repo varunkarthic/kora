@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add capability-selected `vkCmdPipelineBarrier2`/`vkQueueSubmit2` execution with legacy lowering and
+  a CI integration pass using Vulkan synchronization validation.
+
 - Add per-buffer RAW/WAR/WAW hazard planning with precise host/transfer/compute barrier scopes and
   replace broad transfer barriers with tracker-generated plans.
 

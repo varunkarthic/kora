@@ -70,6 +70,7 @@ struct DeviceState {
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
     PFN_vkBindBufferMemory bind_buffer_memory = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdPipelineBarrier2 cmd_pipeline_barrier2 = nullptr;
     PFN_vkCmdCopyBuffer cmd_copy_buffer = nullptr;
     PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
     PFN_vkResetCommandBuffer reset_command_buffer = nullptr;
@@ -80,6 +81,7 @@ struct DeviceState {
     PFN_vkFlushMappedMemoryRanges flush_mapped_memory_ranges = nullptr;
     PFN_vkInvalidateMappedMemoryRanges invalidate_mapped_memory_ranges = nullptr;
     PFN_vkQueueSubmit queue_submit = nullptr;
+    PFN_vkQueueSubmit2 queue_submit2 = nullptr;
     PFN_vkCreateCommandPool create_command_pool = nullptr;
     PFN_vkDestroyCommandPool destroy_command_pool = nullptr;
     PFN_vkResetCommandPool reset_command_pool = nullptr;
@@ -128,6 +130,11 @@ void VKAPI_PTR cmd_pipeline_barrier(void* context, VkCommandBuffer command_buffe
     if (function != nullptr)
         function(command_buffer, source_stage, destination_stage, dependency_flags, memory_barrier_count,
                  memory_barriers, buffer_barrier_count, buffer_barriers, image_barrier_count, image_barriers);
+}
+void VKAPI_PTR cmd_pipeline_barrier2(void* context, VkCommandBuffer command_buffer,
+                                     const VkDependencyInfo* dependency_info) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->cmd_pipeline_barrier2;
+    if (function != nullptr) function(command_buffer, dependency_info);
 }
 void VKAPI_PTR cmd_copy_buffer(void* context, VkCommandBuffer command_buffer, VkBuffer source,
                                VkBuffer destination, uint32_t region_count,
@@ -185,6 +192,11 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue queue, uint32_t count, co
                                 VkFence fence) noexcept {
     const auto& state = *static_cast<DeviceState*>(context);
     return state.queue_submit(queue, count, submits, fence);
+}
+VkResult VKAPI_PTR queue_submit2(void* context, VkQueue queue, uint32_t count, const VkSubmitInfo2* submits,
+                                 VkFence fence) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->queue_submit2;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(queue, count, submits, fence);
 }
 
 VkResult VKAPI_PTR create_command_pool(void* context, VkDevice device, const VkCommandPoolCreateInfo* info,
@@ -1198,6 +1210,11 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkBindBufferMemory");
     api_state->cmd_pipeline_barrier = load_device_function<PFN_vkCmdPipelineBarrier>(
         get_device_proc, device_state->device, "vkCmdPipelineBarrier");
+    api_state->cmd_pipeline_barrier2 = load_device_function<PFN_vkCmdPipelineBarrier2>(
+        get_device_proc, device_state->device, "vkCmdPipelineBarrier2");
+    if (api_state->cmd_pipeline_barrier2 == nullptr)
+        api_state->cmd_pipeline_barrier2 = reinterpret_cast<PFN_vkCmdPipelineBarrier2>(
+            get_device_proc(device_state->device, "vkCmdPipelineBarrier2KHR"));
     api_state->cmd_copy_buffer =
         load_device_function<PFN_vkCmdCopyBuffer>(get_device_proc, device_state->device, "vkCmdCopyBuffer");
     api_state->cmd_fill_buffer =
@@ -1218,6 +1235,11 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkInvalidateMappedMemoryRanges");
     api_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device_state->device, "vkQueueSubmit");
+    api_state->queue_submit2 =
+        load_device_function<PFN_vkQueueSubmit2>(get_device_proc, device_state->device, "vkQueueSubmit2");
+    if (api_state->queue_submit2 == nullptr)
+        api_state->queue_submit2 =
+            reinterpret_cast<PFN_vkQueueSubmit2>(get_device_proc(device_state->device, "vkQueueSubmit2KHR"));
     api_state->create_command_pool = load_device_function<PFN_vkCreateCommandPool>(
         get_device_proc, device_state->device, "vkCreateCommandPool");
     api_state->destroy_command_pool = load_device_function<PFN_vkDestroyCommandPool>(
@@ -1286,6 +1308,8 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
     api.bind_buffer_memory = {api_state.get(), bind_buffer_memory};
     api.cmd_pipeline_barrier = {api_state.get(), cmd_pipeline_barrier};
+    if (api_state->cmd_pipeline_barrier2 != nullptr)
+        api.cmd_pipeline_barrier2 = {api_state.get(), cmd_pipeline_barrier2};
     api.cmd_copy_buffer = {api_state.get(), cmd_copy_buffer};
     api.cmd_fill_buffer = {api_state.get(), cmd_fill_buffer};
     api.reset_command_buffer = {api_state.get(), reset_command_buffer};
@@ -1296,6 +1320,8 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.flush_mapped_memory_ranges = {api_state.get(), flush_mapped_memory_ranges};
     api.invalidate_mapped_memory_ranges = {api_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {api_state.get(), queue_submit};
+    if (api_state->queue_submit2 != nullptr) api.queue_submit2 = {api_state.get(), queue_submit2};
+    api.synchronization2_enabled_ = sync2;
     api.create_command_pool = {api_state.get(), create_command_pool};
     api.destroy_command_pool = {api_state.get(), destroy_command_pool};
     api.reset_command_pool = {api_state.get(), reset_command_pool};
@@ -1413,6 +1439,11 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         load_device_function<PFN_vkBindBufferMemory>(get_device_proc, device, "vkBindBufferMemory");
     device_state->cmd_pipeline_barrier =
         load_device_function<PFN_vkCmdPipelineBarrier>(get_device_proc, device, "vkCmdPipelineBarrier");
+    device_state->cmd_pipeline_barrier2 =
+        load_device_function<PFN_vkCmdPipelineBarrier2>(get_device_proc, device, "vkCmdPipelineBarrier2");
+    if (device_state->cmd_pipeline_barrier2 == nullptr)
+        device_state->cmd_pipeline_barrier2 =
+            reinterpret_cast<PFN_vkCmdPipelineBarrier2>(get_device_proc(device, "vkCmdPipelineBarrier2KHR"));
     device_state->cmd_copy_buffer =
         load_device_function<PFN_vkCmdCopyBuffer>(get_device_proc, device, "vkCmdCopyBuffer");
     device_state->cmd_fill_buffer =
@@ -1432,6 +1463,11 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         get_device_proc, device, "vkInvalidateMappedMemoryRanges");
     device_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device, "vkQueueSubmit");
+    device_state->queue_submit2 =
+        load_device_function<PFN_vkQueueSubmit2>(get_device_proc, device, "vkQueueSubmit2");
+    if (device_state->queue_submit2 == nullptr)
+        device_state->queue_submit2 =
+            reinterpret_cast<PFN_vkQueueSubmit2>(get_device_proc(device, "vkQueueSubmit2KHR"));
     device_state->create_command_pool =
         load_device_function<PFN_vkCreateCommandPool>(get_device_proc, device, "vkCreateCommandPool");
     device_state->destroy_command_pool =
@@ -1502,6 +1538,8 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
     api.bind_buffer_memory = {device_state.get(), bind_buffer_memory};
     api.cmd_pipeline_barrier = {device_state.get(), cmd_pipeline_barrier};
+    if (device_state->cmd_pipeline_barrier2 != nullptr)
+        api.cmd_pipeline_barrier2 = {device_state.get(), cmd_pipeline_barrier2};
     api.cmd_copy_buffer = {device_state.get(), cmd_copy_buffer};
     api.cmd_fill_buffer = {device_state.get(), cmd_fill_buffer};
     api.reset_command_buffer = {device_state.get(), reset_command_buffer};
@@ -1512,6 +1550,7 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.flush_mapped_memory_ranges = {device_state.get(), flush_mapped_memory_ranges};
     api.invalidate_mapped_memory_ranges = {device_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {device_state.get(), queue_submit};
+    if (device_state->queue_submit2 != nullptr) api.queue_submit2 = {device_state.get(), queue_submit2};
     api.create_command_pool = {device_state.get(), create_command_pool};
     api.destroy_command_pool = {device_state.get(), destroy_command_pool};
     api.reset_command_pool = {device_state.get(), reset_command_pool};
@@ -1569,6 +1608,14 @@ struct FaultInjector::State {
         if (failure != VK_SUCCESS) return failure;
         return state.inner.queue_submit(queue, count, submits, fence);
     }
+
+    static VkResult VKAPI_PTR queue_submit2(void* context, VkQueue queue, uint32_t count,
+                                            const VkSubmitInfo2* submits, VkFence fence) noexcept {
+        auto& state = *static_cast<State*>(context);
+        const VkResult failure = result(state, Function::QueueSubmit);
+        if (failure != VK_SUCCESS) return failure;
+        return state.inner.queue_submit2(queue, count, submits, fence);
+    }
 };
 
 FaultInjector::FaultInjector(Api inner) : state_(std::make_shared<State>(std::move(inner))) {}
@@ -1599,6 +1646,9 @@ Api FaultInjector::api() const {
     result.flush_mapped_memory_ranges = state_->inner.flush_mapped_memory_ranges;
     result.invalidate_mapped_memory_ranges = state_->inner.invalidate_mapped_memory_ranges;
     result.queue_submit = {state_.get(), State::queue_submit};
+    if (state_->inner.queue_submit2) result.queue_submit2 = {state_.get(), State::queue_submit2};
+    result.cmd_pipeline_barrier2 = state_->inner.cmd_pipeline_barrier2;
+    result.synchronization2_enabled_ = state_->inner.synchronization2_enabled_;
     result.create_command_pool = state_->inner.create_command_pool;
     result.destroy_command_pool = state_->inner.destroy_command_pool;
     result.reset_command_pool = state_->inner.reset_command_pool;

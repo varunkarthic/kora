@@ -64,20 +64,23 @@ Result<std::unique_ptr<QueueContext>> QueueContext::create(Api api, VkDevice dev
             fences.push_back(fence);
         }
     }
-    auto context = std::unique_ptr<QueueContext>(
-        new QueueContext(std::move(api), device, queue, timeline, use_timeline, std::move(fences)));
+    const bool use_synchronization2 = !force_fence_fallback && api.synchronization2_enabled() &&
+                                      api.cmd_pipeline_barrier2 && api.queue_submit2;
+    auto context = std::unique_ptr<QueueContext>(new QueueContext(
+        std::move(api), device, queue, timeline, use_timeline, use_synchronization2, std::move(fences)));
     auto start_status = context->start();
     if (!start_status) return std::move(start_status).error();
     return context;
 }
 
 QueueContext::QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
-                           std::vector<VkFence> fence_pool)
+                           bool use_synchronization2, std::vector<VkFence> fence_pool)
     : api_(std::move(api)),
       device_(device),
       queue_(queue),
       timeline_(timeline),
       use_timeline_(use_timeline),
+      use_synchronization2_(use_synchronization2),
       fence_pool_(std::move(fence_pool)),
       available_fences_(fence_pool_.begin(), fence_pool_.end()) {}
 
@@ -322,6 +325,45 @@ void QueueContext::submission_loop() {
         submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
         submit_info.pSignalSemaphores = signal_semaphores.data();
 
+        std::vector<VkSemaphoreSubmitInfo> wait_infos;
+        std::vector<VkSemaphoreSubmitInfo> signal_infos;
+        std::vector<VkCommandBufferSubmitInfo> command_infos;
+        VkSubmitInfo2 submit_info2{};
+        if (use_synchronization2_) {
+            wait_infos.reserve(submission.wait_semaphores.size());
+            for (std::size_t index = 0; index < submission.wait_semaphores.size(); ++index) {
+                VkSemaphoreSubmitInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+                info.semaphore = submission.wait_semaphores[index];
+                info.value = wait_values[index];
+                info.stageMask = submission.wait_stages[index];
+                wait_infos.push_back(info);
+            }
+            signal_infos.reserve(signal_semaphores.size());
+            for (std::size_t index = 0; index < signal_semaphores.size(); ++index) {
+                VkSemaphoreSubmitInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+                info.semaphore = signal_semaphores[index];
+                info.value = signal_values[index];
+                info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                signal_infos.push_back(info);
+            }
+            command_infos.reserve(submission.command_buffers.size());
+            for (const auto command : submission.command_buffers) {
+                VkCommandBufferSubmitInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+                info.commandBuffer = command;
+                command_infos.push_back(info);
+            }
+            submit_info2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+            submit_info2.waitSemaphoreInfoCount = static_cast<uint32_t>(wait_infos.size());
+            submit_info2.pWaitSemaphoreInfos = wait_infos.data();
+            submit_info2.commandBufferInfoCount = static_cast<uint32_t>(command_infos.size());
+            submit_info2.pCommandBufferInfos = command_infos.data();
+            submit_info2.signalSemaphoreInfoCount = static_cast<uint32_t>(signal_infos.size());
+            submit_info2.pSignalSemaphoreInfos = signal_infos.data();
+        }
+
         const bool was_active = queue_submit_active_.test_and_set(std::memory_order_acquire);
         assert(!was_active && "Concurrent host submission to one Vulkan queue");
         if (was_active) {
@@ -347,11 +389,16 @@ void QueueContext::submission_loop() {
                 pooled_fence = true;
             }
         }
-        const VkResult result =
-            api_.queue_submit(queue_, 1, &submit_info, use_timeline_ ? submission.fence : completion_fence);
+        const VkFence submit_fence = use_timeline_ ? submission.fence : completion_fence;
+        const VkResult result = use_synchronization2_
+                                    ? api_.queue_submit2(queue_, 1, &submit_info2, submit_fence)
+                                    : api_.queue_submit(queue_, 1, &submit_info, submit_fence);
         queue_submit_active_.clear(std::memory_order_release);
         const Status submit_status =
-            result == VK_SUCCESS ? ok_status() : Status(vk_error("vkQueueSubmit failed", result));
+            result == VK_SUCCESS
+                ? ok_status()
+                : Status(vk_error(use_synchronization2_ ? "vkQueueSubmit2 failed" : "vkQueueSubmit failed",
+                                  result));
         if (submission.on_submitted) {
             try {
                 submission.on_submitted(timeline_value, submit_status);
