@@ -57,3 +57,12 @@ TEST(KernelMetadata, RejectsOverflowOverlapAndTruncatedDocuments) {
     ASSERT_FALSE(truncated);
     EXPECT_EQ(truncated.error().code, ErrorCode::InvalidKernel);
 }
+
+TEST(KernelMetadata, RejectsEveryTruncatedPrefixOfAValidManifest) {
+    const std::string_view document{valid_document};
+    for (std::size_t size = 0; size < document.size(); ++size) {
+        auto parsed = parse_kernel_metadata(document.substr(0, size));
+        EXPECT_FALSE(parsed) << "accepted truncated prefix of " << size << " bytes";
+        if (!parsed) EXPECT_EQ(parsed.error().code, ErrorCode::InvalidKernel);
+    }
+}
