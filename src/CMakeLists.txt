@@ -10,6 +10,7 @@ add_library(kora
   core/log.cpp
   core/json.cpp
   core/options.cpp
+  core/performance_db.cpp
   core/runtime.cpp
   core/task_graph.cpp
   core/temporary_buffer_aliasing.cpp

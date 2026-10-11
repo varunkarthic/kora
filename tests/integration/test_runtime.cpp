@@ -90,6 +90,27 @@ TEST(Runtime, CorruptCalibrationCacheNeverBlocksStartup) {
     std::filesystem::remove_all(directory, ignored);
 }
 
+TEST(Runtime, CorruptPerformanceDatabaseNeverBlocksStartup) {
+    const auto directory = std::filesystem::temp_directory_path() / "kora-performance-db-runtime-test";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory, ignored);
+    {
+        std::ofstream corrupt(directory / "performance-db.json", std::ios::binary);
+        corrupt << "{corrupt";
+    }
+    kora::RuntimeOptions options;
+    options.cache_dir = directory.string();
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        std::filesystem::remove_all(directory, ignored);
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    std::filesystem::remove_all(directory, ignored);
+}
+
 TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
 #ifndef KORA_VECTOR_ADD_FIXTURE_PATH
     GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";

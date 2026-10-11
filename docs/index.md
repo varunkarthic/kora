@@ -44,6 +44,7 @@ internals/dirty-ranges
 internals/spirv
 internals/pipelines
 internals/aliasing
+internals/performance-db
 cpu-executor
 device-selection
 memory-model
