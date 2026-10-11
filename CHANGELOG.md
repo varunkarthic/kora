@@ -9,6 +9,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add public Task/TaskGraph metadata, automatic RAW/WAR/WAW dependencies, explicit ordering, and
   deterministic topological cycle validation.
+
+## [0.1.36] - 2026-10-11
+
 - Add cached queue-family policy, concurrent runtime-buffer sharing, and timeline semaphore ordering
   between dedicated transfer and compute queues when their families differ.
 
@@ -219,7 +222,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.35...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.36...HEAD
+[0.1.36]: https://github.com/varunkarthic/kora/compare/v0.1.35...v0.1.36
 [0.1.35]: https://github.com/varunkarthic/kora/compare/v0.1.34...v0.1.35
 [0.1.34]: https://github.com/varunkarthic/kora/compare/v0.1.33...v0.1.34
 [0.1.33]: https://github.com/varunkarthic/kora/compare/v0.1.32...v0.1.33
