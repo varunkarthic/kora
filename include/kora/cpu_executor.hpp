@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "kora/event.hpp"
+#include "kora/options.hpp"
 
 namespace kora {
 
@@ -38,9 +39,10 @@ public:
     Result<Event> submit(Task task, CpuTaskPriority priority = CpuTaskPriority::Normal);
     /// A worker waiting on this executor helps run work; other callers block on the Event directly.
     Status wait(const Event& event);
-    /// Stop accepting external work, drain queued tasks (including worker-recursive submissions),
-    /// and join all workers. Calling shutdown from one of this executor's tasks is rejected.
-    Status shutdown();
+    /// Stop accepting work, then either drain queued tasks (Graceful) or cancel queued tasks
+    /// (CancelPending), and join workers. Active tasks are never interrupted. Calling shutdown from
+    /// one of this executor's tasks is rejected.
+    Status shutdown(ShutdownMode mode = ShutdownMode::Graceful);
 
     std::size_t worker_count() const noexcept;
 

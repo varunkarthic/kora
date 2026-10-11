@@ -53,6 +53,23 @@ kora::KernelMetadata partition_add_metadata() {
 
 }  // namespace
 
+TEST(Runtime, RapidCreateAndDestroyHonorsBothShutdownModes) {
+    for (const auto mode : {kora::ShutdownMode::Graceful, kora::ShutdownMode::CancelPending}) {
+        for (int iteration = 0; iteration < 4; ++iteration) {
+            kora::RuntimeOptions options;
+            options.shutdown_mode = mode;
+            options.enable_startup_calibration = false;
+            auto runtime = kora::Runtime::create(options);
+            if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                             runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+                KORA_REQUIRE_VULKAN(false);
+            }
+            ASSERT_TRUE(runtime) << runtime.error().describe();
+            ASSERT_FALSE(runtime.value().devices().empty());
+        }
+    }
+}
+
 TEST(Runtime, OwnsSelectedDeviceAndExposesMemoryStats) {
     auto runtime = kora::Runtime::create();
     if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||

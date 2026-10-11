@@ -79,6 +79,7 @@ struct CpuExecutor::State {
     std::condition_variable changed;
     bool accepting = true;
     bool stopping = false;
+    bool cancel_pending = false;
 };
 
 CpuExecutor::CpuExecutor(CpuExecutorOptions options) : options_(options) {
@@ -137,7 +138,7 @@ Result<Event> CpuExecutor::submit(Task task, CpuTaskPriority priority) {
     {
         std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
         const bool nested_submission = active_executor == this;
-        if (!state_->accepting && !nested_submission)
+        if ((!state_->accepting && !nested_submission) || state_->cancel_pending)
             return Error(ErrorCode::Cancelled, "CPU executor is shutting down and rejects new work");
         const auto index = nested_submission ? active_worker_index
                                              : state_->next_worker.fetch_add(1, std::memory_order_relaxed) %
@@ -160,6 +161,8 @@ Result<Event> CpuExecutor::submit(Task task, CpuTaskPriority priority) {
 
 bool CpuExecutor::run_one(std::size_t worker_index) {
     if (!state_ || worker_index >= state_->workers.size()) return false;
+    std::unique_lock lifecycle_lock(state_->lifecycle_mutex);
+    if (state_->cancel_pending) return false;
     WorkItem item;
     bool found = false;
     auto& local = *state_->workers[worker_index];
@@ -190,6 +193,7 @@ bool CpuExecutor::run_one(std::size_t worker_index) {
     }
     if (!found) return false;
     state_->queued.fetch_sub(1, std::memory_order_acq_rel);
+    lifecycle_lock.unlock();
     execute_task(std::move(item));
     return true;
 }
@@ -238,15 +242,36 @@ Status CpuExecutor::wait(const Event& event) {
     return event.wait();
 }
 
-Status CpuExecutor::shutdown() {
+Status CpuExecutor::shutdown(ShutdownMode mode) {
     if (!state_) return ok_status();
     if (active_executor == this)
         return Error(ErrorCode::InvalidArgument, "CPU executor cannot be shut down by one of its tasks");
     std::lock_guard shutdown_lock(state_->shutdown_mutex);
+    const bool cancel_pending = mode == ShutdownMode::CancelPending;
     {
         std::lock_guard lock(state_->lifecycle_mutex);
         state_->accepting = false;
         state_->stopping = true;
+        if (cancel_pending) state_->cancel_pending = true;
+    }
+    if (cancel_pending) {
+        for (auto& worker : state_->workers) {
+            for (auto& lane : worker->lanes) {
+                std::deque<WorkItem> cancelled = [&]() {
+                    std::lock_guard worker_lock(worker->mutex);
+                    return std::move(lane);
+                }();
+                const auto count = cancelled.size();
+                state_->queued.fetch_sub(count, std::memory_order_acq_rel);
+                state_->outstanding.fetch_sub(count, std::memory_order_acq_rel);
+                while (!cancelled.empty()) {
+                    auto item = std::move(cancelled.front());
+                    cancelled.pop_front();
+                    item.promise->complete(
+                        Error(ErrorCode::Cancelled, "CPU task cancelled during executor shutdown"));
+                }
+            }
+        }
     }
     state_->changed.notify_all();
     for (auto& thread : state_->threads) {

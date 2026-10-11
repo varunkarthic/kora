@@ -123,4 +123,60 @@ TEST(CpuExecutor, CapturesTaskExceptionsIntoEventStatus) {
     EXPECT_NE(status.error().message.find("synthetic CPU failure"), std::string::npos);
 }
 
+TEST(CpuExecutor, CancelPendingStopsQueuedTasksAndCompletesTheirEvents) {
+    auto created = kora::CpuExecutor::create(one_worker());
+    ASSERT_TRUE(created);
+    auto executor = std::move(created).value();
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool started = false;
+    bool release = false;
+    std::atomic<bool> queued_ran{false};
+    auto active = executor->submit([&] {
+        std::unique_lock lock(mutex);
+        started = true;
+        changed.notify_all();
+        changed.wait(lock, [&] { return release; });
+        return kora::ok_status();
+    });
+    ASSERT_TRUE(active);
+    {
+        std::unique_lock lock(mutex);
+        changed.wait(lock, [&] { return started; });
+    }
+    auto pending = executor->submit([&] {
+        queued_ran.store(true, std::memory_order_relaxed);
+        return kora::ok_status();
+    });
+    ASSERT_TRUE(pending);
+
+    std::thread shutdown([&] { EXPECT_TRUE(executor->shutdown(kora::ShutdownMode::CancelPending)); });
+    bool admission_closed = false;
+    kora::ErrorCode admission_error = kora::ErrorCode::InternalInvariantViolation;
+    for (;;) {
+        auto probe = executor->submit([] { return kora::ok_status(); });
+        if (!probe) {
+            admission_closed = true;
+            admission_error = probe.error().code;
+            break;
+        }
+        std::this_thread::yield();
+    }
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    changed.notify_all();
+    shutdown.join();
+
+    ASSERT_TRUE(admission_closed);
+    EXPECT_EQ(admission_error, kora::ErrorCode::Cancelled);
+    EXPECT_TRUE(executor->wait(active.value()));
+    const auto cancelled = executor->wait(pending.value());
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code, kora::ErrorCode::Cancelled);
+    EXPECT_FALSE(queued_ran.load(std::memory_order_relaxed));
+}
+
 }  // namespace

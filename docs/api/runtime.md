@@ -17,6 +17,23 @@ valid only for the owning Runtime's lifetime. `device_info(id)` returns the immu
 snapshot for that selected device. `memory_stats(id)` rejects IDs not owned by the Runtime with
 `InvalidArgument`.
 
+### Shutdown
+
+`Runtime` destruction is `noexcept`. `RuntimeOptions::shutdown_mode` selects the teardown policy and
+defaults to `ShutdownMode::Graceful`. Graceful shutdown first closes Runtime dispatch admission, then
+joins each device's compute and transfer submission/completion workers, then drains and joins the CPU
+fallback executor. Work already accepted is allowed to finish, including completion callbacks and
+CPU fallback descendants. Queue workers and device-owned callback dependencies are gone before
+buffers, pipelines, logical devices, the Vulkan instance, and loader are released.
+
+`ShutdownMode::CancelPending` uses the same ownership ordering but cancels queued, not-yet-submitted
+Vulkan submissions and queued CPU tasks. Their Events complete with `ErrorCode::Cancelled`; work
+already executing or submitted to Vulkan is not forcibly interrupted and must finish before teardown
+returns. Neither mode can safely abort a hung driver call or a user callback that never returns.
+Shutdown must not be initiated from a Runtime-owned queue callback or CPU executor task; those
+lower-level shutdown calls reject self-join attempts. Destroying a Runtime concurrently with calls
+through that Runtime, its kernels, or dispatch builders is unsupported.
+
 After an event reports `DeviceLost`, `Runtime::recover()` transactionally creates replacement logical
 devices with the Runtime's resolved options. Existing host-backed `BufferHandle`s remain valid, and
 authoritative host contents upload lazily on their next use. Outputs of in-flight writes return

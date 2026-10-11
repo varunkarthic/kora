@@ -170,7 +170,7 @@ public:
     static Result<Runtime> create(const RuntimeOptions& options = {});
 
     Runtime();
-    ~Runtime();
+    ~Runtime() noexcept;
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
     Runtime(Runtime&&) noexcept;
