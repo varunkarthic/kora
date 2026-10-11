@@ -87,6 +87,101 @@ return `InvalidArgument`. The ledger accounts for KORA reservations only; caller
 release around successful allocation and destruction, and must not interpret these estimates as a
 replacement for Vulkan allocation error handling.
 
+## Logical buffer residency
+
+The internal `ResidencyTracker` models which copies contain the current logical buffer contents.
+It is separate from Vulkan handles: device IDs are opaque runtime indices, and content versions—not
+device type, vendor ID, or memory flags—determine freshness. A new host-initialized buffer starts at
+version 1 in `HostOnly`; a device-initialized buffer has one current device replica in `DeviceOnly`.
+Every host or device write advances the version, making all other copies stale without deleting
+their allocations.
+
+| State | Meaning |
+| --- | --- |
+| `HostOnly` | Current data exists only in the host copy; no device copy has been created. |
+| `DeviceOnly` | Current data exists on one device and there is no host copy. |
+| `Shared` | Current data exists in multiple replicas, including multiple current device copies. |
+| `HostAndDeviceClean` | The host and exactly one device copy hold the current version. |
+| `HostNewer` | Host data is current; any extant device copies are stale. |
+| `DeviceNewer` | A device copy is current; the host copy, if present, is stale. |
+| `Evicted` | Host data remains current after all device copies were removed. |
+| `InTransfer` | A checked copy is in progress; its source remains current until completion. |
+| `Disposed` | No copy is current; this is the sole state exempt from the current-copy invariant. |
+
+The pure `transition_residency(state, event)` function rejects illegal state/event pairs. The tracker
+adds the per-device version map and resolves summary states for cases (such as multi-device copies)
+that a single enum cannot distinguish. Its legal transition graph is:
+
+```{mermaid}
+stateDiagram-v2
+    [*] --> HostOnly: host_initialized
+    [*] --> DeviceOnly: device_initialized
+    HostOnly --> HostOnly: HostWrite
+    HostOnly --> DeviceNewer: DeviceWrite
+    HostOnly --> InTransfer: BeginTransfer
+    DeviceOnly --> HostNewer: HostWrite
+    DeviceOnly --> DeviceOnly: DeviceWrite
+    DeviceOnly --> InTransfer: BeginTransfer
+    Shared --> HostNewer: HostWrite
+    Shared --> DeviceNewer: DeviceWrite
+    Shared --> InTransfer: BeginTransfer
+    HostAndDeviceClean --> HostNewer: HostWrite
+    HostAndDeviceClean --> DeviceNewer: DeviceWrite
+    HostAndDeviceClean --> InTransfer: BeginTransfer
+    HostNewer --> HostNewer: HostWrite
+    HostNewer --> DeviceNewer: DeviceWrite
+    HostNewer --> InTransfer: BeginTransfer
+    HostNewer --> Evicted: EvictDevice
+    DeviceNewer --> HostNewer: HostWrite
+    DeviceNewer --> DeviceNewer: DeviceWrite
+    DeviceNewer --> InTransfer: BeginTransfer
+    DeviceNewer --> DeviceOnly: EvictHost
+    DeviceNewer --> DeviceNewer: EvictDevice
+    Evicted --> Evicted: HostWrite
+    Evicted --> DeviceNewer: DeviceWrite
+    Evicted --> InTransfer: BeginTransfer
+    InTransfer --> HostAndDeviceClean: CompleteToHost
+    InTransfer --> Shared: CompleteToDevice
+    Shared --> DeviceOnly: EvictHost
+    Shared --> Evicted: EvictDevice
+    HostAndDeviceClean --> DeviceOnly: EvictHost
+    HostAndDeviceClean --> Evicted: EvictDevice
+    HostOnly --> Disposed: Dispose
+    DeviceOnly --> Disposed: Dispose
+    Shared --> Disposed: Dispose
+    HostAndDeviceClean --> Disposed: Dispose
+    HostNewer --> Disposed: Dispose
+    DeviceNewer --> Disposed: Dispose
+    Evicted --> Disposed: Dispose
+```
+
+### API reference and transfer policy
+
+| Function | Contract |
+| --- | --- |
+| `transition_residency(state, event)` | Pure transition validation; illegal pairs return `InvalidArgument`. |
+| `write_host()` / `write_device(device)` | Advance the content version and mark only the written copy current. Version overflow is rejected without mutation. |
+| `plan_transfer(destination)` | Return a no-op when the destination already holds the current version; otherwise select a current host/device source and capture the version. |
+| `begin_transfer(plan)` | Revalidate the captured plan, then retain its source as current while entering `InTransfer`. Stale or duplicate plans fail. |
+| `complete_transfer()` / `fail_transfer()` | Mark the destination current only on success; failure restores the pre-transfer state and retains the source copy. |
+| `evict_host()` / `evict_device(device)` | Remove a copy only when another current copy remains. Stale copies may be discarded without losing current data. |
+| `dispose()` | Explicitly invalidate all copies. Other operations on a disposed tracker fail. |
+
+Transfers therefore happen only for absent or stale destinations. Copy freshness is determined by
+version equality; stale allocations are never considered valid sources. `begin_transfer` compares a
+plan with a fresh query so a plan cannot be submitted after an intervening write. The tracker is a
+policy/model layer and does not submit GPU copies itself; the future transfer engine will consume
+these plans. Its per-device validity map may refine the coarse transition result (for example, a
+host-to-device completion with one device copy is `HostAndDeviceClean`, while multiple current
+replicas are summarized as `Shared`). A tracker is single-owner and not thread-safe; its caller must
+serialize writes, transfer completion, and eviction for that logical allocation.
+
+For every non-disposed tracker, at least one host or device copy must equal `current_version`. An
+eviction that would remove the last such copy returns `InvalidArgument` and leaves the tracker
+unchanged. `Disposed` is the explicit exception. The exhaustive state/event table, per-device stale
+copy cases, deterministic randomized invariant sequence, and transfer no-op/stale-destination
+coverage live in `tests/unit/test_residency.cpp`.
+
 ## Tests
 
 Synthetic memory-property tests cover discrete, UMA, BAR-like, and unknown layouts, including the
@@ -96,10 +191,15 @@ limits, over-budget and overflow reservations, invalid indices, and release unde
 `DeviceInfo` mapping test also verifies heap size and per-type flags survive conversion from Vulkan
 properties.
 
+Residency tests exhaust every state/event pair, check host/device freshness for single and multiple
+devices, verify stale or absent destinations trigger plans while current destinations do not, and
+exercise transfer failure, eviction, disposal, and a deterministic operation sequence against the
+current-copy invariant.
+
 Run the focused tests with:
 
 ```sh
 cmake --preset debug
 cmake --build --preset debug --parallel
-ctest --preset debug --output-on-failure -R 'DeviceCaps|MemoryManager|BudgetLedger'
+ctest --preset debug --output-on-failure -R 'DeviceCaps|MemoryManager|BudgetLedger|Residency'
 ```
