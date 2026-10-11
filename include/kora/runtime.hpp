@@ -8,10 +8,12 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
 #include "kora/buffer.hpp"
+#include "kora/cpu_executor.hpp"
 #include "kora/device_info.hpp"
 #include "kora/device_selection.hpp"
 #include "kora/event.hpp"
@@ -39,6 +41,27 @@ private:
     explicit Kernel(std::shared_ptr<const detail::KernelState> state) : state_(std::move(state)) {}
     std::shared_ptr<const detail::KernelState> state_;
 };
+
+/// Host-visible mappings for a native CPU implementation. Writable mappings advance host versions
+/// on release, causing later GPU dispatches to upload the modified bytes.
+class CpuTaskContext final {
+public:
+    CpuTaskContext() = default;
+    std::size_t buffer_count() const noexcept { return buffers_.size(); }
+    Result<std::span<const std::byte>> read(std::size_t index) const;
+    Result<std::span<std::byte>> write(std::size_t index);
+    Result<std::span<std::byte>> read_write(std::size_t index);
+    std::span<const std::byte> push_constants() const noexcept { return push_constants_; }
+
+private:
+    friend class Runtime;
+    std::vector<BufferHandle> buffers_;
+    std::vector<KernelAccess> accesses_;
+    std::vector<MappedBytes> mappings_;
+    std::span<const std::byte> push_constants_;
+};
+
+using CpuFallbackFunction = std::function<Status(CpuTaskContext&)>;
 
 class DispatchBuilder final {
 public:
@@ -122,6 +145,12 @@ public:
     DispatchBuilder dispatch(const Kernel& kernel) const;
     /// Schedule a host readback for a device-resident buffer and complete when host bytes are fresh.
     Result<Event> readback(const BufferHandle& buffer) const;
+    /// Register/replace a CPU implementation under a stable semantic key.
+    Status register_cpu_fallback(std::string key, CpuFallbackFunction function);
+    /// Execute a registered CPU implementation after requested device outputs are visible on host.
+    Result<Event> run_cpu_fallback(std::string_view key, std::span<const BufferHandle> buffers,
+                                   std::span<const KernelAccess> accesses,
+                                   std::span<const std::byte> push_constants = {});
     template <class T>
     Result<Event> readback(const Buffer<T>& buffer) const {
         return readback(buffer.handle());

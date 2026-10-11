@@ -291,6 +291,13 @@ struct Runtime::Impl {
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
     bool calibrate_on_start = true;
+    std::mutex cpu_mutex;
+    std::unordered_map<std::string, CpuFallbackFunction> cpu_fallbacks;
+    std::unique_ptr<CpuExecutor> cpu_executor;
+
+    ~Impl() {
+        if (cpu_executor) (void)cpu_executor->shutdown();
+    }
 };
 
 namespace {
@@ -691,6 +698,33 @@ Runtime::~Runtime() = default;
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
 
+Result<std::span<const std::byte>> CpuTaskContext::read(std::size_t index) const {
+    if (index >= buffers_.size() || index >= accesses_.size() || index >= mappings_.size())
+        return Error(ErrorCode::InvalidArgument, "CPU task buffer index is out of range");
+    if (accesses_[index] == KernelAccess::Write)
+        return Error(ErrorCode::InvalidKernelBinding,
+                     "CPU task requested read access to a write-only buffer");
+    return std::span<const std::byte>(mappings_[index].data(), mappings_[index].size());
+}
+
+Result<std::span<std::byte>> CpuTaskContext::write(std::size_t index) {
+    if (index >= buffers_.size() || index >= accesses_.size() || index >= mappings_.size())
+        return Error(ErrorCode::InvalidArgument, "CPU task buffer index is out of range");
+    if (accesses_[index] == KernelAccess::Read)
+        return Error(ErrorCode::InvalidKernelBinding,
+                     "CPU task requested write access to a read-only buffer");
+    return mappings_[index].bytes();
+}
+
+Result<std::span<std::byte>> CpuTaskContext::read_write(std::size_t index) {
+    if (index >= buffers_.size() || index >= accesses_.size() || index >= mappings_.size())
+        return Error(ErrorCode::InvalidArgument, "CPU task buffer index is out of range");
+    if (accesses_[index] != KernelAccess::ReadWrite)
+        return Error(ErrorCode::InvalidKernelBinding,
+                     "CPU task requested read_write on a differently declared buffer");
+    return mappings_[index].bytes();
+}
+
 const KernelMetadata& Kernel::metadata() const noexcept {
     static const KernelMetadata empty_metadata;
     return state_ ? state_->metadata : empty_metadata;
@@ -974,6 +1008,101 @@ Result<Event> Runtime::readback(const BufferHandle& buffer) const {
         });
     if (!completion) promise->complete(Status(std::move(completion).error()));
     return event;
+}
+
+Status Runtime::register_cpu_fallback(std::string key, CpuFallbackFunction function) {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    if (key.empty() || !function)
+        return Error(ErrorCode::InvalidArgument, "CPU fallback key and function must be non-empty");
+    std::lock_guard lock(impl_->cpu_mutex);
+    impl_->cpu_fallbacks.insert_or_assign(std::move(key), std::move(function));
+    return {};
+}
+
+Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const BufferHandle> buffers,
+                                        std::span<const KernelAccess> accesses,
+                                        std::span<const std::byte> push_constants) {
+    if (!impl_ || impl_->devices.empty())
+        return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    if (key.empty() || buffers.size() != accesses.size())
+        return Error(ErrorCode::InvalidArgument,
+                     "CPU fallback key or buffer access declarations are invalid");
+
+    CpuFallbackFunction function;
+    {
+        std::lock_guard lock(impl_->cpu_mutex);
+        const auto found = impl_->cpu_fallbacks.find(std::string(key));
+        if (found == impl_->cpu_fallbacks.end())
+            return Error(ErrorCode::InvalidKernel, "no CPU fallback is registered for semantic key");
+        function = found->second;
+        if (!impl_->cpu_executor) {
+            auto executor = CpuExecutor::create();
+            if (!executor) return std::move(executor).error();
+            impl_->cpu_executor = std::move(executor).value();
+        }
+    }
+
+    auto task = std::make_shared<CpuTaskContext>();
+    task->buffers_.assign(buffers.begin(), buffers.end());
+    task->accesses_.assign(accesses.begin(), accesses.end());
+    task->push_constants_ = push_constants;
+    std::vector<Event> prerequisites;
+    prerequisites.reserve(buffers.size());
+    for (std::size_t index = 0; index < buffers.size(); ++index) {
+        if (!buffers[index])
+            return Error(ErrorCode::InvalidKernelBinding, "CPU task contains an empty buffer");
+        if (accesses[index] == KernelAccess::Write) continue;
+        auto visible = readback(buffers[index]);
+        if (!visible) return std::move(visible).error();
+        prerequisites.push_back(std::move(visible).value());
+    }
+    auto ready = Event::when_all(prerequisites);
+    if (!ready) return std::move(ready).error();
+
+    auto promise = std::make_shared<detail::EventPromise>();
+    const auto result_event = promise->event();
+    auto* executor = impl_->cpu_executor.get();
+    auto continued = ready.value().on_complete([task, function = std::move(function), executor,
+                                                promise](Status status) mutable {
+        if (!status) {
+            promise->complete(std::move(status));
+            return ok_status();
+        }
+        for (std::size_t index = 0; index < task->buffers_.size(); ++index) {
+            const auto access = task->accesses_[index];
+            const auto map_access = access == KernelAccess::Read    ? MapAccess::Read
+                                    : access == KernelAccess::Write ? MapAccess::Write
+                                                                    : MapAccess::ReadWrite;
+            auto mapping = task->buffers_[index].map(map_access);
+            if (!mapping) {
+                promise->complete(Status(std::move(mapping).error()));
+                return ok_status();
+            }
+            task->mappings_.push_back(std::move(mapping).value());
+        }
+        auto submitted = executor->submit([task, function = std::move(function)]() mutable {
+            Status status;
+            try {
+                status = function(*task);
+            } catch (...) {
+                status =
+                    Error(ErrorCode::InternalInvariantViolation, "CPU fallback callback threw an exception");
+            }
+            task->mappings_.clear();  // Publish host versions before completing the Event.
+            return status;
+        });
+        if (!submitted) {
+            promise->complete(Status(std::move(submitted).error()));
+            return ok_status();
+        }
+        (void)submitted.value().on_complete([promise](Status task_status) {
+            promise->complete(std::move(task_status));
+            return ok_status();
+        });
+        return ok_status();
+    });
+    if (!continued) promise->complete(Status(std::move(continued).error()));
+    return result_event;
 }
 
 }  // namespace kora

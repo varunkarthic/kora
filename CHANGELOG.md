@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Added keyed native CPU fallback registration and asynchronous `Runtime::run_cpu_fallback()` with
+  access-checked host mappings and GPU readback/upload visibility across mixed dispatch chains.
+
 - Add a fixed-size CPU executor with priority lanes, work stealing, graceful draining, and
   exception-aware Events.
 
