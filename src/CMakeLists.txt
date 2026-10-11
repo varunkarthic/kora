@@ -23,6 +23,7 @@ add_library(kora
   memory/staging_ring.cpp
   memory/transfer_engine.cpp
   memory/memory_manager.cpp
+  memory/eviction.cpp
   memory/dirty_ranges.cpp
   memory/residency.cpp
   kernel/metadata.cpp

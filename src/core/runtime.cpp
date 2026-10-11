@@ -25,6 +25,7 @@
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
 #include "kernel/pipeline_manager.hpp"
+#include "memory/eviction.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
 #include "memory/transfer_engine.hpp"
@@ -73,6 +74,8 @@ struct DispatchContext {
     vk::QueueFamilyPolicy queue_family_policy;
     const vk::Device* device = nullptr;
     std::mutex submit_mutex;
+    detail::EvictionPolicy eviction_policy;
+    std::uint64_t access_tick = 0;
     std::unique_ptr<vk::CommandPoolSet> command_pool;
     std::unordered_map<BufferId, detail::TransferBuffer, BufferIdHash> buffers;
     std::unordered_map<BufferId, std::uint64_t, BufferIdHash> resident_host_versions;
@@ -399,6 +402,15 @@ Result<Event> DispatchBuilder::submit() {
         if (kernel_->metadata.bindings[i].kind != KernelBindingKind::StorageBuffer)
             return Error(ErrorCode::UnsupportedFeature,
                          "runtime dispatch currently supports storage-buffer bindings only");
+    }
+    {
+        std::lock_guard lock(context_->submit_mutex);
+        for (const auto& buffer : buffers_) {
+            if (context_->access_tick == std::numeric_limits<std::uint64_t>::max())
+                return Error(ErrorCode::Overflow, "runtime buffer access-history tick overflow");
+            auto recorded = context_->eviction_policy.record_access(buffer.id(), ++context_->access_tick);
+            if (!recorded) return std::move(recorded).error();
+        }
     }
     auto specialization = kernel_->metadata.specialization_constants;
     auto pipeline = context_->pipelines->get_or_create(kernel_->words, kernel_->metadata, specialization,
