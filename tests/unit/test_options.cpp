@@ -28,6 +28,21 @@ TEST(Options, Defaults) {
     EXPECT_EQ(r.calibration_budget_ms, 250U);
 }
 
+TEST(Options, DebugSafetyDefaultsToBuildModeAndCanBeOverridden) {
+    const auto defaults = resolve({}, fake({}));
+#if defined(NDEBUG)
+    EXPECT_FALSE(defaults.debug_safety);
+#else
+    EXPECT_TRUE(defaults.debug_safety);
+#endif
+    EXPECT_TRUE(resolve({}, fake({{"KORA_DEBUG_SAFETY", "true"}})).debug_safety);
+    EXPECT_FALSE(resolve({}, fake({{"KORA_DEBUG_SAFETY", "false"}})).debug_safety);
+
+    RuntimeOptions explicit_options;
+    explicit_options.debug_safety = false;
+    EXPECT_FALSE(resolve(explicit_options, fake({{"KORA_DEBUG_SAFETY", "true"}})).debug_safety);
+}
+
 TEST(Options, StartupCalibrationCanBeDisabledAndBudgetConfigured) {
     auto from_environment =
         resolve({}, fake({{"KORA_STARTUP_CALIBRATION", "false"}, {"KORA_CALIBRATION_BUDGET_MS", "500"}}));

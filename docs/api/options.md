@@ -44,6 +44,8 @@ Header: `include/kora/options.hpp`
 ## Invariants
 
 - Explicit API values always beat environment variables.
+- `RuntimeOptions::debug_safety` / `KORA_DEBUG_SAFETY` requests Vulkan validation when available and
+  trace-level synchronization logging; it defaults on in non-Release builds and off in Release.
 - Memory-budget fractions remain in `(0,1]`.
 - UUID selection uses exactly 32 hexadecimal characters.
 - Selection policy is capability based; a vendor ID is not a policy input.

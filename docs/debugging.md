@@ -4,6 +4,33 @@ KORA's diagnostic design keeps observability separate from runtime correctness. 
 device choice, scheduling, synchronization, and recovery decisions, but changing a log threshold
 must never change those decisions. The public API is documented in {doc}`api/logging`.
 
+## Debug safety mode
+
+`RuntimeOptions::debug_safety` or `KORA_DEBUG_SAFETY` enables extra diagnostics. It defaults on for
+non-Release builds and off for Release builds; an explicit API value takes precedence over the
+environment. When enabled, KORA requests `VK_LAYER_KHRONOS_validation` when installed and emits
+trace-level queue submission details in the `Sync` category. If the layer is unavailable, startup
+continues with a warning. Vulkan robust buffer access is enabled whenever the selected device reports
+support, independently of this option.
+
+Several checks are unconditional safety contracts rather than mode switches: SPIR-V is validated and
+reflected before pipeline creation, buffer slot generations are checked on handle operations, and the
+suballocator and queue ownership invariants are asserted in Debug builds. Debug builds also place
+canaries around each host-shadow buffer and report an internal-invariant error when a later operation
+detects an overwritten guard. These guards are absent from Release allocations. Vulkan validation and
+robust buffer access are diagnostic/hardening aids, not a substitute for validating untrusted input or
+bounds in application kernels.
+
+For example, enable safety mode explicitly in a Release build with:
+
+```sh
+KORA_DEBUG_SAFETY=1 ./your-application
+```
+
+Expected outcome: if the Vulkan validation layer is installed, it is enabled and synchronization
+submission details appear on standard error. Otherwise startup continues and reports that validation
+could not be enabled.
+
 ## Enable useful logs
 
 Set the process-wide threshold before starting the application:

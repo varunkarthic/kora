@@ -1416,11 +1416,12 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
 
 Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     const auto resolved = resolve(options);
+    if (resolved.debug_safety) log::set_category_level(log::Category::Sync, log::Level::Trace);
     auto loader_result = vk::Loader::load();
     if (!loader_result) return std::move(loader_result).error();
 
     auto instance_options = vk::Loader::InstanceOptions{};
-    instance_options.enable_validation = resolved.enable_validation;
+    instance_options.enable_validation = resolved.enable_validation || resolved.debug_safety;
     auto instance_result = loader_result.value().create_instance(instance_options);
     if (!instance_result) return std::move(instance_result).error();
 
@@ -1529,6 +1530,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     if (!device_initialization) return std::move(device_initialization).error();
     RuntimeOptions effective_options;
     effective_options.enable_validation = resolved.enable_validation;
+    effective_options.debug_safety = resolved.debug_safety;
     effective_options.device_policy = resolved.device_policy;
     effective_options.device_index = resolved.device_index;
     effective_options.device_uuid = resolved.device_uuid;

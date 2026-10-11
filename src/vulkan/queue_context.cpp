@@ -7,6 +7,8 @@
 #include <system_error>
 #include <utility>
 
+#include "kora/log.hpp"
+
 namespace kora::vk {
 namespace {
 
@@ -591,6 +593,10 @@ void QueueContext::submission_loop() {
         }
         if (result == VK_ERROR_DEVICE_LOST) fail_queued_device_lost();
         queue_submit_active_.clear(std::memory_order_release);
+        KORA_LOG(Sync, Trace,
+                 "Queue submission {} completed enqueue with timeline {} and {} command buffer(s): {}",
+                 queued.id, timeline_value, submission.command_buffers.size(),
+                 result == VK_SUCCESS ? "success" : "failure");
         const Status submit_status =
             result == VK_SUCCESS
                 ? ok_status()
