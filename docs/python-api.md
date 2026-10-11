@@ -41,8 +41,11 @@ consumer builds remain independent of Python.
 ### Runtime and errors
 
 `Runtime.create(options=RuntimeOptions())` initializes the native runtime. `RuntimeOptions` exposes
-the native device policy, index/UUID selectors, and cache directory. Initialization releases the
-GIL. A runtime owns the C++ runtime; buffers, kernels, dispatch builders, and events retain shared
+the native device policy, index/UUID selectors, and cache directory. `runtime.devices` returns the
+owned `DeviceId` values; use `DevicePolicy.ALL_ELIGIBLE` to initialize all eligible devices. Kernel
+loading and readback accept an optional selected `DeviceId` to route operations explicitly. See
+[Multiple Vulkan devices](multi-gpu.md) for host-staged cross-device transfers. Initialization
+releases the GIL. A runtime owns the C++ runtime; buffers, kernels, dispatch builders, and events retain shared
 Python-side ownership so the native runtime cannot be destroyed while an operation still refers to
 it.
 

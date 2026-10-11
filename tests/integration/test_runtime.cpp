@@ -10,6 +10,36 @@
 #include "kora/runtime.hpp"
 #include "support/vulkan_test.hpp"
 
+namespace {
+
+kora::KernelMetadata vector_add_metadata() {
+    kora::KernelMetadata metadata;
+    metadata.kernel_id = "integration.vector_add";
+    metadata.local_size = {64, 1, 1};
+    metadata.push_constant_size = sizeof(std::uint32_t);
+    metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    metadata.bindings = {
+        {.set = 0,
+         .binding = 0,
+         .name = "input_a",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 1,
+         .name = "input_b",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 2,
+         .name = "output_data",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Write},
+    };
+    return metadata;
+}
+
+}  // namespace
+
 TEST(Runtime, OwnsSelectedDeviceAndExposesMemoryStats) {
     auto runtime = kora::Runtime::create();
     if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
@@ -66,6 +96,94 @@ TEST(Runtime, HonorsExplicitDeviceIndexSelection) {
     const auto devices = runtime.value().devices();
     ASSERT_EQ(devices.size(), 1U);
     EXPECT_EQ(devices.front().index, 0U);
+}
+
+TEST(Runtime, StagesOutputsAcrossEverySelectedDevicePairThroughHostMemory) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "vector-add SPIR-V fixture was not built";
+#else
+    kora::RuntimeOptions options;
+    options.device_policy = kora::DevicePolicy::AllEligible;
+    options.enable_startup_calibration = false;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    const auto devices = runtime.value().devices();
+    if (devices.size() < 2) GTEST_SKIP() << "cross-device staging requires two eligible Vulkan devices";
+
+    constexpr std::uint32_t count = 257;
+    auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
+    auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
+    auto intermediate = runtime.value().create_buffer<std::uint32_t>(count);
+    auto output = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_a);
+    ASSERT_TRUE(input_b);
+    ASSERT_TRUE(intermediate);
+    ASSERT_TRUE(output);
+    std::vector<std::uint32_t> values_a(count);
+    std::vector<std::uint32_t> values_b(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        values_a[index] = index * 3U;
+        values_b[index] = index + 11U;
+    }
+    ASSERT_TRUE(input_a.value().write(values_a));
+    ASSERT_TRUE(input_b.value().write(values_b));
+
+    for (const auto& source : devices) {
+        auto source_kernel =
+            runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata(), source);
+        ASSERT_TRUE(source_kernel) << "source device " << source.index << ": "
+                                   << source_kernel.error().describe();
+        auto produced = runtime.value()
+                            .dispatch(source_kernel.value())
+                            .global(count)
+                            .read(input_a.value())
+                            .read(input_b.value())
+                            .write(intermediate.value())
+                            .push(count)
+                            .defer_readback()
+                            .submit();
+        ASSERT_TRUE(produced) << produced.error().describe();
+        ASSERT_TRUE(produced.value().wait()) << produced.value().status().error().describe();
+
+        for (const auto& destination : devices) {
+            if (destination == source) continue;
+            auto staged = runtime.value().readback(intermediate.value().handle(), source);
+            ASSERT_TRUE(staged) << staged.error().describe();
+            ASSERT_TRUE(staged.value().wait()) << staged.value().status().error().describe();
+
+            auto destination_kernel = runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main",
+                                                                  vector_add_metadata(), destination);
+            ASSERT_TRUE(destination_kernel) << "destination device " << destination.index << ": "
+                                            << destination_kernel.error().describe();
+            auto consumed = runtime.value()
+                                .dispatch(destination_kernel.value())
+                                .global(count)
+                                .read(intermediate.value())
+                                .read(intermediate.value())
+                                .write(output.value())
+                                .push(count)
+                                .submit();
+            ASSERT_TRUE(consumed) << consumed.error().describe();
+            ASSERT_TRUE(consumed.value().wait()) << consumed.value().status().error().describe();
+            auto actual = output.value().read();
+            ASSERT_TRUE(actual) << actual.error().describe();
+            for (std::uint32_t index = 0; index < count; ++index) {
+                const auto source_value = values_a[index] + values_b[index];
+                EXPECT_EQ(actual.value()[index], source_value * 2U)
+                    << "source device " << source.index << ", destination device " << destination.index
+                    << ", index " << index;
+            }
+        }
+    }
+    const auto transfers = runtime.value().transfer_stats();
+    ASSERT_TRUE(transfers) << transfers.error().describe();
+    EXPECT_GT(transfers.value().uploads, 0U);
+    EXPECT_GE(transfers.value().downloads, devices.size() * devices.size());
+#endif
 }
 
 TEST(Runtime, CorruptCalibrationCacheNeverBlocksStartup) {

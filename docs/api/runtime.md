@@ -37,18 +37,23 @@ Vulkan storage lazily, uploads a read/read-write shadow when its host content ve
 resident on the selected device, and reuses current device copies across dispatches. By default,
 write/read-write outputs are downloaded before the returned `Event` completes, preserving the original
 host-readable behavior. `DispatchBuilder::defer_readback()` opts out for a chain intermediate;
-`Runtime::readback(buffer)` explicitly schedules a download when host access is later needed. Wait for
-the producing dispatch event before requesting an explicit readback. `transfer_stats()` reports upload
-and download operation counts issued by the Runtime.
+`Runtime::readback(buffer)` explicitly schedules a download from the first selected device when host
+access is later needed; `Runtime::readback(buffer, device)` selects the producing device explicitly.
+Wait for the producing dispatch event before requesting an explicit readback. A selected-device
+readback is also the host-staging step when a different device will consume the output; that device
+uploads the current host version to its own replica on dispatch. `transfer_stats()` reports upload
+and download operation counts aggregated across the Runtime's selected device contexts.
 `profiling_stats(device)` nonblockingly polls dispatch timestamp results already past the queue's
 completion timeline. It reports cumulative collected/dropped counts and the most recently collected
 duration; calibrated host time and deviation are available only when supported. Profiling is optional:
 unsupported queues report `UnsupportedFeature` without preventing runtime creation or dispatch.
 
-`load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module.
-The metadata is checked against reflected descriptor bindings, push-constant size, local size, and
-specialization constants when the pipeline is created. `dispatch(kernel)` returns a fluent
-`DispatchBuilder`; each `.read`, `.write`, or `.read_write` call corresponds to the next metadata
+`load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module
+for the first selected device. Pass a `DeviceId` as a fourth argument to validate and associate the
+kernel with another selected device. `dispatch(kernel)` routes using that kernel's owning runtime and
+device. The metadata is checked against reflected descriptor bindings, push-constant size, local size,
+and specialization constants when the pipeline is created. It returns a fluent `DispatchBuilder`; each
+`.read`, `.write`, or `.read_write` call corresponds to the next metadata
 binding in vector order. `global(x[, y, z])` specifies invocation extents (not work-group counts), and
 the runtime rounds each dimension up by the reflected local size. A bounds check in the shader remains
 the caller's responsibility for non-multiple extents. `.push(value)` copies a trivially-copyable
@@ -95,8 +100,9 @@ for (const auto& device : runtime.value().devices()) {
 - `DevicePolicy::AllEligible` initializes queue and transfer services for every selected device;
   callers should account for the associated driver resources and staging allocations.
 - `BufferHandle::read()` reads the host shadow only. After a deferred dispatch output, call and wait for
-  `Runtime::readback()` before reading that buffer on the host. Device-resident copies are currently
-  cached per Runtime-selected device and are discarded with that Runtime.
+  `Runtime::readback()` before reading that buffer on the host. Device-resident copies are cached
+  separately per selected device and are discarded with that Runtime. Cross-device movement is
+  explicit host staging; no peer/external-memory fast path is enabled.
 - Startup calibration currently stores only a bounded host-side overhead probe. Tiny GPU dispatch,
   H2D/D2H, device-copy, streaming-kernel, and ALU measurements are recorded as unavailable and do not
   influence device selection. See [Startup calibration](../calibration.md).

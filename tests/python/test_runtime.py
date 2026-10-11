@@ -35,6 +35,8 @@ def test_buffer_protocol_mapping_keeps_mapping_alive():
 def test_runtime_repeated_create_destroy():
     for _ in range(5):
         runtime = make_runtime()
+        assert runtime.devices
+        assert all(isinstance(device, kora.DeviceId) for device in runtime.devices)
         buffer = runtime.create_buffer(64)
         buffer.write(bytes(range(64)))
         assert buffer.read() == bytes(range(64))
@@ -71,7 +73,8 @@ def test_python_vector_add_and_awaitable_event(tmp_path):
         kora.KernelBindingMetadata(0, 2, "output_data", kora.KernelBindingKind.STORAGE_BUFFER,
                                    kora.KernelAccess.WRITE),
     ]
-    kernel = runtime.load_kernel(shader_binary, "main", metadata)
+    source_device = runtime.devices[0]
+    kernel = runtime.load_kernel(shader_binary, "main", metadata, source_device)
     input_a = runtime.create_buffer(count * 4)
     input_b = runtime.create_buffer(count * 4)
     output = runtime.create_buffer(count * 4)
@@ -93,6 +96,7 @@ def test_python_vector_add_and_awaitable_event(tmp_path):
         await event
 
     asyncio.run(wait_for_event())
+    asyncio.run(runtime.readback(output, source_device))
     result = struct.unpack(f"<{count}I", output.read())
     assert list(result) == [left + right for left, right in zip(values_a, values_b)]
 

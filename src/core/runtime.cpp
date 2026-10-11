@@ -85,6 +85,8 @@ struct DispatchContext {
     std::unordered_map<BufferId, detail::TransferBuffer, BufferIdHash> buffers;
     std::unordered_map<BufferId, std::uint64_t, BufferIdHash> resident_host_versions;
     std::unordered_set<BufferId, BufferIdHash> device_newer_buffers;
+    // Timeline values belong to this device's queue and are incomparable across devices.
+    std::unordered_map<BufferId, std::uint64_t, BufferIdHash> device_last_use;
     std::atomic<std::uint64_t> upload_count{0};
     std::atomic<std::uint64_t> download_count{0};
     std::unique_ptr<detail::TimestampRing> timestamps;
@@ -695,7 +697,9 @@ Result<Event> DispatchBuilder::submit() {
                     ctx->pending_autotune.insert_or_assign(
                         work->submission_id,
                         detail::DispatchContext::PendingAutotune{tuner, work->autotune_trial, key});
-                for (const auto& buffer : bound_handles) (void)buffer.mark_used(timeline);
+                for (const auto& buffer : bound_handles) {
+                    ctx->device_last_use[buffer.id()] = timeline;
+                }
             } else if (work->command_buffer != VK_NULL_HANDLE && ctx->command_pool) {
                 (void)ctx->command_pool->discard(work->command_buffer);
             }
@@ -1000,6 +1004,17 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
                                     KernelMetadata metadata) {
     if (!impl_ || impl_->devices.empty())
         return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    return load_kernel(spirv_path, std::move(entry_point), std::move(metadata), impl_->devices.front()->id);
+}
+
+Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std::string entry_point,
+                                    KernelMetadata metadata, const DeviceId& device_id) {
+    if (!impl_ || impl_->devices.empty())
+        return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto selected_device = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                              [&](const auto& device) { return device->id == device_id; });
+    if (selected_device == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     auto metadata_status = validate_kernel_metadata(metadata);
     if (!metadata_status) return std::move(metadata_status).error();
     std::ifstream input(spirv_path, std::ios::binary | std::ios::ate);
@@ -1015,7 +1030,7 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     if (!input) return Error(ErrorCode::IoError, "failed to read complete SPIR-V module");
     auto structure = detail::spirv::validate_module_structure(words);
     if (!structure) return std::move(structure).error();
-    auto& device = *impl_->devices.front();
+    auto& device = **selected_device;
     auto reflection = detail::spirv::validate_and_reflect(
         words, metadata, detail::spirv::capabilities_from(device.info), entry_point);
     if (!reflection) return std::move(reflection).error();
@@ -1024,7 +1039,7 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     state->metadata = std::move(metadata);
     state->words = std::move(words);
     state->runtime_id = impl_->runtime_id;
-    state->device_index = impl_->devices.front()->id.index;
+    state->device_index = device.id.index;
     if (reflection.value().local_size_id_based) {
         state->local_size_spec_ids = reflection.value().local_size_spec_ids;
         auto candidates = detail::kernel::generate_workgroup_candidates(
@@ -1065,7 +1080,11 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
 }
 
 DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
-    return DispatchBuilder(impl_ && !impl_->devices.empty() ? impl_->devices.front()->dispatch : nullptr,
+    if (!impl_ || !kernel.state_ || kernel.state_->runtime_id != impl_->runtime_id) return {};
+    const auto selected_device =
+        std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                     [&](const auto& device) { return device->id.index == kernel.state_->device_index; });
+    return DispatchBuilder(selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr,
                            kernel.state_);
 }
 
@@ -1222,9 +1241,18 @@ Result<MemoryStats> Runtime::memory_stats(const DeviceId& id) const {
 Result<RuntimeTransferStats> Runtime::transfer_stats() const {
     if (!impl_ || impl_->devices.empty())
         return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
-    const auto& context = impl_->devices.front()->dispatch;
-    return RuntimeTransferStats{context->upload_count.load(std::memory_order_relaxed),
-                                context->download_count.load(std::memory_order_relaxed)};
+    RuntimeTransferStats stats;
+    for (const auto& device : impl_->devices) {
+        const auto& context = device->dispatch;
+        const auto uploads = context->upload_count.load(std::memory_order_relaxed);
+        const auto downloads = context->download_count.load(std::memory_order_relaxed);
+        if (uploads > std::numeric_limits<std::uint64_t>::max() - stats.uploads ||
+            downloads > std::numeric_limits<std::uint64_t>::max() - stats.downloads)
+            return Error(ErrorCode::Overflow, "runtime transfer counter aggregation overflowed");
+        stats.uploads += uploads;
+        stats.downloads += downloads;
+    }
+    return stats;
 }
 
 Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const {
@@ -1254,7 +1282,17 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
 Result<Event> Runtime::readback(const BufferHandle& buffer) const {
     if (!impl_ || impl_->devices.empty() || !buffer)
         return Error(ErrorCode::InvalidArgument, "runtime or buffer handle is invalid");
-    const auto context = impl_->devices.front()->dispatch;
+    return readback(buffer, impl_->devices.front()->id);
+}
+
+Result<Event> Runtime::readback(const BufferHandle& buffer, const DeviceId& device_id) const {
+    if (!impl_ || impl_->devices.empty() || !buffer)
+        return Error(ErrorCode::InvalidArgument, "runtime or buffer handle is invalid");
+    const auto selected_device = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                              [&](const auto& device) { return device->id == device_id; });
+    if (selected_device == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    const auto context = (*selected_device)->dispatch;
     const auto host_version = buffer.host_version();
     if (!host_version) return std::move(host_version).error();
     {
@@ -1275,7 +1313,11 @@ Result<Event> Runtime::readback(const BufferHandle& buffer) const {
     detail::QueueWait dependency;
     if (context->transfer_queue != context->queue) {
         dependency.semaphore = context->queue->completion_semaphore();
-        dependency.value = info.value().last_use_timeline_value;
+        {
+            std::lock_guard lock(context->submit_mutex);
+            const auto last_use = context->device_last_use.find(buffer.id());
+            dependency.value = last_use == context->device_last_use.end() ? 0 : last_use->second;
+        }
         dependency.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     }
     auto downloaded = context->transfers->download(device_buffer.value(), 0, *contents, dependency);
