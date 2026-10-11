@@ -48,7 +48,7 @@ bool get_string(const json::Value* value, std::string& output) {
 
 bool flush_file(const std::filesystem::path& path) {
 #if defined(_WIN32)
-    const auto handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return false;
     const bool result = FlushFileBuffers(handle) != 0;
