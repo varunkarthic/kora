@@ -15,6 +15,7 @@ add_library(kora
   core/scheduler_cost.cpp
   core/scheduler_policy.cpp
   core/runtime.cpp
+  profiling/timestamp.cpp
   core/task_graph.cpp
   core/temporary_buffer_aliasing.cpp
   core/version.cpp

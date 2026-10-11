@@ -29,6 +29,7 @@
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
 #include "memory/transfer_engine.hpp"
+#include "profiling/timestamp.hpp"
 #include "vulkan/api.hpp"
 #include "vulkan/command_pool_set.hpp"
 #include "vulkan/queue_context.hpp"
@@ -82,6 +83,7 @@ struct DispatchContext {
     std::unordered_set<BufferId, BufferIdHash> device_newer_buffers;
     std::atomic<std::uint64_t> upload_count{0};
     std::atomic<std::uint64_t> download_count{0};
+    std::unique_ptr<detail::TimestampRing> timestamps;
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
     std::unordered_map<BufferId, detail::MemoryPool*, BufferIdHash> allocation_pools;
     void release_buffers() noexcept {
@@ -148,7 +150,8 @@ struct Runtime::Impl {
         DeviceEntry(DeviceId device_id, DeviceInfo device_info, detail::MemoryManager manager,
                     vk::Device logical_device,
                     std::unique_ptr<detail::kernel::PipelineManager> pipeline_manager,
-                    std::uint64_t runtime_identity, bool force_fallback)
+                    std::uint64_t runtime_identity, bool force_fallback,
+                    std::vector<VkTimeDomainKHR> calibrated_time_domains)
             : id(std::move(device_id)),
               info(std::move(device_info)),
               memory_manager(std::move(manager)),
@@ -156,7 +159,8 @@ struct Runtime::Impl {
               queue_family_policy{device.compute_queue_family(), device.transfer_queue_family(), true},
               pipelines(std::move(pipeline_manager)),
               runtime_id(runtime_identity),
-              force_legacy_sync(force_fallback) {}
+              force_legacy_sync(force_fallback),
+              calibrated_time_domains(std::move(calibrated_time_domains)) {}
 
         Status initialize() {
             vk::QueueContext::CoalescingOptions coalescing;
@@ -249,6 +253,18 @@ struct Runtime::Impl {
             dispatch->queue = queue.get();
             dispatch->transfer_queue = transfer_queue;
             dispatch->queue_family_policy = queue_family_policy;
+            const auto compute_family = queue_family_policy.compute_family;
+            if (compute_family < info.queue_families().size()) {
+                const auto valid_bits = info.queue_families()[compute_family].timestamp_valid_bits;
+                auto timestamps = std::make_unique<detail::TimestampRing>(
+                    device.api(), device.handle(), valid_bits, info.timestamp_period_nanoseconds(),
+                    calibrated_time_domains);
+                auto timestamp_status = timestamps->initialize();
+                if (timestamp_status)
+                    dispatch->timestamps = std::move(timestamps);
+                else if (timestamp_status.error().code != ErrorCode::UnsupportedFeature)
+                    return timestamp_status;
+            }
             return {};
         }
 
@@ -332,6 +348,7 @@ struct Runtime::Impl {
         vk::QueueContext* transfer_queue = nullptr;
         std::uint64_t runtime_id = 0;
         bool force_legacy_sync = false;
+        std::vector<VkTimeDomainKHR> calibrated_time_domains;
         std::uint32_t driver_version = 0;
         detail::calibration::Record calibration_record;
     };
@@ -490,7 +507,12 @@ Result<Event> DispatchBuilder::submit() {
     auto promise = std::make_shared<detail::EventPromise>();
     auto record_status = std::make_shared<Status>();
     auto event = promise->event();
-    auto work = std::make_shared<std::pair<VkCommandBuffer, std::uint64_t>>(VK_NULL_HANDLE, 0);
+    struct DispatchWork {
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        std::uint64_t submission_id = 0;
+        bool timestamp_recorded = false;
+    };
+    auto work = std::make_shared<DispatchWork>();
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
     submission.coalescible = true;
@@ -514,7 +536,7 @@ Result<Event> DispatchBuilder::submit() {
     }
     submission.record_commands = [ctx, pipeline_ref, bound_buffers, push_constants, groups_copy, work,
                                   record_status, allocated_descriptors](
-                                     std::uint64_t, std::vector<VkCommandBuffer>& commands) {
+                                     std::uint64_t submission_id, std::vector<VkCommandBuffer>& commands) {
         std::lock_guard lock(ctx->submit_mutex);
         if (!ctx->command_pool) {
             vk::CommandPoolSet::Options options;
@@ -527,8 +549,11 @@ Result<Event> DispatchBuilder::submit() {
         if (!completed) return Status(std::move(completed).error());
         auto command = ctx->command_pool->acquire(completed.value());
         if (!command) return Status(std::move(command).error());
-        work->first = command.value();
+        work->command_buffer = command.value();
+        work->submission_id = submission_id;
         auto api = ctx->device->api();
+        if (ctx->timestamps)
+            work->timestamp_recorded = ctx->timestamps->record_start(command.value(), submission_id);
         api.cmd_bind_pipeline(command.value(), VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_ref->handle);
         std::vector<VkDescriptorSet> descriptor_sets;
         for (std::uint32_t set = 0; set < pipeline_ref->descriptor_set_layouts.size(); ++set) {
@@ -536,7 +561,7 @@ Result<Event> DispatchBuilder::submit() {
             if (!descriptor) {
                 *record_status = Status(std::move(descriptor).error());
                 (void)ctx->command_pool->discard(command.value());
-                work->first = VK_NULL_HANDLE;
+                work->command_buffer = VK_NULL_HANDLE;
                 return *record_status;
             }
             descriptor_sets.push_back(descriptor.value());
@@ -563,6 +588,8 @@ Result<Event> DispatchBuilder::submit() {
             api.cmd_push_constants(command.value(), pipeline_ref->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    static_cast<std::uint32_t>(push_constants.size()), push_constants.data());
         api.cmd_dispatch(command.value(), groups_copy[0], groups_copy[1], groups_copy[2]);
+        if (ctx->timestamps && work->timestamp_recorded)
+            ctx->timestamps->record_end(command.value(), submission_id);
         auto ended = ctx->command_pool->end_recording(command.value());
         if (!ended) return ended;
         commands.push_back(command.value());
@@ -572,12 +599,16 @@ Result<Event> DispatchBuilder::submit() {
                                   std::uint64_t timeline, Status status) {
         std::lock_guard lock(ctx->submit_mutex);
         if (status) {
-            work->second = timeline;
-            if (work->first != VK_NULL_HANDLE) (void)ctx->command_pool->submitted(work->first, timeline);
+            if (work->command_buffer != VK_NULL_HANDLE)
+                (void)ctx->command_pool->submitted(work->command_buffer, timeline);
+            if (ctx->timestamps && work->timestamp_recorded)
+                ctx->timestamps->submitted(work->submission_id, timeline);
             for (const auto& buffer : bound_handles) (void)buffer.mark_used(timeline);
-        } else if (work->first != VK_NULL_HANDLE && ctx->command_pool) {
-            (void)ctx->command_pool->discard(work->first);
+        } else if (work->command_buffer != VK_NULL_HANDLE && ctx->command_pool) {
+            (void)ctx->command_pool->discard(work->command_buffer);
         }
+        if (!status && ctx->timestamps && work->timestamp_recorded)
+            ctx->timestamps->cancel(work->submission_id);
         if (!status) {
             for (const auto id : written_buffers) {
                 ctx->resident_host_versions.erase(id);
@@ -986,7 +1017,8 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         if (!pipeline_manager) return std::move(pipeline_manager).error();
         auto entry = std::make_unique<Impl::DeviceEntry>(
             id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
-            std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync);
+            std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
+            physical.calibrated_time_domains);
         entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
@@ -1048,6 +1080,28 @@ Result<RuntimeTransferStats> Runtime::transfer_stats() const {
     const auto& context = impl_->devices.front()->dispatch;
     return RuntimeTransferStats{context->upload_count.load(std::memory_order_relaxed),
                                 context->download_count.load(std::memory_order_relaxed)};
+}
+
+Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                    [&](const auto& device) { return device->id == id; });
+    if (found == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    const auto& dispatch = (*found)->dispatch;
+    if (!dispatch || !dispatch->timestamps)
+        return Error(ErrorCode::UnsupportedFeature, "GPU timestamp profiling is unavailable for this device");
+    const auto completed = dispatch->queue->completed_value();
+    if (!completed) return std::move(completed).error();
+    auto collected = dispatch->timestamps->collect(completed.value());
+    if (!collected) return std::move(collected).error();
+    const auto latest = dispatch->timestamps->latest_sample();
+    return RuntimeProfilingStats{dispatch->timestamps->samples_collected(),
+                                 dispatch->timestamps->dropped_samples(),
+                                 latest.submission_id,
+                                 latest.duration_nanoseconds,
+                                 latest.host_timestamp_nanoseconds,
+                                 latest.calibration_deviation_nanoseconds};
 }
 
 Result<Event> Runtime::readback(const BufferHandle& buffer) const {

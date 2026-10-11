@@ -20,6 +20,7 @@ kora_add_test(kora_unit_tests unit
     test_memory_manager.cpp
     test_eviction.cpp
     test_recovery.cpp
+    test_timestamp.cpp
     test_buffer_manager.cpp
     test_cpu_executor.cpp
     test_cpu_fallback.cpp

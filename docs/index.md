@@ -16,6 +16,7 @@ getting-started
 building
 testing
 calibration
+profiling
 configuration
 ```
 

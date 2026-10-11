@@ -65,6 +65,12 @@ struct DeviceState {
     PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
+    PFN_vkCmdWriteTimestamp cmd_write_timestamp = nullptr;
+    PFN_vkCmdResetQueryPool cmd_reset_query_pool = nullptr;
+    PFN_vkCreateQueryPool create_query_pool = nullptr;
+    PFN_vkDestroyQueryPool destroy_query_pool = nullptr;
+    PFN_vkGetQueryPoolResults get_query_pool_results = nullptr;
+    PFN_vkGetCalibratedTimestampsKHR get_calibrated_timestamps = nullptr;
     PFN_vkCreateBuffer create_buffer = nullptr;
     PFN_vkDestroyBuffer destroy_buffer = nullptr;
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
@@ -151,6 +157,12 @@ VkResult VKAPI_PTR reset_command_buffer(void* context, VkCommandBuffer command_b
                                         VkCommandBufferResetFlags flags) noexcept {
     const auto function = static_cast<DeviceState*>(context)->reset_command_buffer;
     return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(command_buffer, flags);
+}
+VkResult query_pool_results(void* context, VkDevice device, VkQueryPool pool, uint32_t first, uint32_t count,
+                            size_t size, void* data, VkDeviceSize stride, VkQueryResultFlags flags) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->get_query_pool_results;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED
+                               : function(device, pool, first, count, size, data, stride, flags);
 }
 
 VkResult VKAPI_PTR allocate_memory(void* context, VkDevice device, const VkMemoryAllocateInfo* info,
@@ -1043,6 +1055,8 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     if (!core12 && descriptor_indexing) enable_extension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
     if (!core13 && sync2) enable_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
     enable_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    enable_extension(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+    enable_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
 
     void* feature_chain = nullptr;
     VkPhysicalDeviceVulkan12Features features12{};
@@ -1200,6 +1214,21 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkCmdPushConstants");
     api_state->cmd_dispatch =
         load_device_function<PFN_vkCmdDispatch>(get_device_proc, device_state->device, "vkCmdDispatch");
+    api_state->cmd_write_timestamp = load_device_function<PFN_vkCmdWriteTimestamp>(
+        get_device_proc, device_state->device, "vkCmdWriteTimestamp");
+    api_state->cmd_reset_query_pool = load_device_function<PFN_vkCmdResetQueryPool>(
+        get_device_proc, device_state->device, "vkCmdResetQueryPool");
+    api_state->create_query_pool = load_device_function<PFN_vkCreateQueryPool>(
+        get_device_proc, device_state->device, "vkCreateQueryPool");
+    api_state->destroy_query_pool = load_device_function<PFN_vkDestroyQueryPool>(
+        get_device_proc, device_state->device, "vkDestroyQueryPool");
+    api_state->get_query_pool_results = load_device_function<PFN_vkGetQueryPoolResults>(
+        get_device_proc, device_state->device, "vkGetQueryPoolResults");
+    api_state->get_calibrated_timestamps = load_device_function<PFN_vkGetCalibratedTimestampsKHR>(
+        get_device_proc, device_state->device, "vkGetCalibratedTimestampsKHR");
+    if (api_state->get_calibrated_timestamps == nullptr)
+        api_state->get_calibrated_timestamps = load_device_function<PFN_vkGetCalibratedTimestampsKHR>(
+            get_device_proc, device_state->device, "vkGetCalibratedTimestampsEXT");
     api_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device_state->device, "vkCreateBuffer");
     api_state->destroy_buffer =
@@ -1303,6 +1332,13 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.cmd_bind_descriptor_sets = api_state->cmd_bind_descriptor_sets;
     api.cmd_push_constants = api_state->cmd_push_constants;
     api.cmd_dispatch = api_state->cmd_dispatch;
+    api.cmd_write_timestamp = api_state->cmd_write_timestamp;
+    api.cmd_reset_query_pool = api_state->cmd_reset_query_pool;
+    api.create_query_pool = api_state->create_query_pool;
+    api.destroy_query_pool = api_state->destroy_query_pool;
+    if (api_state->get_query_pool_results != nullptr)
+        api.get_query_pool_results = {api_state.get(), query_pool_results};
+    api.get_calibrated_timestamps = api_state->get_calibrated_timestamps;
     api.create_buffer = {api_state.get(), create_buffer};
     api.destroy_buffer = {api_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
@@ -1429,6 +1465,21 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         load_device_function<PFN_vkCmdPushConstants>(get_device_proc, device, "vkCmdPushConstants");
     device_state->cmd_dispatch =
         load_device_function<PFN_vkCmdDispatch>(get_device_proc, device, "vkCmdDispatch");
+    device_state->cmd_write_timestamp =
+        load_device_function<PFN_vkCmdWriteTimestamp>(get_device_proc, device, "vkCmdWriteTimestamp");
+    device_state->cmd_reset_query_pool =
+        load_device_function<PFN_vkCmdResetQueryPool>(get_device_proc, device, "vkCmdResetQueryPool");
+    device_state->create_query_pool =
+        load_device_function<PFN_vkCreateQueryPool>(get_device_proc, device, "vkCreateQueryPool");
+    device_state->destroy_query_pool =
+        load_device_function<PFN_vkDestroyQueryPool>(get_device_proc, device, "vkDestroyQueryPool");
+    device_state->get_query_pool_results =
+        load_device_function<PFN_vkGetQueryPoolResults>(get_device_proc, device, "vkGetQueryPoolResults");
+    device_state->get_calibrated_timestamps = load_device_function<PFN_vkGetCalibratedTimestampsKHR>(
+        get_device_proc, device, "vkGetCalibratedTimestampsKHR");
+    if (device_state->get_calibrated_timestamps == nullptr)
+        device_state->get_calibrated_timestamps = load_device_function<PFN_vkGetCalibratedTimestampsKHR>(
+            get_device_proc, device, "vkGetCalibratedTimestampsEXT");
     device_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device, "vkCreateBuffer");
     device_state->destroy_buffer =
@@ -1533,6 +1584,13 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.cmd_bind_descriptor_sets = device_state->cmd_bind_descriptor_sets;
     api.cmd_push_constants = device_state->cmd_push_constants;
     api.cmd_dispatch = device_state->cmd_dispatch;
+    api.cmd_write_timestamp = device_state->cmd_write_timestamp;
+    api.cmd_reset_query_pool = device_state->cmd_reset_query_pool;
+    api.create_query_pool = device_state->create_query_pool;
+    api.destroy_query_pool = device_state->destroy_query_pool;
+    if (device_state->get_query_pool_results != nullptr)
+        api.get_query_pool_results = {device_state.get(), query_pool_results};
+    api.get_calibrated_timestamps = device_state->get_calibrated_timestamps;
     api.create_buffer = {device_state.get(), create_buffer};
     api.destroy_buffer = {device_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
@@ -1580,7 +1638,7 @@ struct FaultInjector::State {
     explicit State(Api api) : inner(std::move(api)) {}
 
     Api inner;
-    std::array<Rule, 2> rules;
+    std::array<Rule, 3> rules;
 
     static VkResult result(State& state, Function function) noexcept {
         auto& rule = state.rules[static_cast<size_t>(function)];
@@ -1616,6 +1674,15 @@ struct FaultInjector::State {
         if (failure != VK_SUCCESS) return failure;
         return state.inner.queue_submit2(queue, count, submits, fence);
     }
+
+    static VkResult VKAPI_PTR get_query_pool_results(void* context, VkDevice device, VkQueryPool pool,
+                                                     uint32_t first, uint32_t count, size_t size, void* data,
+                                                     VkDeviceSize stride, VkQueryResultFlags flags) noexcept {
+        auto& state = *static_cast<State*>(context);
+        const VkResult failure = result(state, Function::GetQueryPoolResults);
+        if (failure != VK_SUCCESS) return failure;
+        return state.inner.get_query_pool_results(device, pool, first, count, size, data, stride, flags);
+    }
 };
 
 FaultInjector::FaultInjector(Api inner) : state_(std::make_shared<State>(std::move(inner))) {}
@@ -1647,6 +1714,41 @@ Api FaultInjector::api() const {
     result.invalidate_mapped_memory_ranges = state_->inner.invalidate_mapped_memory_ranges;
     result.queue_submit = {state_.get(), State::queue_submit};
     if (state_->inner.queue_submit2) result.queue_submit2 = {state_.get(), State::queue_submit2};
+    result.cmd_write_timestamp = state_->inner.cmd_write_timestamp;
+    result.cmd_reset_query_pool = state_->inner.cmd_reset_query_pool;
+    result.create_query_pool = state_->inner.create_query_pool;
+    result.destroy_query_pool = state_->inner.destroy_query_pool;
+    if (state_->inner.get_query_pool_results)
+        result.get_query_pool_results = {state_.get(), State::get_query_pool_results};
+    result.get_calibrated_timestamps = state_->inner.get_calibrated_timestamps;
+    result.create_shader_module = state_->inner.create_shader_module;
+    result.destroy_shader_module = state_->inner.destroy_shader_module;
+    result.create_descriptor_set_layout = state_->inner.create_descriptor_set_layout;
+    result.destroy_descriptor_set_layout = state_->inner.destroy_descriptor_set_layout;
+    result.create_pipeline_layout = state_->inner.create_pipeline_layout;
+    result.destroy_pipeline_layout = state_->inner.destroy_pipeline_layout;
+    result.create_descriptor_pool = state_->inner.create_descriptor_pool;
+    result.destroy_descriptor_pool = state_->inner.destroy_descriptor_pool;
+    result.allocate_descriptor_sets = state_->inner.allocate_descriptor_sets;
+    result.free_descriptor_sets = state_->inner.free_descriptor_sets;
+    result.update_descriptor_sets = state_->inner.update_descriptor_sets;
+    result.create_compute_pipelines = state_->inner.create_compute_pipelines;
+    result.destroy_pipeline = state_->inner.destroy_pipeline;
+    result.create_pipeline_cache = state_->inner.create_pipeline_cache;
+    result.destroy_pipeline_cache = state_->inner.destroy_pipeline_cache;
+    result.get_pipeline_cache_data = state_->inner.get_pipeline_cache_data;
+    result.cmd_bind_pipeline = state_->inner.cmd_bind_pipeline;
+    result.cmd_bind_descriptor_sets = state_->inner.cmd_bind_descriptor_sets;
+    result.cmd_push_constants = state_->inner.cmd_push_constants;
+    result.cmd_dispatch = state_->inner.cmd_dispatch;
+    result.create_buffer = state_->inner.create_buffer;
+    result.destroy_buffer = state_->inner.destroy_buffer;
+    result.get_buffer_memory_requirements = state_->inner.get_buffer_memory_requirements;
+    result.bind_buffer_memory = state_->inner.bind_buffer_memory;
+    result.cmd_pipeline_barrier = state_->inner.cmd_pipeline_barrier;
+    result.cmd_copy_buffer = state_->inner.cmd_copy_buffer;
+    result.cmd_fill_buffer = state_->inner.cmd_fill_buffer;
+    result.reset_command_buffer = state_->inner.reset_command_buffer;
     result.cmd_pipeline_barrier2 = state_->inner.cmd_pipeline_barrier2;
     result.synchronization2_enabled_ = state_->inner.synchronization2_enabled_;
     result.create_command_pool = state_->inner.create_command_pool;
