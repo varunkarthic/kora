@@ -288,7 +288,7 @@ TEST(Runtime, ReusesDeviceResidentIntermediateAcrossDispatchChain) {
     EXPECT_EQ(before_readback.value().uploads, 2U);
     EXPECT_EQ(before_readback.value().downloads, 0U);
 
-    auto readback = runtime.value().readback(output.value().handle());
+    auto readback = runtime.value().readback(output.value());
     ASSERT_TRUE(readback) << readback.error().describe();
     ASSERT_TRUE(readback.value().wait());
     auto after_readback = runtime.value().transfer_stats();
@@ -301,7 +301,7 @@ TEST(Runtime, ReusesDeviceResidentIntermediateAcrossDispatchChain) {
 
     std::vector<std::uint32_t> host_override(count, 9U);
     ASSERT_TRUE(output.value().write(host_override));
-    auto already_host_current = runtime.value().readback(output.value().handle());
+    auto already_host_current = runtime.value().readback(output.value());
     ASSERT_TRUE(already_host_current);
     ASSERT_TRUE(already_host_current.value().wait());
     EXPECT_EQ(runtime.value().transfer_stats().value().downloads, 1U);
@@ -319,7 +319,7 @@ TEST(Runtime, ReusesDeviceResidentIntermediateAcrossDispatchChain) {
     ASSERT_TRUE(third) << third.error().describe();
     ASSERT_TRUE(third.value().wait());
     EXPECT_EQ(runtime.value().transfer_stats().value().uploads, 3U);
-    auto final_readback = runtime.value().readback(host_updated_output.value().handle());
+    auto final_readback = runtime.value().readback(host_updated_output.value());
     ASSERT_TRUE(final_readback);
     ASSERT_TRUE(final_readback.value().wait());
     EXPECT_EQ(host_updated_output.value().read().value(), host_override);

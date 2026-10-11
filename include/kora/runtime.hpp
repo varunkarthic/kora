@@ -122,6 +122,10 @@ public:
     DispatchBuilder dispatch(const Kernel& kernel) const;
     /// Schedule a host readback for a device-resident buffer and complete when host bytes are fresh.
     Result<Event> readback(const BufferHandle& buffer) const;
+    template <class T>
+    Result<Event> readback(const Buffer<T>& buffer) const {
+        return readback(buffer.handle());
+    }
 
 private:
     struct Impl;
