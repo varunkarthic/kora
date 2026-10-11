@@ -33,7 +33,13 @@ bool parse_finite_double(std::string_view token, double& value) {
     std::istringstream stream{std::string(token)};
     stream.imbue(std::locale::classic());
     stream >> std::noskipws >> value;
-    return !stream.fail() && stream.peek() == std::char_traits<char>::eof() && std::isfinite(value);
+    if (stream.fail() || stream.peek() != std::char_traits<char>::eof() || !std::isfinite(value))
+        return false;
+    const auto exponent = token.find_first_of("eE");
+    const auto mantissa = token.substr(0, exponent);
+    const bool nonzero_mantissa =
+        std::any_of(mantissa.begin(), mantissa.end(), [](char c) { return c >= '1' && c <= '9'; });
+    return value != 0 || !nonzero_mantissa;
 }
 
 Status fields(const detail::json::Value& value, std::initializer_list<std::string_view> allowed,

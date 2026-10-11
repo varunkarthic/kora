@@ -63,7 +63,9 @@ TEST(KernelMetadata, RejectsEveryTruncatedPrefixOfAValidManifest) {
     for (std::size_t size = 0; size < document.size(); ++size) {
         auto parsed = parse_kernel_metadata(document.substr(0, size));
         EXPECT_FALSE(parsed) << "accepted truncated prefix of " << size << " bytes";
-        if (!parsed) EXPECT_EQ(parsed.error().code, ErrorCode::InvalidKernel);
+        if (!parsed) {
+            EXPECT_EQ(parsed.error().code, ErrorCode::InvalidKernel);
+        }
     }
 }
 
