@@ -16,7 +16,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add `kora-bench` CPU and optional Vulkan JSON microbenchmarks for scheduler cost, task-graph
   planning/replay, allocator throughput/fragmentation, vector addition, SAXPY, reduction, scan, tiled
-  matmul, stencil, and tiny dispatch latency, with correctness checks, raw samples, and median/p95.
+  matmul, stencil, repeated tiny dispatches, size-swept direct/staged transfers, and CPU/GPU crossover
+  measurements, with correctness checks, raw samples, median/p95, and effective transfer throughput.
+- Add raw Vulkan buffer-copy and vector-add dispatch baselines beside equivalent KORA workloads, plus
+  a Python callback-replay benchmark compared with a reusable-plan C++ callback.
 - Add debug safety diagnostics with Release opt-in, Debug host-shadow canaries, Vulkan validation
   requests, and detailed synchronization logs.
 
