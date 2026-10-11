@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "kora/detail/checked.hpp"
+#include "memory/recovery.hpp"
 
 namespace kora::detail {
 namespace {
@@ -63,10 +64,62 @@ MemoryPool::~MemoryPool() {
 }
 
 Result<VkDeviceMemory> MemoryPool::allocate_memory(std::uint64_t size) {
-    if (config_.reserve_budget) {
-        auto reserved = config_.reserve_budget(size);
-        if (!reserved) return std::move(reserved).error();
+    Error last_error(ErrorCode::AllocationFailed, "Vulkan memory allocation was not attempted");
+    VkDeviceMemory allocated = VK_NULL_HANDLE;
+    const auto make_attempt = [this, &allocated, &last_error](std::uint64_t allocation_size) {
+        return [this, &allocated, &last_error, allocation_size]() -> Result<bool> {
+            auto reserved = config_.reserve_budget ? config_.reserve_budget(allocation_size) : ok_status();
+            if (!reserved) {
+                last_error = std::move(reserved).error();
+                return false;
+            }
+            auto memory = allocate_memory_once(allocation_size);
+            if (!memory) {
+                if (config_.release_budget) (void)config_.release_budget(allocation_size);
+                last_error = std::move(memory).error();
+                if (config_.allocation_failed) (void)config_.allocation_failed();
+                return false;
+            }
+            allocated = memory.value();
+            return true;
+        };
+    };
+    OomRecoveryHooks hooks;
+    hooks.refresh_budget = [this] {
+        if (!config_.refresh_budget) return Status{};
+        auto result = config_.refresh_budget();
+        if (!result) return Status(std::move(result).error());
+        return Status{};
+    };
+    hooks.reclaim_deferred = [this] {
+        if (!config_.reclaim_deferred) return Status{};
+        auto result = config_.reclaim_deferred();
+        if (!result) return Status(std::move(result).error());
+        return Status{};
+    };
+    hooks.evict_eligible = [this] {
+        if (!config_.evict_eligible) return Status{};
+        auto result = config_.evict_eligible();
+        if (!result) return Status(std::move(result).error());
+        return Status{};
+    };
+    hooks.retry_once = make_attempt(size);
+    hooks.terminal_error = last_error;
+    auto recovery = recover_allocation_failure(hooks);
+    if (!recovery) {
+        return std::move(recovery).error();
     }
+    if (recovery.value().recovered && allocated != VK_NULL_HANDLE) return allocated;
+    auto error = last_error;
+    if (!error.recovery_action.empty()) error.recovery_action += ", ";
+    for (const auto* stage : recovery.value().attempted_stages) {
+        if (!error.recovery_action.empty()) error.recovery_action += ", ";
+        error.recovery_action += stage;
+    }
+    return error;
+}
+
+Result<VkDeviceMemory> MemoryPool::allocate_memory_once(std::uint64_t size) {
     VkMemoryAllocateFlagsInfo flags{};
     flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
     if (config_.device_address) flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
@@ -79,9 +132,6 @@ Result<VkDeviceMemory> MemoryPool::allocate_memory(std::uint64_t size) {
     ++device_allocation_calls_;
     const auto result = device_->api().allocate_memory(device_->handle(), &info, nullptr, &memory);
     if (result != VK_SUCCESS) {
-        if (config_.release_budget) (void)config_.release_budget(size);
-        if (config_.allocation_failed) (void)config_.allocation_failed();
-        block_size_ = std::max<std::uint64_t>(block_size_ / 2, 1U * kMiB);
         return Error(ErrorCode::AllocationFailed, "vkAllocateMemory failed for memory-pool block")
             .with_vk(result);
     }
@@ -163,7 +213,28 @@ Result<PoolAllocation> MemoryPool::allocate(const PoolAllocationRequest& request
         }
         if (allocation.error().code != ErrorCode::AllocationFailed) return allocation.error();
     }
-    KORA_TRY(memory_block, create_block(block_size_));
+    auto memory_block_result = create_block(block_size_);
+    if (!memory_block_result) {
+        auto allocation_error = std::move(memory_block_result).error();
+        const auto smaller_block_size = std::max<std::uint64_t>(block_size_ / 2, kMiB);
+        if (smaller_block_size < block_size_ && request.size <= smaller_block_size) {
+            auto smaller_result = create_block(smaller_block_size);
+            if (smaller_result) {
+                block_size_ = smaller_block_size;
+                memory_block_result = std::move(smaller_result);
+            } else {
+                allocation_error = std::move(smaller_result).error();
+                if (!allocation_error.recovery_action.empty()) allocation_error.recovery_action += ", ";
+                allocation_error.recovery_action += "smaller_block";
+                return allocation_error;
+            }
+        } else {
+            if (!allocation_error.recovery_action.empty()) allocation_error.recovery_action += ", ";
+            allocation_error.recovery_action += "smaller_block";
+            return allocation_error;
+        }
+    }
+    auto memory_block = std::move(memory_block_result).value();
     blocks_.push_back(std::move(memory_block));
     auto allocation = blocks_.back()->allocator.allocate(request.size, request.alignment);
     if (!allocation) return std::move(allocation).error();

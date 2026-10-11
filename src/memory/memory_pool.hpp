@@ -27,6 +27,12 @@ struct MemoryPoolConfig {
     std::function<Status(std::uint64_t)> reserve_budget;
     std::function<Status(std::uint64_t)> release_budget;
     std::function<Status()> allocation_failed;
+    /// Single-shot callbacks invoked in this order after a budget or Vulkan allocation failure.
+    /// Empty callbacks are skipped; configured callbacks must return true only when their stage
+    /// actually recovered capacity/operation.
+    std::function<Result<bool>()> refresh_budget;
+    std::function<Result<bool>()> reclaim_deferred;
+    std::function<Result<bool>()> evict_eligible;
 };
 
 struct PoolAllocationRequest {
@@ -87,6 +93,7 @@ private:
     Result<std::unique_ptr<Block>> create_block(std::uint64_t size);
     Result<PoolAllocation> allocate_dedicated(const PoolAllocationRequest& request);
     Result<VkDeviceMemory> allocate_memory(std::uint64_t size);
+    Result<VkDeviceMemory> allocate_memory_once(std::uint64_t size);
     void destroy_memory(VkDeviceMemory memory, void* mapped, std::uint64_t size) noexcept;
 
     const vk::Device* device_ = nullptr;
