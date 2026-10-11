@@ -2,7 +2,9 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <locale>
 #include <set>
+#include <sstream>
 
 #include "core/json.hpp"
 #include "kora/kernel_metadata.hpp"
@@ -25,6 +27,19 @@ const std::string* string(const detail::json::Value& value) {
 }
 const detail::json::Value::Number* number(const detail::json::Value& value) {
     return std::get_if<detail::json::Value::Number>(&value.storage);
+}
+
+bool parse_finite_double(std::string_view token, double& value) {
+    std::istringstream stream{std::string(token)};
+    stream.imbue(std::locale::classic());
+    stream >> std::noskipws >> value;
+    if (stream.fail() || stream.peek() != std::char_traits<char>::eof() || !std::isfinite(value))
+        return false;
+    const auto exponent = token.find_first_of("eE");
+    const auto mantissa = token.substr(0, exponent);
+    const bool nonzero_mantissa =
+        std::any_of(mantissa.begin(), mantissa.end(), [](char c) { return c >= '1' && c <= '9'; });
+    return value != 0 || !nonzero_mantissa;
 }
 
 Status fields(const detail::json::Value& value, std::initializer_list<std::string_view> allowed,
@@ -178,9 +193,7 @@ Result<SpecializationConstantMetadata> parse_spec(const detail::json::Value& val
     else if (const auto* n = number(*v)) {
         if (n->text.find_first_of(".eE") != std::string::npos) {
             double d = 0;
-            const auto parsed = std::from_chars(n->text.data(), n->text.data() + n->text.size(), d);
-            if (parsed.ec != std::errc{} || !std::isfinite(d))
-                return invalid(path + ".default", "expected finite number");
+            if (!parse_finite_double(n->text, d)) return invalid(path + ".default", "expected finite number");
             result.default_value = d;
         } else if (!n->text.empty() && n->text[0] == '-') {
             std::int64_t i = 0;

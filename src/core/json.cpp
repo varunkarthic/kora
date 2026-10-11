@@ -1,12 +1,28 @@
 #include "core/json.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <string_view>
 
 namespace kora::detail::json {
 namespace {
+
+bool parse_finite_double(std::string_view token, double& value) {
+    std::istringstream stream{std::string(token)};
+    stream.imbue(std::locale::classic());
+    stream >> std::noskipws >> value;
+    if (stream.fail() || stream.peek() != std::char_traits<char>::eof() || !std::isfinite(value))
+        return false;
+    const auto exponent = token.find_first_of("eE");
+    const auto mantissa = token.substr(0, exponent);
+    const bool nonzero_mantissa =
+        std::any_of(mantissa.begin(), mantissa.end(), [](char c) { return c >= '1' && c <= '9'; });
+    return value != 0 || !nonzero_mantissa;
+}
 
 class Parser {
 public:
@@ -254,9 +270,7 @@ private:
         const auto token = input_.substr(start, position_ - start);
         if (token.find_first_of(".eE") != std::string_view::npos) {
             double number = 0;
-            const auto parsed = std::from_chars(token.data(), token.data() + token.size(), number);
-            if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
-                !std::isfinite(number))
+            if (!parse_finite_double(token, number))
                 return error("number is outside the supported finite range");
         }
         return Value{Value::Number{std::string(token)}};
