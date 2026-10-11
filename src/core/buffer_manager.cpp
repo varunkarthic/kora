@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <mutex>
@@ -10,8 +11,16 @@
 
 namespace kora::detail {
 
+#if !defined(NDEBUG)
+constexpr std::size_t kBufferCanaryBytes = 16;
+constexpr std::byte kLeadingCanary{0xA7};
+constexpr std::byte kTrailingCanary{0x5A};
+#else
+constexpr std::size_t kBufferCanaryBytes = 0;
+#endif
+
 struct BufferRecord {
-    std::vector<std::byte> host_shadow;
+    std::vector<std::byte> host_storage;
     DirtyRangeSet dirty_ranges;
     std::uint64_t size_bytes = 0;
     std::uint64_t host_version = 1;
@@ -22,6 +31,25 @@ struct BufferRecord {
     BufferResidency residency = BufferResidency::HostOnly;
     bool pending_free = false;
     bool data_lost = false;
+
+    std::byte* host_shadow_data() noexcept { return host_storage.data() + kBufferCanaryBytes; }
+    const std::byte* host_shadow_data() const noexcept { return host_storage.data() + kBufferCanaryBytes; }
+    bool canaries_valid() const noexcept {
+#if !defined(NDEBUG)
+        return std::all_of(host_storage.begin(), host_storage.begin() + kBufferCanaryBytes,
+                           [](std::byte value) { return value == kLeadingCanary; }) &&
+               std::all_of(host_storage.end() - kBufferCanaryBytes, host_storage.end(),
+                           [](std::byte value) { return value == kTrailingCanary; });
+#else
+        return true;
+#endif
+    }
+    void initialize_canaries() noexcept {
+#if !defined(NDEBUG)
+        std::fill_n(host_storage.begin(), kBufferCanaryBytes, kLeadingCanary);
+        std::fill_n(host_storage.end() - kBufferCanaryBytes, kBufferCanaryBytes, kTrailingCanary);
+#endif
+    }
 };
 
 struct BufferSlot {
@@ -106,6 +134,8 @@ struct BufferManagerState {
             assert(false && "stale buffer generation used by a command");
             return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
         }
+        if (!record->canaries_valid())
+            return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
         if (value < record->last_use_timeline_value) {
             return Error(ErrorCode::InvalidArgument, "buffer last-use timeline value must be monotonic");
         }
@@ -133,6 +163,8 @@ namespace {
 Result<BufferInfo> inspect_locked(const detail::BufferManagerState& state, BufferId id) {
     const auto* record = state.find(id);
     if (record == nullptr) return Error(ErrorCode::StaleHandle, "buffer generation is stale");
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
     return BufferInfo{record->size_bytes,      record->usage,       record->residency,
                       record->pin_count,       id.generation,       record->last_use_timeline_value,
                       record->reference_count, record->pending_free};
@@ -231,6 +263,8 @@ Result<std::uint64_t> BufferHandle::host_version() const {
     const auto* record = state_->find(id_);
     if (record == nullptr || record->pending_free)
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
     return record->host_version;
 }
 
@@ -243,7 +277,10 @@ Result<std::vector<std::byte>> BufferHandle::read_bytes() const {
     if (record->data_lost)
         return Error(ErrorCode::DataLoss, "buffer contents were lost with the Vulkan device")
             .with_recovery("rewrite the complete buffer from an authoritative host source");
-    return record->host_shadow;
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
+    return std::vector<std::byte>(record->host_shadow_data(),
+                                  record->host_shadow_data() + static_cast<std::size_t>(record->size_bytes));
 }
 
 Status BufferHandle::write_bytes(std::span<const std::byte> bytes) const {
@@ -252,14 +289,16 @@ Status BufferHandle::write_bytes(std::span<const std::byte> bytes) const {
     auto* record = state_->find(id_);
     if (record == nullptr || record->pending_free)
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
-    if (bytes.size() != record->host_shadow.size())
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
+    if (bytes.size() != record->size_bytes)
         return Error(ErrorCode::InvalidArgument, "buffer write byte count does not match its capacity");
     if (!bytes.empty() && record->host_version == std::numeric_limits<std::uint64_t>::max())
         return Error(ErrorCode::Overflow, "buffer host content version overflow");
     if (!bytes.empty()) {
         auto status = record->dirty_ranges.add({0, bytes.size()});
         if (!status) return status;
-        std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
+        std::copy(bytes.begin(), bytes.end(), record->host_shadow_data());
         ++record->host_version;
         record->data_lost = false;
     }
@@ -272,6 +311,8 @@ Status BufferHandle::mark_data_lost() const {
     auto* record = state_->find(id_);
     if (record == nullptr || record->pending_free)
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
     record->data_lost = true;
     return ok_status();
 }
@@ -284,14 +325,16 @@ Result<ConditionalBufferWrite> BufferHandle::write_bytes_if_version(std::span<co
     if (record == nullptr || record->pending_free)
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
     if (record->host_version != expected_version) return ConditionalBufferWrite{false, record->host_version};
-    if (bytes.size() != record->host_shadow.size())
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
+    if (bytes.size() != record->size_bytes)
         return Error(ErrorCode::InvalidArgument, "buffer write byte count does not match its capacity");
     if (!bytes.empty() && record->host_version == std::numeric_limits<std::uint64_t>::max())
         return Error(ErrorCode::Overflow, "buffer host content version overflow");
     if (!bytes.empty()) {
         auto status = record->dirty_ranges.add({0, bytes.size()});
         if (!status) return status.error();
-        std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
+        std::copy(bytes.begin(), bytes.end(), record->host_shadow_data());
         ++record->host_version;
         record->data_lost = false;
     }
@@ -305,6 +348,8 @@ Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, st
     if (record == nullptr || record->pending_free) {
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
     }
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
     if (offset > record->size_bytes)
         return Error(ErrorCode::InvalidArgument, "buffer map offset exceeds size");
     if (size == std::numeric_limits<std::uint64_t>::max()) size = record->size_bytes - offset;
@@ -326,7 +371,7 @@ Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, st
         ++record->host_version;
     }
     ++record->pin_count;
-    auto* data = record->host_shadow.data() + static_cast<std::size_t>(offset);
+    auto* data = record->host_shadow_data() + static_cast<std::size_t>(offset);
     return MappedBytes(state_, id_, data, static_cast<std::size_t>(size));
 }
 
@@ -350,13 +395,18 @@ Result<BufferHandle> BufferManager::create(std::uint64_t size_bytes, BufferUsage
     std::unique_ptr<detail::BufferRecord> record;
     try {
         record = std::make_unique<detail::BufferRecord>();
-        record->host_shadow.resize(static_cast<std::size_t>(size_bytes));
+        constexpr auto guard_bytes = 2 * detail::kBufferCanaryBytes;
+        if (size_bytes > std::numeric_limits<std::size_t>::max() - guard_bytes)
+            return Error(ErrorCode::Overflow,
+                         "buffer host shadow plus canaries exceeds host addressable size");
+        record->host_storage.resize(static_cast<std::size_t>(size_bytes) + guard_bytes);
     } catch (const std::bad_alloc&) {
         return Error(ErrorCode::AllocationFailed, "unable to allocate buffer host shadow");
     } catch (const std::length_error&) {
         return Error(ErrorCode::Overflow, "buffer host shadow exceeds container maximum size");
     }
     record->size_bytes = size_bytes;
+    record->initialize_canaries();
     record->usage = usage;
     record->reference_count = 1;
 
@@ -399,6 +449,8 @@ Result<std::vector<DirtyRange>> BufferManager::dirty_ranges(BufferId id) const {
     if (record == nullptr || record->pending_free) {
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
     }
+    if (!record->canaries_valid())
+        return Error(ErrorCode::InternalInvariantViolation, "buffer host-shadow canary was overwritten");
     try {
         return record->dirty_ranges.ranges();
     } catch (const std::bad_alloc&) {

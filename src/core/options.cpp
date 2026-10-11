@@ -70,6 +70,12 @@ ResolvedOptions resolve(const RuntimeOptions& o, const EnvLookup& env) {
         return def;
     };
 
+#if defined(NDEBUG)
+    constexpr bool debug_safety_default = false;
+#else
+    constexpr bool debug_safety_default = true;
+#endif
+    r.debug_safety = env_bool("KORA_DEBUG_SAFETY", o.debug_safety, debug_safety_default);
     r.enable_validation = env_bool("KORA_VALIDATION", o.enable_validation, false);
     r.disable_autotune = env_bool("KORA_DISABLE_AUTOTUNE", o.disable_autotune, false);
     r.disable_multi_queue = env_bool("KORA_DISABLE_MULTI_QUEUE", o.disable_multi_queue, false);

@@ -13,7 +13,8 @@ also reset to the default with a warning.
 
 | Variable | Values | Default | Purpose |
 | --- | --- | --- | --- |
-| `KORA_VALIDATION` | Boolean | `false` | Request Vulkan validation layers |
+| `KORA_DEBUG_SAFETY` | Boolean | enabled in non-Release builds; disabled in Release | Enable extra runtime safety diagnostics |
+| `KORA_VALIDATION` | Boolean | `false` | Request Vulkan validation layers (also requested by debug safety mode) |
 | `KORA_DEVICE` | `auto`, `discrete`, `integrated`, `all`, index, or 32-hex UUID | `auto` | Device selection policy |
 | `KORA_MEMORY_BUDGET_FRACTION` | Number in `(0,1]` | `0.80` | Fraction of usable memory budget |
 | `KORA_PROFILE` | `off`, `basic`, `profile`, `trace` | `basic` | Telemetry detail |

@@ -14,6 +14,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add debug safety diagnostics with Release opt-in, Debug host-shadow canaries, Vulkan validation
+  requests, and detailed synchronization logs.
+
 - Add one-second Vulkan memory-budget refresh, 80% configurable heap soft limits, backing-allocation
   accounting, and failure-adaptive admission limits.
 - Add generation-aware LRU-2 buffer eviction planning with KeepValue scoring, protected-allocation

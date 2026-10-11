@@ -40,6 +40,22 @@ TEST(BufferManager, CopyingHandlesRetainsOneLogicalAllocation) {
     EXPECT_EQ(manager.inspect(id).error().code, ErrorCode::StaleHandle);
 }
 
+TEST(BufferManager, DebugHostShadowCanariesDetectOutOfRangeMappedWrites) {
+#if defined(NDEBUG)
+    GTEST_SKIP() << "host-shadow canaries are disabled in Release builds";
+#else
+    BufferManager manager;
+    auto created = manager.create(8);
+    ASSERT_TRUE(created);
+    auto mapped = created.value().map(MapAccess::Write);
+    ASSERT_TRUE(mapped);
+    mapped.value().data()[mapped.value().size()] = std::byte{0};
+    const auto read = created.value().read_bytes();
+    ASSERT_FALSE(read);
+    EXPECT_EQ(read.error().code, ErrorCode::InternalInvariantViolation);
+#endif
+}
+
 TEST(BufferManager, DefersReclamationUntilTheLastUseCompletes) {
     BufferManager manager;
     BufferId old_id;

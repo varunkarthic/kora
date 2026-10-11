@@ -18,6 +18,7 @@ enum class ShutdownMode { Graceful, CancelPending };
 
 struct RuntimeOptions {
     std::optional<bool> enable_validation;
+    std::optional<bool> debug_safety;  ///< Enable extra diagnostics; defaults on in non-Release builds.
     std::optional<DevicePolicy> device_policy;
     std::optional<std::uint32_t> device_index;     ///< For DevicePolicy::ByIndex.
     std::optional<std::string> device_uuid;        ///< 32 hex chars, for DevicePolicy::ByUuid.
@@ -39,6 +40,7 @@ struct RuntimeOptions {
 /// Fully concrete options after merging API values, environment and defaults.
 struct ResolvedOptions {
     bool enable_validation = false;
+    bool debug_safety = false;
     DevicePolicy device_policy = DevicePolicy::Auto;
     std::uint32_t device_index = 0;
     std::string device_uuid;
