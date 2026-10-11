@@ -53,10 +53,10 @@ skip. The installed executable looks for its shader next to the binary or under
 | `allocator_allocate_free_256` | Allocate and free 256 aligned suballocations. | Includes allocator creation and invariant validation. |
 | `allocator_fragmentation_128` | Allocate 128 varied blocks, free alternating blocks, and query stats. | Confirms nonzero external fragmentation and valid allocator invariants. |
 | `host_allocation_4k` | Allocate and initialize a 4 KiB host vector. | Standard-library allocation baseline. |
-| `cpu_vector_add_1024` | Add two 1024-element uint32 arrays. | Arithmetic-only CPU baseline; no allocation in the timed loop. |
+| `cpu_vector_add_N` | Add two uint32 arrays for `N` in 1, 64, 256, 1024, and 4096. | Arithmetic-only CPU baseline; no heap allocation in the timed loop. |
 | `gpu_tiny_dispatch_1` | Submit one vector-add work item on Vulkan and wait for completion. | End-to-end host latency, including runtime buffer transfers. |
-| `gpu_vector_add_1024_end_to_end` | Submit 1024 vector-add work items on Vulkan and wait. | Includes upload, dispatch, and output readback; not kernel-only duration. |
-| `gpu_saxpy_1024_end_to_end` | Submit a 1024-element SAXPY on Vulkan and wait. | Resets host input each iteration; includes upload and readback. |
+| `gpu_vector_add_N_end_to_end` | Submit N vector-add work items for N in 64, 256, 1024, and 4096. | Includes upload, dispatch, and output readback; not a kernel-only duration. |
+| `gpu_saxpy_4096_end_to_end` | Submit a 4096-element SAXPY on Vulkan and wait. | Resets host input each iteration; includes upload and readback. |
 
 ## Report contract
 
@@ -69,10 +69,10 @@ are recorded alongside them.
 
 ## Scope and interpretation
 
-CPU-side measurements are always available. Optional GPU cases currently cover tiny dispatch,
-vector-add, and SAXPY. Device transfer bandwidth, direct-versus-staged copies, reduction/scan/matmul/
-stencil kernels, raw-Vulkan baselines, Python overhead, and size-swept CPU/GPU crossover are not
-currently measured. Those require workload-specific fixtures and
+CPU-side measurements are always available. Optional GPU cases cover tiny dispatch and size-swept
+vector-add/SAXPY, allowing a coarse CPU/GPU crossover comparison. Device transfer bandwidth,
+direct-versus-staged copies, reduction/scan/matmul/stencil kernels, raw-Vulkan baselines, and Python
+overhead are not currently measured. Those require workload-specific fixtures and
 hardware/environment qualification; do not infer them from other results. Scheduler results do not
 include end-to-end Runtime device selection because the candidate cost model is not yet wired into
 `Runtime::dispatch()`.

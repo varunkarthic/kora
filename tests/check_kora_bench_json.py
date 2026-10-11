@@ -25,15 +25,15 @@ expected_names = {
     "task_graph_replay_64",
     "allocator_allocate_free_256",
     "allocator_fragmentation_128",
-    "cpu_vector_add_1024",
     "host_allocation_4k",
 }
+expected_names |= {f"cpu_vector_add_{count}" for count in (1, 64, 256, 1024, 4096)}
 if "--gpu" in arguments:
     expected_names |= {
         "gpu_tiny_dispatch_1",
-        "gpu_vector_add_1024_end_to_end",
-        "gpu_saxpy_1024_end_to_end",
+        "gpu_saxpy_4096_end_to_end",
     }
+    expected_names |= {f"gpu_vector_add_{count}_end_to_end" for count in (64, 256, 1024, 4096)}
 assert {item["name"] for item in report["results"]} == expected_names
 for result in report["results"]:
     assert result["unit"] == "ns"

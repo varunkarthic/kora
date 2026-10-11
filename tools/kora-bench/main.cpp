@@ -153,15 +153,15 @@ bool allocation_operation() {
     return bytes.front() == std::byte{0};
 }
 
-bool cpu_vector_add_operation() {
-    std::array<std::uint32_t, 1024> left{};
-    std::array<std::uint32_t, 1024> right{};
-    std::array<std::uint32_t, 1024> output{};
+bool cpu_vector_add_operation(std::uint32_t count) {
+    std::array<std::uint32_t, 4096> left{};
+    std::array<std::uint32_t, 4096> right{};
+    std::array<std::uint32_t, 4096> output{};
     left.fill(3);
     right.fill(7);
-    for (std::size_t index = 0; index < output.size(); ++index) output[index] = left[index] + right[index];
+    for (std::size_t index = 0; index < count; ++index) output[index] = left[index] + right[index];
     static std::atomic<std::uint32_t> sink{0};
-    sink.store(output.back(), std::memory_order_relaxed);
+    sink.store(output[count - 1], std::memory_order_relaxed);
     return sink.load(std::memory_order_relaxed) == 10;
 }
 
@@ -205,6 +205,8 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     runtime_options.telemetry = kora::TelemetryLevel::Off;
     runtime_options.enable_startup_calibration = false;
     runtime_options.disable_autotune = true;
+    runtime_options.debug_safety = false;
+    runtime_options.log_level = kora::log::Level::Off;
     auto runtime_result = kora::Runtime::create(runtime_options);
     if (!runtime_result) {
         std::cerr << "GPU benchmarks unavailable: " << runtime_result.error().describe() << '\n';
@@ -231,7 +233,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << kernel.error().describe() << '\n';
         return false;
     }
-    constexpr std::uint32_t element_count = 1024;
+    constexpr std::uint32_t element_count = 4096;
     std::vector<std::uint32_t> input_a(element_count, 3), input_b(element_count, 7);
     auto a = runtime.create_buffer<std::uint32_t>(element_count);
     auto b = runtime.create_buffer<std::uint32_t>(element_count);
@@ -250,10 +252,18 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
     dispatch(element_count);
     auto sum_values = output.value().read();
-    if (!sum_values || !std::all_of(sum_values.value().begin(), sum_values.value().end(),
+    if (!sum_values || !std::all_of(sum_values.value().begin(), sum_values.value().begin() + 1,
                                     [](std::uint32_t value) { return value == 10; }))
         return false;
-    results.push_back(run("gpu_vector_add_1024_end_to_end", [&] { dispatch(element_count); }, options));
+    for (const auto count : {64U, 256U, 1024U, 4096U}) {
+        dispatch(count);
+        auto values = output.value().read();
+        if (!values || !std::all_of(values.value().begin(), values.value().begin() + count,
+                                    [](std::uint32_t value) { return value == 10; }))
+            return false;
+        const auto name = "gpu_vector_add_" + std::to_string(count) + "_end_to_end";
+        results.push_back(run(name, [&, count] { dispatch(count); }, options));
+    }
 
     kora::KernelMetadata saxpy_metadata;
     saxpy_metadata.kernel_id = "kora_bench.saxpy";
@@ -299,7 +309,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     if (!saxpy_values || !std::all_of(saxpy_values.value().begin(), saxpy_values.value().end(),
                                       [](float value) { return value == 5.0F; }))
         return false;
-    results.push_back(run("gpu_saxpy_1024_end_to_end", [&] { run_saxpy(); }, options));
+    results.push_back(run("gpu_saxpy_4096_end_to_end", [&] { run_saxpy(); }, options));
     return true;
 }
 #endif
@@ -322,7 +332,6 @@ int main(int argc, char** argv) {
                  {"task_graph_replay_64", graph_replay_operation},
                  {"allocator_allocate_free_256", allocator_throughput_operation},
                  {"allocator_fragmentation_128", allocator_fragmentation_operation},
-                 {"cpu_vector_add_1024", cpu_vector_add_operation},
                  {"host_allocation_4k", allocation_operation}}) {
             auto result = run(
                 std::move(name),
@@ -331,6 +340,15 @@ int main(int argc, char** argv) {
                 },
                 options);
             results.push_back(std::move(result));
+        }
+        for (const auto count : {1U, 64U, 256U, 1024U, 4096U}) {
+            const auto name = "cpu_vector_add_" + std::to_string(count);
+            results.push_back(run(
+                name,
+                [count] {
+                    if (!cpu_vector_add_operation(count)) throw std::runtime_error("CPU vector-add failed");
+                },
+                options));
         }
     } catch (const std::exception& error) {
         std::cerr << "benchmark workload failed: " << error.what() << '\n';
