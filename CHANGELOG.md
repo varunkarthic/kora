@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add logarithmic size buckets and measured latency/bandwidth models for five transfer paths.
+
 ## [0.1.42] - 2026-10-11
 
 ### Added
