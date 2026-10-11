@@ -1,0 +1,90 @@
+#pragma once
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#include "kora/options.hpp"
+#include "vulkan/api.hpp"
+
+namespace kora::vk {
+
+/// Serializes submissions for one VkQueue and reports GPU completion on a separate thread.
+class QueueContext {
+public:
+    struct Submission {
+        std::vector<VkSemaphore> wait_semaphores;
+        std::vector<VkPipelineStageFlags> wait_stages;
+        std::vector<uint64_t> wait_values;
+        std::vector<VkCommandBuffer> command_buffers;
+        std::vector<VkSemaphore> signal_semaphores;
+        std::vector<uint64_t> signal_values;
+        VkFence fence = VK_NULL_HANDLE;
+        std::function<void(uint64_t, Status)> on_complete;
+    };
+
+    static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue);
+
+    QueueContext() = default;
+    ~QueueContext();
+    QueueContext(const QueueContext&) = delete;
+    QueueContext& operator=(const QueueContext&) = delete;
+    QueueContext(QueueContext&&) = delete;
+    QueueContext& operator=(QueueContext&&) = delete;
+
+    /// Enqueue one owned submission record. The returned ID is stable for this context's lifetime.
+    Result<uint64_t> submit(Submission submission);
+    /// Stop accepting work, then drain or cancel work that has not reached vkQueueSubmit.
+    Status shutdown(ShutdownMode mode = ShutdownMode::Graceful);
+
+private:
+    struct QueuedSubmission {
+        uint64_t id = 0;
+        Submission submission;
+    };
+    struct Completion {
+        uint64_t id = 0;
+        uint64_t timeline_value = 0;
+        Status status;
+        std::function<void(uint64_t, Status)> callback;
+    };
+
+    QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline);
+    Status start();
+    void submission_loop();
+    void completion_loop();
+    void enqueue_completion(Completion completion);
+    static Status validate(const Submission& submission);
+
+    Api api_;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
+    VkSemaphore timeline_ = VK_NULL_HANDLE;
+
+    std::mutex queue_mutex_;
+    std::condition_variable queue_changed_;
+    std::deque<QueuedSubmission> ready_;
+    uint64_t next_id_ = 1;
+    bool accepting_ = true;
+    bool stop_requested_ = false;
+    ShutdownMode shutdown_mode_ = ShutdownMode::Graceful;
+    std::thread submission_thread_;
+    std::atomic_flag queue_submit_active_ = ATOMIC_FLAG_INIT;
+
+    std::mutex completion_mutex_;
+    std::condition_variable completion_changed_;
+    std::deque<Completion> completions_;
+    bool submission_finished_ = false;
+    std::thread completion_thread_;
+
+    std::mutex shutdown_mutex_;
+    uint64_t next_timeline_value_ = 1;
+};
+
+}  // namespace kora::vk
