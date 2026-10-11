@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "kora/runtime.hpp"
+#include "kora/task_partition.hpp"
 #include "support/vulkan_test.hpp"
 
 namespace {
@@ -35,6 +37,15 @@ kora::KernelMetadata vector_add_metadata() {
          .kind = kora::KernelBindingKind::StorageBuffer,
          .access = kora::KernelAccess::Write},
     };
+    return metadata;
+}
+
+kora::KernelMetadata partition_add_metadata() {
+    auto metadata = vector_add_metadata();
+    metadata.kernel_id = "integration.partition_add";
+    metadata.push_constant_size = 2 * sizeof(std::uint32_t);
+    metadata.push_constants = {{"base", "u32", 0, sizeof(std::uint32_t)},
+                               {"count", "u32", sizeof(std::uint32_t), sizeof(std::uint32_t)}};
     return metadata;
 }
 
@@ -183,6 +194,88 @@ TEST(Runtime, StagesOutputsAcrossEverySelectedDevicePairThroughHostMemory) {
     ASSERT_TRUE(transfers) << transfers.error().describe();
     EXPECT_GT(transfers.value().uploads, 0U);
     EXPECT_GE(transfers.value().downloads, devices.size() * devices.size());
+#endif
+}
+
+TEST(Runtime, DynamicPartitionMatchesUnsplitResultAcrossTwoLocalDevices) {
+#ifndef KORA_PARTITION_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "partition-add SPIR-V fixture was not built";
+#else
+    kora::RuntimeOptions options;
+    options.device_policy = kora::DevicePolicy::AllEligible;
+    options.enable_startup_calibration = false;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    const auto devices = runtime.value().devices();
+    if (devices.size() < 2) GTEST_SKIP() << "dynamic partition integration needs two eligible Vulkan devices";
+
+    constexpr std::uint32_t count = 1024;
+    std::vector<std::uint32_t> a(count), b(count), expected(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        a[i] = i * 5U + 7U;
+        b[i] = i * 3U + 13U;
+        expected[i] = a[i] + b[i];
+    }
+    auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
+    auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_a);
+    ASSERT_TRUE(input_b);
+    ASSERT_TRUE(input_a.value().write(a));
+    ASSERT_TRUE(input_b.value().write(b));
+
+    kora::DynamicPartitioner partitioner(1.0);
+    std::vector<kora::PartitionDevice> candidates;
+    for (const auto& device : devices) {
+        auto info = runtime.value().device_info(device);
+        auto stats = runtime.value().memory_stats(device);
+        ASSERT_TRUE(info);
+        ASSERT_TRUE(stats);
+        std::uint64_t memory = 0;
+        for (const auto& heap : stats.value().heaps) memory = std::max(memory, heap.available_bytes);
+        candidates.push_back({device, memory, 1.0});
+        ASSERT_TRUE(partitioner.observe(device, 256, 100.0 + device.index));
+    }
+    kora::PartitionRequest request{.total_work_units = count,
+                                   .bytes_per_work_unit = 12,
+                                   .granularity = 64,
+                                   .minimum_chunk_units = 64,
+                                   .estimated_unsplit_duration_ns = 100000,
+                                   .partition_overhead_ns = 0,
+                                   .minimum_gain_fraction = 0};
+    auto plan = partitioner.partition(request, candidates);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    ASSERT_TRUE(plan.value().split);
+    ASSERT_EQ(plan.value().slices.size(), candidates.size());
+
+    std::vector<std::uint32_t> actual(count, 0);
+    for (const auto& slice : plan.value().slices) {
+        const auto local_count = static_cast<std::uint32_t>(slice.work_units);
+        const auto base = static_cast<std::uint32_t>(slice.offset);
+        auto output = runtime.value().create_buffer<std::uint32_t>(local_count);
+        ASSERT_TRUE(output);
+        auto kernel = runtime.value().load_kernel(KORA_PARTITION_ADD_FIXTURE_PATH, "main",
+                                                  partition_add_metadata(), slice.device);
+        ASSERT_TRUE(kernel) << kernel.error().describe();
+        const std::array<std::uint32_t, 2> push{base, local_count};
+        auto event = runtime.value()
+                         .dispatch(kernel.value())
+                         .global(local_count)
+                         .read(input_a.value())
+                         .read(input_b.value())
+                         .write(output.value())
+                         .push(push)
+                         .submit();
+        ASSERT_TRUE(event) << event.error().describe();
+        ASSERT_TRUE(event.value().wait()) << event.value().status().error().describe();
+        auto values = output.value().read();
+        ASSERT_TRUE(values);
+        std::copy(values.value().begin(), values.value().end(), actual.begin() + base);
+    }
+    EXPECT_EQ(actual, expected);
 #endif
 }
 

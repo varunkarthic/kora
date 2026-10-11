@@ -106,3 +106,7 @@ for (const auto& device : runtime.value().devices()) {
 - Startup calibration currently stores only a bounded host-side overhead probe. Tiny GPU dispatch,
   H2D/D2H, device-copy, streaming-kernel, and ALU measurements are recorded as unavailable and do not
   influence device selection. See [Startup calibration](../calibration.md).
+
+For caller-defined range-aware work, see [multiple Vulkan devices](../multi-gpu.md) and
+`kora/task_partition.hpp`. `DynamicPartitioner` returns device-specific contiguous ranges; the
+caller owns dispatch, output merging, and deciding whether the operation's semantics permit splitting.

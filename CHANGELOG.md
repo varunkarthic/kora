@@ -34,6 +34,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add explicit device-targeted kernel loading, dispatch routing, and source-device readback for
   cross-device host staging. Keep per-device queue timeline ownership and replicas isolated; no
   peer-memory fast path is enabled without measured evidence.
+- Add a measured-throughput task partitioner with per-device memory caps, proportional contiguous
+  ranges, minimum/granularity constraints, profitability fallback, and caller-owned range execution.
 
 ## [0.1.44] - 2026-10-11
 

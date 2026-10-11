@@ -14,6 +14,7 @@ add_library(kora
   core/transfer_model.cpp
   core/scheduler_cost.cpp
   core/scheduler_policy.cpp
+  core/task_partition.cpp
   core/runtime.cpp
   profiling/timestamp.cpp
   core/task_graph.cpp

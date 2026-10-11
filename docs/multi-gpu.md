@@ -93,5 +93,41 @@ eligible devices exist, as in single-device CI environments. Local runs can cove
 and other installed implementations; the exact available pair matrix is machine-dependent.
 
 Current device selection initializes the chosen devices and lets the caller name a target explicitly.
-It does not yet partition tasks automatically, schedule a graph across devices, or use peer/external
-memory. A transfer from A to B is explicit and incurs host readback plus destination upload.
+It does not rewrite arbitrary kernels or automatically schedule a graph. A caller may opt a
+range-aware operation into `DynamicPartitioner`: the policy returns non-overlapping contiguous
+`PartitionSlice` ranges with a device assignment. The caller remains responsible for passing each
+range to its kernel (typically as base/count parameters) and merging the per-device outputs. This
+explicit contract avoids assuming that any arbitrary dispatch can be split safely.
+
+## Partitionable task policy
+
+`DynamicPartitioner::observe(device, work_units, duration_ns)` records completed-work throughput as
+work-units per nanosecond and updates the per-device estimate with an EWMA. `partition(request,
+devices)` uses those measured rates when available and otherwise each `PartitionDevice` cold-start
+rate. The caller supplies a current per-task memory allowance for each device; a slice is never
+assigned beyond that byte cap.
+
+The planner assigns at least the configured minimum chunk to each participating device, distributes
+granularity-sized chunks proportionally to throughput, and gives any sub-granularity tail to the final
+slice. Offsets are ordered, contiguous, and cover the requested extent exactly. If only one device
+fits, multiple minimum chunks cannot fit, or predicted makespan including partition overhead does
+not improve the unsplit estimate by `minimum_gain_fraction`, the result is a single full-range slice
+on the fastest device that can hold it. If no one device can hold the unsplit task, the planner
+returns `OutOfMemoryBudget`; it does not silently produce an incomplete plan. The planner is a pure
+advisory primitive and does not submit work, synchronize devices, or merge buffers.
+
+| API | Contract |
+| --- | --- |
+| `PartitionDevice` | Stable `DeviceId`, task memory allowance, and cold-start throughput in work units/ns. |
+| `PartitionRequest` | Extent, bytes per unit, chunk granularity/minimum, unsplit duration, split overhead, and required gain. |
+| `DynamicPartitioner::observe()` | Updates one device's throughput EWMA from a positive completed-work sample. |
+| `DynamicPartitioner::partition()` | Returns an exact contiguous range plan, a single-device fallback, or a structured error. |
+| `PartitionSlice` | Device, zero-based offset, extent, and throughput share used as its weight. |
+
+The unit suite checks proportional allocation, rebalance, granularity, memory limits, invalid input,
+and unprofitable/one-device fallback. The Vulkan integration test runs disjoint vector-add ranges on
+two or more local devices and compares their merged output to the unsplit CPU result. It skips when
+the machine exposes fewer than two eligible Vulkan devices.
+
+Cross-device input movement still uses the explicit host-shadow staging contract above; no
+peer/external-memory fast path is enabled.
