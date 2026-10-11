@@ -293,7 +293,7 @@ struct Runtime::Impl {
     bool calibrate_on_start = true;
     std::mutex cpu_mutex;
     std::unordered_map<std::string, CpuFallbackFunction> cpu_fallbacks;
-    std::unique_ptr<CpuExecutor> cpu_executor;
+    std::shared_ptr<CpuExecutor> cpu_executor;
 
     ~Impl() {
         if (cpu_executor) (void)cpu_executor->shutdown();
@@ -1029,6 +1029,7 @@ Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const Bu
                      "CPU fallback key or buffer access declarations are invalid");
 
     CpuFallbackFunction function;
+    std::shared_ptr<CpuExecutor> executor;
     {
         std::lock_guard lock(impl_->cpu_mutex);
         const auto found = impl_->cpu_fallbacks.find(std::string(key));
@@ -1036,10 +1037,11 @@ Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const Bu
             return Error(ErrorCode::InvalidKernel, "no CPU fallback is registered for semantic key");
         function = found->second;
         if (!impl_->cpu_executor) {
-            auto executor = CpuExecutor::create();
-            if (!executor) return std::move(executor).error();
-            impl_->cpu_executor = std::move(executor).value();
+            auto created_executor = CpuExecutor::create();
+            if (!created_executor) return std::move(created_executor).error();
+            impl_->cpu_executor = std::shared_ptr<CpuExecutor>(std::move(created_executor).value());
         }
+        executor = impl_->cpu_executor;
     }
 
     auto task = std::make_shared<CpuTaskContext>();
@@ -1048,9 +1050,16 @@ Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const Bu
     task->push_constants_ = push_constants;
     std::vector<Event> prerequisites;
     prerequisites.reserve(buffers.size());
+    std::unordered_set<BufferId, detail::BufferIdHash> unique_buffers;
     for (std::size_t index = 0; index < buffers.size(); ++index) {
         if (!buffers[index])
             return Error(ErrorCode::InvalidKernelBinding, "CPU task contains an empty buffer");
+        if (accesses[index] != KernelAccess::Read && accesses[index] != KernelAccess::Write &&
+            accesses[index] != KernelAccess::ReadWrite)
+            return Error(ErrorCode::InvalidKernelBinding, "CPU task contains an invalid buffer access mode");
+        if (!unique_buffers.insert(buffers[index].id()).second)
+            return Error(ErrorCode::InvalidKernelBinding,
+                         "CPU task cannot declare the same buffer more than once");
         if (accesses[index] == KernelAccess::Write) continue;
         auto visible = readback(buffers[index]);
         if (!visible) return std::move(visible).error();
@@ -1061,7 +1070,6 @@ Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const Bu
 
     auto promise = std::make_shared<detail::EventPromise>();
     const auto result_event = promise->event();
-    auto* executor = impl_->cpu_executor.get();
     auto continued = ready.value().on_complete([task, function = std::move(function), executor,
                                                 promise](Status status) mutable {
         if (!status) {

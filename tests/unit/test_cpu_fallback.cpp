@@ -45,3 +45,23 @@ TEST(CpuFallback, RejectsUnknownKeyAndInvalidDeclarations) {
     ASSERT_FALSE(mismatch);
     EXPECT_EQ(mismatch.error().code, kora::ErrorCode::InvalidArgument);
 }
+
+TEST(CpuFallback, RuntimeShutdownDrainsFallbackWork) {
+    auto created = kora::Runtime::create();
+    if (!created && (created.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     created.error().code == kora::ErrorCode::NoEligibleDevice))
+        GTEST_SKIP();
+    ASSERT_TRUE(created) << created.error().describe();
+    auto runtime = std::move(created).value();
+    auto buffer = runtime.create_buffer(64);
+    ASSERT_TRUE(buffer);
+    ASSERT_TRUE(
+        runtime.register_cpu_fallback("unit.shutdown", [](kora::CpuTaskContext&) { return kora::Status{}; }));
+    const std::array buffers{buffer.value()};
+    const std::array accesses{kora::KernelAccess::Read};
+    auto event = runtime.run_cpu_fallback("unit.shutdown", buffers, accesses);
+    ASSERT_TRUE(event) << event.error().describe();
+    runtime = kora::Runtime{};
+    const auto completion = event.value().wait();
+    EXPECT_TRUE(completion);
+}
