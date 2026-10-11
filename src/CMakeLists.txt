@@ -17,6 +17,7 @@ add_library(kora
   memory/dirty_ranges.cpp
   memory/residency.cpp
   kernel/metadata.cpp
+  kernel/spirv.cpp
   vulkan/loader.cpp
   vulkan/command_pool_set.cpp
   vulkan/queue_context.cpp
@@ -29,6 +30,7 @@ target_include_directories(kora PUBLIC
 target_include_directories(kora PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kora PUBLIC Threads::Threads
   PRIVATE $<BUILD_INTERFACE:${KORA_VULKAN_HEADERS}> ${CMAKE_DL_LIBS})
+target_include_directories(kora PRIVATE ${KORA_SPIRV_HEADERS_INCLUDE_DIR})
 target_compile_definitions(kora PRIVATE VK_NO_PROTOTYPES)
 if(KORA_HAVE_SPIRV_TOOLS)
   target_link_libraries(kora PRIVATE ${KORA_SPIRV_TOOLS_TARGET})
