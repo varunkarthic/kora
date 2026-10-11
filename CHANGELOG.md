@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add conservative task-DAG temporary-buffer alias planning with compatibility checks and persistent
+  resource isolation.
 - Add immutable ExecutionPlan snapshots and callback-driven replay without repeating graph analysis
   or allocating plan storage per replay.
 

@@ -11,6 +11,7 @@ add_library(kora
   core/options.cpp
   core/runtime.cpp
   core/task_graph.cpp
+  core/temporary_buffer_aliasing.cpp
   core/version.cpp
   memory/suballocator.cpp
   memory/memory_pool.cpp

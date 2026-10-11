@@ -43,6 +43,7 @@ internals/transfers
 internals/dirty-ranges
 internals/spirv
 internals/pipelines
+internals/aliasing
 device-selection
 memory-model
 ci-cd
