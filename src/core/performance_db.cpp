@@ -7,8 +7,10 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <locale>
 #include <mutex>
 #include <numeric>
+#include <sstream>
 #include <string_view>
 #include <type_traits>
 
@@ -87,9 +89,10 @@ bool number(const json::Value* value, T& result) {
     const auto* item = std::get_if<json::Value::Number>(&value->storage);
     if (!item) return false;
     if constexpr (std::is_floating_point_v<T>) {
-        const auto [end, error] =
-            std::from_chars(item->text.data(), item->text.data() + item->text.size(), result);
-        return error == std::errc{} && end == item->text.data() + item->text.size() && std::isfinite(result);
+        std::istringstream stream(item->text);
+        stream.imbue(std::locale::classic());
+        stream >> std::noskipws >> result;
+        return !stream.fail() && stream.peek() == std::char_traits<char>::eof() && std::isfinite(result);
     } else {
         const auto [end, error] =
             std::from_chars(item->text.data(), item->text.data() + item->text.size(), result);
