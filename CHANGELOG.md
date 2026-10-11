@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Reference-counted logical buffer handles with typed host-shadow mappings, generation-checked
+  identities, pin tracking, and timeline-gated deferred reclamation.
+
 ## [0.1.16] - 2026-10-11
 
 ### Added

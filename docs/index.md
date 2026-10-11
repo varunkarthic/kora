@@ -58,6 +58,7 @@ api/options
 api/logging
 api/version
 api/checked
+api/buffer
 ```
 
 ## Documentation guarantees
