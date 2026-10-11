@@ -21,6 +21,7 @@ struct BufferRecord {
     BufferUsage usage = BufferUsage::Generic;
     BufferResidency residency = BufferResidency::HostOnly;
     bool pending_free = false;
+    bool data_lost = false;
 };
 
 struct BufferSlot {
@@ -239,6 +240,9 @@ Result<std::vector<std::byte>> BufferHandle::read_bytes() const {
     const auto* record = state_->find(id_);
     if (record == nullptr || record->pending_free)
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    if (record->data_lost)
+        return Error(ErrorCode::DataLoss, "buffer contents were lost with the Vulkan device")
+            .with_recovery("rewrite the complete buffer from an authoritative host source");
     return record->host_shadow;
 }
 
@@ -257,7 +261,18 @@ Status BufferHandle::write_bytes(std::span<const std::byte> bytes) const {
         if (!status) return status;
         std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
         ++record->host_version;
+        record->data_lost = false;
     }
+    return ok_status();
+}
+
+Status BufferHandle::mark_data_lost() const {
+    if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
+    std::lock_guard lock(state_->mutex);
+    auto* record = state_->find(id_);
+    if (record == nullptr || record->pending_free)
+        return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    record->data_lost = true;
     return ok_status();
 }
 
@@ -278,6 +293,7 @@ Result<ConditionalBufferWrite> BufferHandle::write_bytes_if_version(std::span<co
         if (!status) return status.error();
         std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
         ++record->host_version;
+        record->data_lost = false;
     }
     return ConditionalBufferWrite{true, record->host_version};
 }
@@ -295,6 +311,9 @@ Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, st
     if (!checked::in_range(offset, size, record->size_bytes)) {
         return Error(ErrorCode::InvalidArgument, "buffer map range exceeds buffer size");
     }
+    if (record->data_lost && !(access == MapAccess::Write && offset == 0 && size == record->size_bytes))
+        return Error(ErrorCode::DataLoss, "buffer contents were lost with the Vulkan device")
+            .with_recovery("rewrite the complete buffer from an authoritative host source");
     if (offset > std::numeric_limits<std::size_t>::max() || size > std::numeric_limits<std::size_t>::max()) {
         return Error(ErrorCode::Overflow, "buffer map range exceeds host addressable size");
     }

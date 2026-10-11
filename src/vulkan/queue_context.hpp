@@ -12,6 +12,7 @@
 
 #include "kora/options.hpp"
 #include "vulkan/api.hpp"
+#include "vulkan/device_fault_state.hpp"
 
 namespace kora::vk {
 
@@ -49,10 +50,12 @@ public:
     };
 
     static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
-                                                        bool force_fence_fallback = false);
+                                                        bool force_fence_fallback = false,
+                                                        std::shared_ptr<DeviceFaultState> fault_state = {});
     static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
                                                         bool force_fence_fallback,
-                                                        CoalescingOptions coalescing);
+                                                        CoalescingOptions coalescing,
+                                                        std::shared_ptr<DeviceFaultState> fault_state = {});
 
     QueueContext() = default;
     ~QueueContext();
@@ -87,11 +90,13 @@ private:
     };
 
     QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
-                 bool use_synchronization2, std::vector<VkFence> fence_pool, CoalescingOptions coalescing);
+                 bool use_synchronization2, std::vector<VkFence> fence_pool, CoalescingOptions coalescing,
+                 std::shared_ptr<DeviceFaultState> fault_state);
     Status start();
     void submission_loop();
     void completion_loop();
     void enqueue_completion(Completion completion);
+    void fail_queued_device_lost();
     static Status validate(const Submission& submission);
     Result<VkFence> acquire_fence();
     void release_fence(VkFence fence, bool reset) noexcept;
@@ -109,6 +114,7 @@ private:
     std::deque<VkFence> available_fences_;
     bool fence_pool_failed_ = false;
     std::atomic<uint64_t> fallback_completed_value_{0};
+    std::shared_ptr<DeviceFaultState> fault_state_;
 
     std::mutex queue_mutex_;
     std::condition_variable queue_changed_;

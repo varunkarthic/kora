@@ -26,6 +26,7 @@ namespace kora {
 namespace detail {
 struct KernelState;
 struct DispatchContext;
+struct RuntimeTestAccess;
 }  // namespace detail
 
 class Kernel final {
@@ -128,6 +129,31 @@ struct RuntimeProfilingStats {
     std::uint64_t last_calibration_deviation_nanoseconds = 0;
 };
 
+/// Best-effort, optional Vulkan device-fault details captured after device loss. Address values are
+/// returned only to the caller and are never written to logs or persistent files by KORA.
+struct DeviceFaultAddressRecord {
+    std::uint32_t type = 0;
+    std::uint64_t reported_address = 0;
+    std::uint64_t precision = 0;
+};
+
+struct DeviceFaultVendorRecord {
+    std::string description;
+    std::uint64_t code = 0;
+    std::uint64_t data = 0;
+};
+
+struct DeviceFaultReport {
+    bool supported = false;
+    bool queried = false;
+    bool truncated = false;
+    std::int32_t loss_result = 0;
+    std::int32_t query_result = 0;
+    std::string description;
+    std::vector<DeviceFaultAddressRecord> addresses;
+    std::vector<DeviceFaultVendorRecord> vendor_records;
+};
+
 /// Owns the Vulkan loader, instance, selected logical devices, and their memory managers.
 class Runtime final {
 public:
@@ -149,6 +175,13 @@ public:
     Result<RuntimeTransferStats> transfer_stats() const;
     /// Returns completed GPU timestamp samples observed so far; does not wait for pending work.
     Result<RuntimeProfilingStats> profiling_stats(const DeviceId& device) const;
+    /// Return the optional fault report captured for a device after loss; unsupported devices report
+    /// `supported == false` without turning the failure into another error.
+    Result<DeviceFaultReport> device_fault_report(const DeviceId& device) const;
+    /// Recreate all logical devices after observed device loss, retaining host-backed buffer handles.
+    /// Previously loaded kernels are invalidated and must be loaded again. Buffers marked DataLoss
+    /// require a complete host rewrite before they can be read or uploaded.
+    Status recover();
     Result<BufferHandle> create_buffer(std::uint64_t size_bytes, BufferUsage usage = BufferUsage::Storage);
     template <class T>
     Result<Buffer<T>> create_buffer(std::uint64_t count, BufferUsage usage = BufferUsage::Storage) {
@@ -183,10 +216,12 @@ public:
     }
 
 private:
+    friend struct detail::RuntimeTestAccess;
     struct Impl;
-    explicit Runtime(std::unique_ptr<Impl> impl);
+    explicit Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options);
     std::unique_ptr<Impl> impl_;
     BufferManager buffers_;
+    RuntimeOptions options_;
 };
 
 }  // namespace kora

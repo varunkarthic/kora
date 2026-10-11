@@ -36,6 +36,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   peer-memory fast path is enabled without measured evidence.
 - Add a measured-throughput task partitioner with per-device memory caps, proportional contiguous
   ranges, minimum/granularity constraints, profitability fallback, and caller-owned range execution.
+- Mark logical devices unhealthy after observed Vulkan device loss, stop new submissions across their
+  queues, fail queued work deterministically, and preserve raw Vulkan failure diagnostics.
+- Return `DataLoss` instead of stale host bytes for outputs of in-flight work lost with a Vulkan
+  device; restore host readability only after a complete host rewrite.
+- Add transactional `Runtime::recover()` to rebuild logical devices after observed loss while
+  retaining host-backed buffer handles and CPU fallback registrations; loaded kernels must be reloaded.
+- Drain queued work to `DeviceLost` immediately when the shared logical-device fault state trips, avoiding
+  shutdown-order-dependent cancellation of pending submissions.
+- Capture optional, bounded `VK_EXT_device_fault` address and vendor records after device loss and expose
+  them through `Runtime::device_fault_report()` without writing sensitive details to logs or files.
 
 ## [0.1.44] - 2026-10-11
 

@@ -24,6 +24,7 @@
 #include "core/device_caps.hpp"
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
+#include "core/runtime_test_access.hpp"
 #include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "memory/eviction.hpp"
@@ -207,16 +208,73 @@ struct Runtime::Impl {
               calibrated_time_domains(std::move(calibrated_time_domains)) {}
 
         Status initialize() {
+#ifdef VK_EXT_device_fault
+            if (device.api().get_device_fault_info != nullptr) {
+                const auto get_fault_info = device.api().get_device_fault_info;
+                const auto logical_device = device.handle();
+                fault_state->set_diagnostics_query([get_fault_info, logical_device] {
+                    vk::DeviceFaultSnapshot snapshot;
+                    snapshot.supported = true;
+                    VkDeviceFaultCountsEXT counts{};
+                    counts.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT;
+                    VkResult result = get_fault_info(logical_device, &counts, nullptr);
+                    snapshot.query_result = result;
+                    if (result != VK_SUCCESS) return snapshot;
+
+                    constexpr std::uint32_t kMaximumFaultRecords = 256;
+                    const auto address_capacity = std::min(counts.addressInfoCount, kMaximumFaultRecords);
+                    const auto vendor_capacity = std::min(counts.vendorInfoCount, kMaximumFaultRecords);
+                    snapshot.truncated = counts.addressInfoCount > address_capacity ||
+                                         counts.vendorInfoCount > vendor_capacity;
+                    std::vector<VkDeviceFaultAddressInfoEXT> addresses(address_capacity);
+                    std::vector<VkDeviceFaultVendorInfoEXT> vendors(vendor_capacity);
+                    VkDeviceFaultInfoEXT info{};
+                    info.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT;
+                    info.pAddressInfos = addresses.data();
+                    info.pVendorInfos = vendors.data();
+                    counts.addressInfoCount = address_capacity;
+                    counts.vendorInfoCount = vendor_capacity;
+                    counts.vendorBinarySize = 0;
+                    result = get_fault_info(logical_device, &counts, &info);
+                    snapshot.query_result = result;
+                    snapshot.truncated = snapshot.truncated || result == VK_INCOMPLETE;
+                    const auto description_end =
+                        std::find(std::begin(info.description), std::end(info.description), '\0');
+                    snapshot.description.assign(std::begin(info.description), description_end);
+                    const auto returned_addresses = std::min(counts.addressInfoCount, address_capacity);
+                    snapshot.addresses.reserve(returned_addresses);
+                    for (std::uint32_t index = 0; index < returned_addresses; ++index) {
+                        const auto& value = addresses[index];
+                        snapshot.addresses.push_back({static_cast<std::uint32_t>(value.addressType),
+                                                      value.reportedAddress, value.addressPrecision});
+                    }
+                    const auto returned_vendors = std::min(counts.vendorInfoCount, vendor_capacity);
+                    snapshot.vendor_records.reserve(returned_vendors);
+                    for (std::uint32_t index = 0; index < returned_vendors; ++index) {
+                        const auto& value = vendors[index];
+                        const auto vendor_description_end =
+                            std::find(std::begin(value.description), std::end(value.description), '\0');
+                        snapshot.vendor_records.push_back(
+                            {std::string(std::begin(value.description), vendor_description_end),
+                             value.vendorFaultCode, value.vendorFaultData});
+                    }
+                    snapshot.truncated = snapshot.truncated || counts.addressInfoCount > address_capacity ||
+                                         counts.vendorInfoCount > vendor_capacity;
+                    return snapshot;
+                });
+            }
+#endif
             vk::QueueContext::CoalescingOptions coalescing;
             coalescing.enabled = true;
-            auto queue_result = vk::QueueContext::create(
-                device.api(), device.handle(), device.compute_queue(), force_legacy_sync, coalescing);
+            auto queue_result =
+                vk::QueueContext::create(device.api(), device.handle(), device.compute_queue(),
+                                         force_legacy_sync, coalescing, fault_state);
             if (!queue_result) return Status(std::move(queue_result).error());
             queue = std::move(queue_result).value();
             transfer_queue = queue.get();
             if (queue_family_policy.compute_family != queue_family_policy.transfer_family) {
-                auto transfer_result = vk::QueueContext::create(device.api(), device.handle(),
-                                                                device.transfer_queue(), force_legacy_sync);
+                auto transfer_result = vk::QueueContext::create(
+                    device.api(), device.handle(), device.transfer_queue(), force_legacy_sync, fault_state);
                 if (!transfer_result) return Status(std::move(transfer_result).error());
                 dedicated_transfer_queue = std::move(transfer_result).value();
                 transfer_queue = dedicated_transfer_queue.get();
@@ -391,6 +449,7 @@ struct Runtime::Impl {
         std::unique_ptr<vk::QueueContext> dedicated_transfer_queue;
         vk::QueueContext* transfer_queue = nullptr;
         std::uint64_t runtime_id = 0;
+        std::shared_ptr<vk::DeviceFaultState> fault_state = std::make_shared<vk::DeviceFaultState>();
         bool force_legacy_sync = false;
         std::vector<VkTimeDomainKHR> calibrated_time_domains;
         std::uint32_t driver_version = 0;
@@ -719,6 +778,10 @@ Result<Event> DispatchBuilder::submit() {
                               bound_host_versions,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
         (void)pipeline_ref;
+        if (!status && status.error().code == ErrorCode::DeviceLost && compute_value != 0) {
+            for (std::size_t index = 0; index < accesses.size(); ++index)
+                if (accesses[index] != KernelAccess::Read) (void)bound_handles[index].mark_data_lost();
+        }
         if (ctx->timestamps) {
             auto samples = ctx->timestamps->collect(compute_value);
             if (samples)
@@ -906,7 +969,8 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }  // namespace
 
 Runtime::Runtime() = default;
-Runtime::Runtime(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+Runtime::Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options)
+    : impl_(std::move(impl)), options_(std::move(options)) {}
 Runtime::~Runtime() = default;
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
@@ -1191,7 +1255,59 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         entry->dispatch->performance_database_path = impl->performance_database_path;
         impl->devices.push_back(std::move(entry));
     }
-    return Runtime(std::move(impl));
+    RuntimeOptions effective_options;
+    effective_options.enable_validation = resolved.enable_validation;
+    effective_options.device_policy = resolved.device_policy;
+    effective_options.device_index = resolved.device_index;
+    effective_options.device_uuid = resolved.device_uuid;
+    effective_options.memory_budget_fraction = resolved.memory_budget_fraction;
+    effective_options.telemetry = resolved.telemetry;
+    effective_options.log_level = resolved.log_level;
+    effective_options.cache_dir = resolved.cache_dir;
+    effective_options.deterministic = resolved.deterministic;
+    effective_options.shutdown_mode = resolved.shutdown_mode;
+    effective_options.disable_autotune = resolved.disable_autotune;
+    effective_options.disable_multi_queue = resolved.disable_multi_queue;
+    effective_options.disable_cpu_backend = resolved.disable_cpu_backend;
+    effective_options.force_legacy_sync = resolved.force_legacy_sync;
+    effective_options.trace = options.trace;
+    effective_options.enable_startup_calibration = resolved.enable_startup_calibration;
+    effective_options.calibration_budget_ms = resolved.calibration_budget_ms;
+    return Runtime(std::move(impl), std::move(effective_options));
+}
+
+Status Runtime::recover() {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const bool device_lost = std::any_of(impl_->devices.begin(), impl_->devices.end(), [](const auto& entry) {
+        return entry->fault_state && !entry->fault_state->healthy();
+    });
+    if (!device_lost)
+        return Error(ErrorCode::InvalidArgument, "runtime recovery requires an observed device loss");
+
+    auto created = Runtime::create(options_);
+    if (!created) return Status(std::move(created).error());
+    auto replacement = std::move(created).value();
+    {
+        std::scoped_lock lock(impl_->cpu_mutex, replacement.impl_->cpu_mutex);
+        replacement.impl_->cpu_fallbacks = impl_->cpu_fallbacks;
+    }
+    replacement.buffers_ = std::move(buffers_);
+    impl_.swap(replacement.impl_);
+    buffers_ = std::move(replacement.buffers_);
+    options_ = std::move(replacement.options_);
+    // `replacement` now owns the failed implementation; its destructor drains old queue callbacks
+    // before this method returns. Host-backed BufferHandles remain backed by the retained state.
+    return {};
+}
+
+Status detail::RuntimeTestAccess::mark_device_lost(Runtime& runtime, const DeviceId& id) {
+    if (!runtime.impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(runtime.impl_->devices.begin(), runtime.impl_->devices.end(),
+                                    [&](const auto& entry) { return entry->id == id; });
+    if (found == runtime.impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    (*found)->fault_state->mark_lost(VK_ERROR_DEVICE_LOST, false);
+    return {};
 }
 
 std::vector<DeviceId> Runtime::devices() const {
@@ -1277,6 +1393,30 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
                                  latest.duration_nanoseconds,
                                  latest.host_timestamp_nanoseconds,
                                  latest.calibration_deviation_nanoseconds};
+}
+
+Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                    [&](const auto& device) { return device->id == id; });
+    if (found == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    const auto& entry = **found;
+    const auto captured = entry.fault_state->diagnostics();
+    DeviceFaultReport report;
+    report.supported = captured.supported;
+    report.queried = captured.queried;
+    report.truncated = captured.truncated;
+    report.loss_result = static_cast<std::int32_t>(entry.fault_state->last_result());
+    report.query_result = captured.query_result;
+    report.description = captured.description;
+    report.addresses.reserve(captured.addresses.size());
+    for (const auto& address : captured.addresses)
+        report.addresses.push_back({address.type, address.reported_address, address.precision});
+    report.vendor_records.reserve(captured.vendor_records.size());
+    for (const auto& vendor : captured.vendor_records)
+        report.vendor_records.push_back({vendor.description, vendor.code, vendor.data});
+    return report;
 }
 
 Result<Event> Runtime::readback(const BufferHandle& buffer) const {

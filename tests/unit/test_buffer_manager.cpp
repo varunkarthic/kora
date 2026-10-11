@@ -162,6 +162,21 @@ TEST(BufferManager, HostContentVersionAdvancesForWritesAndWritableMappings) {
     }
 }
 
+TEST(BufferManager, LostDeviceContentsRequireACompleteHostRewrite) {
+    BufferManager manager;
+    auto handle = std::move(manager.create(4)).value();
+    ASSERT_TRUE(handle.mark_data_lost());
+    EXPECT_EQ(handle.read_bytes().error().code, ErrorCode::DataLoss);
+    EXPECT_EQ(handle.map(MapAccess::Read).error().code, ErrorCode::DataLoss);
+    EXPECT_EQ(handle.map(MapAccess::Write, 0, 2).error().code, ErrorCode::DataLoss);
+
+    const std::array<std::byte, 4> replacement{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+    ASSERT_TRUE(handle.write_bytes(replacement));
+    const auto restored = handle.read_bytes();
+    ASSERT_TRUE(restored);
+    EXPECT_EQ(restored.value(), std::vector<std::byte>(replacement.begin(), replacement.end()));
+}
+
 TEST(BufferManager, ConcurrentAllocateMapReleaseCyclesRemainConsistent) {
     BufferManager manager;
     constexpr std::size_t kThreads = 8;

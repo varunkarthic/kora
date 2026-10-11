@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -13,6 +14,38 @@
 
 namespace kora::vk {
 namespace {
+
+TEST(DeviceFaultState, CapturesOptionalDiagnosticsOnlyOnceAcrossConcurrentLossReports) {
+    DeviceFaultState state;
+    std::atomic<uint32_t> queries{0};
+    state.set_diagnostics_query([&] {
+        ++queries;
+        DeviceFaultSnapshot report;
+        report.query_result = VK_SUCCESS;
+        report.description = "injected diagnostic";
+        report.addresses.push_back({3, 0x1234, 16});
+        report.vendor_records.push_back({"injected vendor record", 7, 9});
+        return report;
+    });
+
+    std::array<std::thread, 8> reporters;
+    for (auto& reporter : reporters) reporter = std::thread([&] { state.mark_lost(VK_ERROR_DEVICE_LOST); });
+    for (auto& reporter : reporters) reporter.join();
+
+    const auto report = state.diagnostics();
+    EXPECT_FALSE(state.healthy());
+    EXPECT_EQ(state.last_result(), VK_ERROR_DEVICE_LOST);
+    EXPECT_EQ(queries.load(), 1U);
+    EXPECT_TRUE(report.supported);
+    EXPECT_TRUE(report.queried);
+    EXPECT_FALSE(report.truncated);
+    EXPECT_EQ(report.query_result, VK_SUCCESS);
+    EXPECT_EQ(report.description, "injected diagnostic");
+    ASSERT_EQ(report.addresses.size(), 1U);
+    EXPECT_EQ(report.addresses.front().reported_address, 0x1234U);
+    ASSERT_EQ(report.vendor_records.size(), 1U);
+    EXPECT_EQ(report.vendor_records.front().code, 7U);
+}
 
 struct Mock {
     std::atomic<uint64_t> submit_calls{0};
@@ -303,33 +336,69 @@ TEST(QueueContext, FenceFallbackReusesBoundedPoolAndEmulatesCompletionValues) {
     EXPECT_EQ(mock.destroyed_fences.load(), 8U);
 }
 
-TEST(QueueContext, ReportsQueueSubmitFailureWithoutBlockingLaterTimelineCompletions) {
+TEST(QueueContext, DeviceLostFailsQueuedSubmissionsAndPreventsFurtherQueueUse) {
     Mock mock;
     mock.fail_first_submit = true;
+    mock.block_first_submit = true;
+    auto fault_state = std::make_shared<DeviceFaultState>();
     auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
-                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, fault_state);
     ASSERT_TRUE(result);
     auto context = std::move(result).value();
+    auto sibling_result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                               reinterpret_cast<VkQueue>(uintptr_t{23}), false, fault_state);
+    ASSERT_TRUE(sibling_result);
+    auto sibling = std::move(sibling_result).value();
     std::atomic<uint64_t> callbacks{0};
     std::atomic<int32_t> first_vk_error{VK_SUCCESS};
-    std::atomic<uint32_t> second_success{0};
+    std::atomic<ErrorCode> first_error{ErrorCode::Ok};
+    std::atomic<ErrorCode> second_error{ErrorCode::Ok};
+    std::mutex callback_mutex;
+    std::condition_variable callback_changed;
     QueueContext::Submission failed;
     failed.on_complete = [&](uint64_t, Status status) {
-        if (!status) first_vk_error = status.error().vk_result;
+        if (!status) {
+            first_vk_error = status.error().vk_result;
+            first_error = status.error().code;
+        }
         ++callbacks;
+        callback_changed.notify_all();
     };
-    QueueContext::Submission succeeded;
-    succeeded.on_complete = [&](uint64_t, Status status) {
-        if (status) ++second_success;
+    QueueContext::Submission queued;
+    queued.on_complete = [&](uint64_t, Status status) {
+        if (!status) second_error = status.error().code;
         ++callbacks;
+        callback_changed.notify_all();
     };
     ASSERT_TRUE(context->submit(std::move(failed)));
-    ASSERT_TRUE(context->submit(std::move(succeeded)));
+    {
+        std::unique_lock lock(mock.gate_mutex);
+        ASSERT_TRUE(mock.gate_changed.wait_for(lock, std::chrono::seconds(5),
+                                               [&] { return mock.first_submit_entered; }));
+    }
+    ASSERT_TRUE(context->submit(std::move(queued)));
+    {
+        std::lock_guard lock(mock.gate_mutex);
+        mock.release_first_submit = true;
+    }
+    mock.gate_changed.notify_all();
+    {
+        std::unique_lock lock(callback_mutex);
+        ASSERT_TRUE(
+            callback_changed.wait_for(lock, std::chrono::seconds(5), [&] { return callbacks.load() == 2; }));
+    }
     ASSERT_TRUE(context->shutdown());
     EXPECT_EQ(callbacks.load(), 2u);
     EXPECT_EQ(first_vk_error.load(), VK_ERROR_DEVICE_LOST);
-    EXPECT_EQ(second_success.load(), 1u);
-    EXPECT_EQ(mock.wait_calls.load(), 1u);
+    EXPECT_EQ(first_error.load(), ErrorCode::DeviceLost);
+    EXPECT_EQ(second_error.load(), ErrorCode::DeviceLost);
+    EXPECT_FALSE(fault_state->healthy());
+    EXPECT_EQ(fault_state->last_result(), VK_ERROR_DEVICE_LOST);
+    EXPECT_EQ(sibling->submit({}).error().code, ErrorCode::DeviceLost);
+    EXPECT_EQ(context->submit({}).error().code, ErrorCode::Cancelled);
+    EXPECT_EQ(mock.submit_calls.load(), 1u);
+    EXPECT_EQ(mock.wait_calls.load(), 0u);
+    EXPECT_TRUE(sibling->shutdown());
 }
 
 TEST(QueueContext, ConcurrentShutdownCallersJoinWorkersSafely) {

@@ -76,6 +76,9 @@ struct Api {
                               VkQueryResultFlags)>
         get_query_pool_results;
     PFN_vkGetCalibratedTimestampsKHR get_calibrated_timestamps = nullptr;
+#ifdef VK_EXT_device_fault
+    PFN_vkGetDeviceFaultInfoEXT get_device_fault_info = nullptr;
+#endif
 
     DispatchFunction<VkResult(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer*)>
         create_buffer;
@@ -182,6 +185,7 @@ struct DeviceOptions {
     bool enable_dedicated_transfer_queue = true;
     bool enable_timeline_semaphore = true;
     bool enable_synchronization2 = true;
+    bool enable_device_fault_diagnostics = true;
 };
 
 struct BufferMemoryInfo {
@@ -199,6 +203,7 @@ public:
         bool buffer_device_address = false;
         bool descriptor_indexing = false;
         bool synchronization2 = false;
+        bool device_fault_diagnostics = false;
     };
 
     Device() = default;
