@@ -44,6 +44,23 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+The Python callback-boundary measurement is an optional companion report and requires the `python`
+CMake preset (which builds the native extension):
+
+```sh
+cmake --preset python
+cmake --build --preset python --parallel
+python3 tools/kora-bench/python_overhead.py --iterations 1000 --warmup 50 --tasks 64 \
+  > kora-python-bench.json
+ctest --test-dir build/python -R KoraBench.PythonSmoke --output-on-failure
+```
+
+The script creates one 64-task plan, warms replay, then records the end-to-end duration of each replay
+with a Python callback for every task. It emits raw `perf_counter_ns` samples and nearest-rank median
+and p95. The timing includes native/Python callback crossings and interpreter scheduling; compare it
+only with measurements from the same host, interpreter, and build. It does not represent GPU dispatch
+or kernel performance.
+
 ## Workloads
 
 | Report name | Measured operation | Notes |
@@ -78,11 +95,18 @@ are recorded alongside them.
 
 CPU-side measurements are always available. Optional GPU cases cover tiny dispatch and size-swept
 vector-add/SAXPY, reduction, tiled scan, tiled matmul, and stencil. Device transfer bandwidth,
-direct-versus-staged copies, raw-Vulkan baselines, and Python overhead are not currently measured.
-Those require additional workload-specific fixtures and
-hardware/environment qualification; do not infer them from other results. Scheduler results do not
+direct-versus-staged copies, and raw-Vulkan baselines are not currently measured; they require
+additional workload-specific fixtures and hardware/environment qualification. Python callback
+overhead is measured separately as documented above. Do not infer transfer or raw-Vulkan behavior
+from other results. Scheduler results do not
 include end-to-end Runtime device selection because the candidate cost model is not yet wired into
 `Runtime::dispatch()`.
+
+One local Python-preset run with 1,000 measured replays and 50 warm-ups recorded a 29,292 ns median
+and 29,791 ns p95 for the 64-callback replay. This is the total plan-replay duration, not a per-callback
+cost; it includes interpreter and callback-boundary overhead. It is a single-host observation, not a
+portable estimate. Re-run the documented command on the target Python interpreter and build before
+making comparisons.
 
 ### Local command-pool sample
 
