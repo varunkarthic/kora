@@ -70,22 +70,15 @@ same-named list. These are hints rather than strict residency requirements; call
 properties separately. Topology affects selection through the rankings created by `DeviceCaps`, not
 through vendor or device identifiers.
 
-`MemoryManager::create()` also establishes one reservation ledger per reported heap. When the
-physical-device snapshot advertises `VK_EXT_memory_budget`, the ledger limit is
-`max(heapBudget - heapUsage, 0)` and records `heapUsage` as external usage. Otherwise the default
-limit is 80% of the Vulkan heap size; callers may provide a finite fallback fraction from 0 through
-1. The fallback is intentionally conservative because heap size does not report current OS or other
-process usage. `available_bytes` in the ledger means the selected KORA reservation limit minus KORA
-reservations; it is not a promise that Vulkan allocation will succeed.
+`MemoryManager::create()` establishes one reservation ledger per reported heap. With `VK_EXT_memory_budget`, the initial soft limit is the configured fraction (80% by default) of `max(heapBudget - heapUsage, 0)`. Without the extension, it applies the same configurable fraction (accepted range 0 through 1) to physical heap size. Limits are clamped to heap size. The fallback is conservative because heap size does not report current OS or other-process usage. `available_bytes` means the KORA soft limit minus KORA reservations; it is not a promise that Vulkan allocation will succeed.
 
 `reserve(heap_index, bytes)` uses checked addition and changes the ledger only if the result is
 within its limit. Arithmetic overflow returns `Overflow`; a valid sum over the limit returns
 `OutOfMemoryBudget`. `release(heap_index, bytes)` rejects a release greater than the current
 reservation with `InternalInvariantViolation`, preserving state on failure. Debug builds assert
-after each successful mutation that reserved bytes do not exceed the limit. Invalid heap indices
-return `InvalidArgument`. The ledger accounts for KORA reservations only; callers must reserve and
-release around successful allocation and destruction, and must not interpret these estimates as a
-replacement for Vulkan allocation error handling.
+after each successful mutation that reserved bytes do not exceed the limit. Invalid heap indices return `InvalidArgument`. The ledger tracks backing `VkDeviceMemory` allocations: each pooled block is reserved once, not once per suballocation, and released when the block or dedicated allocation is freed. Failed Vulkan allocations release their provisional reservation and lower the effective heap limit by 20%, without shrinking below live reservations.
+
+`MemoryManager::refresh_budget(physical_device, fallback_fraction)` replaces the observed heap snapshot. Runtime refreshes at most once per second before creating a new device buffer and on explicit `Runtime::memory_stats()` reads. Extension-based refresh accounts for KORA's own reservations separately from external usage, then reapplies the configured soft-limit fraction to remaining capacity. Without live extension telemetry, refresh preserves allocation-failure reductions. If a new observation is lower than current reservations, those allocations remain valid: the effective limit is held at the reserved amount, available bytes become zero, and no new reservations are admitted until capacity returns or allocations are freed. Available-byte calculation is underflow-safe, and accepted limits cannot exceed physical heap size. Vulkan allocation errors remain authoritative.
 
 ## Logical buffer residency
 
@@ -156,6 +149,18 @@ stateDiagram-v2
 ```
 
 ### API reference and transfer policy
+
+Memory-budget function contracts:
+
+| Function | Contract |
+| --- | --- |
+| `MemoryManager::create(physical_device, device_info, fallback_heap_fraction)` | Establishes per-heap soft limits from extension-reported free budget or, without the extension, the configured heap-size fraction. |
+| `MemoryManager::refresh_budget(physical_device, fallback_heap_fraction)` | Refreshes telemetry while retaining reservations and preserving failure shrinkage when telemetry is unavailable. |
+| `MemoryManager::reserve(heap_index, bytes)` / `release(heap_index, bytes)` | Accounts for backing Vulkan allocations exactly once and rejects over-budget or underflow mutations. |
+| `MemoryManager::record_allocation_failure(heap_index, shrink_factor)` | Reduces future admission capacity while preserving live reservations. |
+| `Runtime::memory_stats(device)` | Refreshes memory budget and returns pool and per-heap snapshots. |
+
+Residency function contracts:
 
 | Function | Contract |
 | --- | --- |

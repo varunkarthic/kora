@@ -23,6 +23,7 @@ struct HeapBudget {
     std::uint64_t limit_bytes = 0;
     std::uint64_t externally_used_bytes = 0;
     bool queried = false;
+    std::uint64_t heap_size_bytes = 0;
 };
 
 struct HeapBudgetStats {
@@ -40,12 +41,15 @@ public:
 
     Status reserve(std::uint32_t heap_index, std::uint64_t bytes);
     Status release(std::uint32_t heap_index, std::uint64_t bytes);
+    Status refresh(std::vector<HeapBudget> heaps);
+    Status record_allocation_failure(std::uint32_t heap_index, double shrink_factor = 0.8);
     Result<HeapBudgetStats> stats(std::uint32_t heap_index) const;
     std::size_t heap_count() const noexcept { return heaps_.size(); }
 
 private:
     std::vector<HeapBudget> heaps_;
     std::vector<std::uint64_t> reserved_bytes_;
+    std::vector<double> shrink_factors_;
 };
 
 /// Selects legal memory types in policy order and tracks per-heap budget reservations.
@@ -63,6 +67,8 @@ public:
                                              const MemoryTypeRequirements& required = {}) const;
     Status reserve(std::uint32_t heap_index, std::uint64_t bytes);
     Status release(std::uint32_t heap_index, std::uint64_t bytes);
+    Status refresh_budget(const vk::PhysicalDeviceInfo& physical_device, double fallback_heap_fraction = 0.8);
+    Status record_allocation_failure(std::uint32_t heap_index, double shrink_factor = 0.8);
     Result<HeapBudgetStats> budget(std::uint32_t heap_index) const;
     static Result<kora::MemoryStats> aggregate_stats(std::span<const MemoryPoolStats> pools);
 

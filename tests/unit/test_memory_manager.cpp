@@ -137,6 +137,39 @@ TEST(BudgetLedger, CheckedArithmeticAndInvalidOperationsDoNotMutateState) {
     EXPECT_EQ(ledger.stats(1).error().code, ErrorCode::InvalidArgument);
 }
 
+TEST(BudgetLedger, RefreshClampsToHeapAndPreservesExistingReservations) {
+    BudgetLedger ledger({HeapBudget{800, 0, false, 1000}});
+    ASSERT_TRUE(ledger.reserve(0, 600));
+    ASSERT_TRUE(ledger.refresh({HeapBudget{100, 50, true, 1000}}));
+    auto snapshot = ledger.stats(0);
+    ASSERT_TRUE(snapshot);
+    EXPECT_EQ(snapshot.value().limit_bytes, 600U);
+    EXPECT_EQ(snapshot.value().reserved_bytes, 600U);
+    EXPECT_EQ(snapshot.value().available_bytes, 0U);
+    EXPECT_EQ(ledger.reserve(0, 1).error().code, ErrorCode::OutOfMemoryBudget);
+
+    ASSERT_TRUE(ledger.refresh({HeapBudget{2000, 0, true, 1000}}));
+    EXPECT_EQ(ledger.stats(0).value().limit_bytes, 1000U);
+
+    BudgetLedger oversized({HeapBudget{2000, 0, true, 1000}});
+    EXPECT_EQ(oversized.stats(0).value().limit_bytes, 1000U);
+}
+
+TEST(BudgetLedger, FailedAllocationShrinksUnreservedBudgetSafely) {
+    BudgetLedger ledger({HeapBudget{1000, 0, false, 1200}});
+    ASSERT_TRUE(ledger.reserve(0, 200));
+    ASSERT_TRUE(ledger.record_allocation_failure(0));
+    auto snapshot = ledger.stats(0);
+    ASSERT_TRUE(snapshot);
+    EXPECT_EQ(snapshot.value().limit_bytes, 800U);
+    EXPECT_EQ(snapshot.value().available_bytes, 600U);
+    ASSERT_TRUE(ledger.record_allocation_failure(0, 0.5));
+    EXPECT_EQ(ledger.stats(0).value().limit_bytes, 400U);
+    ASSERT_TRUE(ledger.refresh({HeapBudget{1000, 0, true, 1200}}));
+    EXPECT_EQ(ledger.stats(0).value().limit_bytes, 400U);
+    EXPECT_EQ(ledger.record_allocation_failure(0, 1.1).error().code, ErrorCode::InvalidArgument);
+}
+
 TEST(MemoryManager, AggregatesPoolTelemetryAndRejectsOverflow) {
     const std::vector<kora::detail::MemoryPoolStats> pools{
         {.reserved_bytes = 1024,
@@ -205,9 +238,20 @@ TEST(MemoryManager, UsesBudgetExtensionOrConservativeHeapFraction) {
     ASSERT_TRUE(queried) << queried.error().describe();
     const auto queried_budget = queried.value().budget(0);
     ASSERT_TRUE(queried_budget);
-    EXPECT_EQ(queried_budget.value().limit_bytes, 450U);
+    EXPECT_EQ(queried_budget.value().limit_bytes, 360U);
     EXPECT_EQ(queried_budget.value().externally_used_bytes, 250U);
     EXPECT_TRUE(queried_budget.value().queried);
+    ASSERT_TRUE(queried.value().reserve(0, 100));
+    raw.memory_budget_properties.heapUsage[0] = 350;
+    ASSERT_TRUE(queried.value().refresh_budget(raw));
+    const auto refreshed = queried.value().budget(0);
+    ASSERT_TRUE(refreshed);
+    EXPECT_EQ(refreshed.value().limit_bytes, 360U);
+    EXPECT_EQ(refreshed.value().reserved_bytes, 100U);
+    EXPECT_EQ(refreshed.value().externally_used_bytes, 250U);
+    ASSERT_TRUE(queried.value().record_allocation_failure(0));
+    ASSERT_TRUE(queried.value().refresh_budget(raw));
+    EXPECT_EQ(queried.value().budget(0).value().limit_bytes, 288U);
     EXPECT_EQ(MemoryManager::create(raw, info, 1.1).error().code, ErrorCode::InvalidArgument);
 }
 

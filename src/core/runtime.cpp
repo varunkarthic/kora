@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -45,7 +46,7 @@ struct BufferIdHash {
 struct RuntimeBufferState {
     vk::Api api;
     VkDevice device = VK_NULL_HANDLE;
-    detail::MemoryManager* memory_manager = nullptr;
+    std::function<Status()> refresh_budget;
     detail::TransferEngine* transfers = nullptr;
     std::vector<detail::MemoryPool*> pools;
     detail::MemoryPool* host_pool = nullptr;
@@ -176,11 +177,27 @@ struct Runtime::Impl {
                 const auto& selected_type = info.memory_types()[index];
                 detail::MemoryPoolConfig config;
                 config.memory_type_index = index;
+                config.heap_index = selected_type.heap_index;
                 config.host_visible = selected_type.host_visible;
                 config.host_coherent = selected_type.host_coherent;
                 config.heap_size = info.memory_heaps()[selected_type.heap_index].size_bytes;
-                config.budget = config.heap_size;
-                config.block_size_hint = 16U * 1024U * 1024U;
+                auto initial_budget = memory_manager.budget(config.heap_index);
+                if (!initial_budget) return Status(std::move(initial_budget).error());
+                config.budget = initial_budget.value().limit_bytes;
+                config.block_size_hint = std::max<std::uint64_t>(
+                    std::min<std::uint64_t>(16U * 1024U * 1024U, config.budget), 1U * 1024U * 1024U);
+                config.reserve_budget = [this, heap = config.heap_index](std::uint64_t bytes) {
+                    std::lock_guard lock(budget_mutex);
+                    return memory_manager.reserve(heap, bytes);
+                };
+                config.release_budget = [this, heap = config.heap_index](std::uint64_t bytes) {
+                    std::lock_guard lock(budget_mutex);
+                    return memory_manager.release(heap, bytes);
+                };
+                config.allocation_failed = [this, heap = config.heap_index] {
+                    std::lock_guard lock(budget_mutex);
+                    return memory_manager.record_allocation_failure(heap);
+                };
                 auto pool = detail::MemoryPool::create(device, config);
                 if (!pool) return Status(std::move(pool).error());
                 if (selected_type.host_visible && !host_pool_index) host_pool_index = index;
@@ -209,7 +226,7 @@ struct Runtime::Impl {
             auto buffer_state = std::make_shared<detail::RuntimeBufferState>();
             buffer_state->api = device.api();
             buffer_state->device = device.handle();
-            buffer_state->memory_manager = &memory_manager;
+            buffer_state->refresh_budget = [this] { return refresh_budget_if_due(); };
             buffer_state->transfers = transfers.get();
             for (auto& pool : pools) buffer_state->pools.push_back(pool.get());
             buffer_state->host_pool = pools[*host_pool_index].get();
@@ -225,6 +242,26 @@ struct Runtime::Impl {
             dispatch->transfer_queue = transfer_queue;
             dispatch->queue_family_policy = queue_family_policy;
             return {};
+        }
+
+        void configure_budget_refresh(vk::Instance& instance_value, double fallback_fraction) {
+            instance = &instance_value;
+            memory_budget_fraction = fallback_fraction;
+        }
+
+        Status refresh_budget_if_due(bool force = false) const {
+            const auto now = std::chrono::steady_clock::now();
+            std::lock_guard lock(budget_mutex);
+            if (!force && now - last_budget_refresh < std::chrono::seconds(1)) return {};
+            auto physical_devices = instance->physical_devices();
+            if (!physical_devices) return Status(std::move(physical_devices).error());
+            if (id.index >= physical_devices.value().size())
+                return Error(ErrorCode::InternalInvariantViolation,
+                             "physical device index changed during budget refresh");
+            auto status =
+                memory_manager.refresh_budget(physical_devices.value()[id.index], memory_budget_fraction);
+            if (status) last_budget_refresh = now;
+            return status;
         }
 
         void calibrate(const std::filesystem::path& directory, std::uint32_t budget_ms) noexcept {
@@ -269,11 +306,15 @@ struct Runtime::Impl {
 
         DeviceId id;
         DeviceInfo info;
-        detail::MemoryManager memory_manager;
+        mutable detail::MemoryManager memory_manager;
         vk::Device device;
         vk::QueueFamilyPolicy queue_family_policy;
         std::unique_ptr<detail::kernel::PipelineManager> pipelines;
         mutable std::mutex pools_mutex;
+        mutable std::mutex budget_mutex;
+        mutable std::chrono::steady_clock::time_point last_budget_refresh{};
+        vk::Instance* instance = nullptr;
+        double memory_budget_fraction = 0.8;
         std::vector<std::unique_ptr<detail::MemoryPool>> pools;
         std::unique_ptr<detail::TransferEngine> transfers;
         std::shared_ptr<detail::DispatchContext> dispatch;
@@ -636,6 +677,10 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
     const auto size = handle.size_bytes();
     if (size == 0 || size > context->info->limits().max_storage_buffer_range)
         return Error(ErrorCode::InvalidArgument, "buffer size is zero or exceeds maxStorageBufferRange");
+    if (context->buffer_state->refresh_budget) {
+        auto refreshed = context->buffer_state->refresh_budget();
+        if (!refreshed) return std::move(refreshed).error();
+    }
 
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -925,6 +970,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         auto entry = std::make_unique<Impl::DeviceEntry>(
             id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
             std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync);
+        entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();
@@ -959,12 +1005,15 @@ Result<MemoryStats> Runtime::memory_stats(const DeviceId& id) const {
     if (found == impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     const auto& entry = **found;
+    auto refreshed = entry.refresh_budget_if_due(true);
+    if (!refreshed) return std::move(refreshed).error();
     std::lock_guard lock(entry.pools_mutex);
     std::vector<detail::MemoryPoolStats> pool_stats;
     pool_stats.reserve(entry.pools.size());
     for (const auto& pool : entry.pools) pool_stats.push_back(pool->stats());
     auto aggregate = detail::MemoryManager::aggregate_stats(pool_stats);
     if (!aggregate) return std::move(aggregate).error();
+    std::lock_guard budget_lock(entry.budget_mutex);
     for (std::uint32_t index = 0; index < entry.info.memory_heaps().size(); ++index) {
         auto budget = entry.memory_manager.budget(index);
         if (!budget) return std::move(budget).error();

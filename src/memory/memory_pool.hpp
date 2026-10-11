@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,7 @@ enum class MemoryUsageClass : std::uint8_t { General, Upload, Readback };
 
 struct MemoryPoolConfig {
     std::uint32_t memory_type_index = 0;
+    std::uint32_t heap_index = 0;
     MemoryUsageClass usage = MemoryUsageClass::General;
     bool host_visible = false;
     bool host_coherent = false;
@@ -22,6 +24,9 @@ struct MemoryPoolConfig {
     std::uint64_t heap_size = 0;
     std::uint64_t budget = 0;
     std::uint64_t block_size_hint = 0;
+    std::function<Status(std::uint64_t)> reserve_budget;
+    std::function<Status(std::uint64_t)> release_budget;
+    std::function<Status()> allocation_failed;
 };
 
 struct PoolAllocationRequest {
@@ -82,7 +87,7 @@ private:
     Result<std::unique_ptr<Block>> create_block(std::uint64_t size);
     Result<PoolAllocation> allocate_dedicated(const PoolAllocationRequest& request);
     Result<VkDeviceMemory> allocate_memory(std::uint64_t size);
-    void destroy_memory(VkDeviceMemory memory, void* mapped) noexcept;
+    void destroy_memory(VkDeviceMemory memory, void* mapped, std::uint64_t size) noexcept;
 
     const vk::Device* device_ = nullptr;
     MemoryPoolConfig config_;

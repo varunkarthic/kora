@@ -12,12 +12,14 @@ namespace {
 constexpr std::uint64_t kMiB = 1024U * 1024U;
 
 std::uint64_t choose_block_size(const MemoryPoolConfig& config) {
-    if (config.block_size_hint != 0) return config.block_size_hint;
     const auto available = config.budget == 0 ? config.heap_size : std::min(config.heap_size, config.budget);
+    if (available == 0) return 0;
+    if (config.block_size_hint != 0) return std::min(config.block_size_hint, available);
     const auto divisor = config.host_visible ? 128U : 64U;
     const auto minimum = (config.host_visible ? 8U : 16U) * kMiB;
     const auto maximum = (config.host_visible ? 64U : 256U) * kMiB;
-    return std::clamp(available / divisor, minimum, maximum);
+    return std::min(std::max(std::min(available / divisor, maximum), std::min(minimum, available)),
+                    available);
 }
 
 }  // namespace
@@ -28,6 +30,7 @@ struct MemoryPool::Block {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     void* mapped = nullptr;
     Suballocator allocator;
+    std::uint64_t size = 0;
 };
 
 struct MemoryPool::Dedicated {
@@ -54,12 +57,16 @@ MemoryPool::MemoryPool(const vk::Device& device, MemoryPoolConfig config, std::u
 MemoryPool::~MemoryPool() {
     for (auto& [token, allocation] : dedicated_) {
         static_cast<void>(token);
-        destroy_memory(allocation.memory, allocation.mapped);
+        destroy_memory(allocation.memory, allocation.mapped, allocation.size);
     }
-    for (auto& block : blocks_) destroy_memory(block->memory, block->mapped);
+    for (auto& block : blocks_) destroy_memory(block->memory, block->mapped, block->size);
 }
 
 Result<VkDeviceMemory> MemoryPool::allocate_memory(std::uint64_t size) {
+    if (config_.reserve_budget) {
+        auto reserved = config_.reserve_budget(size);
+        if (!reserved) return std::move(reserved).error();
+    }
     VkMemoryAllocateFlagsInfo flags{};
     flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
     if (config_.device_address) flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
@@ -72,6 +79,8 @@ Result<VkDeviceMemory> MemoryPool::allocate_memory(std::uint64_t size) {
     ++device_allocation_calls_;
     const auto result = device_->api().allocate_memory(device_->handle(), &info, nullptr, &memory);
     if (result != VK_SUCCESS) {
+        if (config_.release_budget) (void)config_.release_budget(size);
+        if (config_.allocation_failed) (void)config_.allocation_failed();
         block_size_ = std::max<std::uint64_t>(block_size_ / 2, 1U * kMiB);
         return Error(ErrorCode::AllocationFailed, "vkAllocateMemory failed for memory-pool block")
             .with_vk(result);
@@ -85,17 +94,19 @@ Result<std::unique_ptr<MemoryPool::Block>> MemoryPool::create_block(std::uint64_
     if (config_.host_visible) {
         const auto result = device_->api().map_memory(device_->handle(), memory, 0, size, 0, &mapped);
         if (result != VK_SUCCESS) {
-            device_->api().free_memory(device_->handle(), memory, nullptr);
+            destroy_memory(memory, nullptr, size);
             return Error(ErrorCode::AllocationFailed, "vkMapMemory failed for persistently mapped block")
                 .with_vk(result);
         }
     }
     auto allocator = Suballocator::create(size);
     if (!allocator) {
-        destroy_memory(memory, mapped);
+        destroy_memory(memory, mapped, size);
         return std::move(allocator).error();
     }
-    return std::make_unique<Block>(memory, mapped, std::move(allocator).value());
+    auto block = std::make_unique<Block>(memory, mapped, std::move(allocator).value());
+    block->size = size;
+    return block;
 }
 
 Result<PoolAllocation> MemoryPool::allocate_dedicated(const PoolAllocationRequest& request) {
@@ -104,7 +115,7 @@ Result<PoolAllocation> MemoryPool::allocate_dedicated(const PoolAllocationReques
     if (config_.host_visible) {
         const auto result = device_->api().map_memory(device_->handle(), memory, 0, request.size, 0, &mapped);
         if (result != VK_SUCCESS) {
-            device_->api().free_memory(device_->handle(), memory, nullptr);
+            destroy_memory(memory, nullptr, request.size);
             return Error(ErrorCode::AllocationFailed, "vkMapMemory failed for dedicated memory allocation")
                 .with_vk(result);
         }
@@ -182,7 +193,7 @@ Status MemoryPool::deallocate(const PoolAllocation& allocation) {
             entry->second.size != allocation.requested_size) {
             return Error(ErrorCode::InvalidArgument, "dedicated pool allocation is unknown or invalid");
         }
-        destroy_memory(entry->second.memory, entry->second.mapped);
+        destroy_memory(entry->second.memory, entry->second.mapped, entry->second.size);
         dedicated_.erase(entry);
         return ok_status();
     }
@@ -194,9 +205,12 @@ Status MemoryPool::deallocate(const PoolAllocation& allocation) {
         Suballocation{allocation.offset, allocation.requested_size, allocation.allocated_size});
 }
 
-void MemoryPool::destroy_memory(VkDeviceMemory memory, void* mapped) noexcept {
+void MemoryPool::destroy_memory(VkDeviceMemory memory, void* mapped, std::uint64_t size) noexcept {
     if (mapped != nullptr) device_->api().unmap_memory(device_->handle(), memory);
-    if (memory != VK_NULL_HANDLE) device_->api().free_memory(device_->handle(), memory, nullptr);
+    if (memory != VK_NULL_HANDLE) {
+        device_->api().free_memory(device_->handle(), memory, nullptr);
+        if (config_.release_budget) (void)config_.release_budget(size);
+    }
 }
 
 MemoryPoolStats MemoryPool::stats() const noexcept {
