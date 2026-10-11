@@ -70,6 +70,7 @@ api/version
 api/checked
 api/buffer
 api/event
+api/kernel
 ```
 
 ## Documentation guarantees

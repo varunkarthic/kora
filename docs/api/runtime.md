@@ -6,7 +6,8 @@ Header: `include/kora/runtime.hpp`
 
 `Runtime::create(options)` resolves the provided `RuntimeOptions`, loads Vulkan, creates one instance,
 selects eligible compute devices with the existing device-selection policy, creates their logical
-devices, and constructs a memory manager for each selected device. Expected initialization failures
+devices, constructs a memory manager and a pool for each reported Vulkan memory type, and initializes
+the queue/transfer services needed by the dispatch API. Expected initialization failures
 are returned as `Result<Runtime>`. The move-only Runtime owns the loader, instance, logical devices, and
 device memory-manager state; destroying it releases logical devices before the instance and loader.
 
@@ -21,13 +22,36 @@ snapshot for that selected device. `memory_stats(id)` rejects IDs not owned by t
 `MemoryStats` is Vulkan-header-free. Its pool byte counters are checked sums over tracked pools;
 `largest_free_block` is the maximum contiguous free region across those pools. `heaps` reports the
 per-heap budget limit, KORA reservations, remaining reservation allowance, external usage when Vulkan
-reports it, and whether the budget extension was queried. If no pool allocations are registered yet,
-pool counters are zero while heap budget information is still available. The current buffer façade is
-not yet backed by Vulkan memory pools, so this is a diagnostic foundation for that integration.
+reports it, and whether the budget extension was queried. Runtime-owned transfer staging buffers are
+allocated during initialization, and lazily created storage buffers are reflected in pool counters.
 
 The snapshot is taken while holding the Runtime's per-device pool-registry lock. It is not a promise
 that a later Vulkan allocation will succeed: the operating system and other processes may consume
 memory between the snapshot and allocation.
+
+## Buffers, kernels, and dispatch
+
+`Runtime::create_buffer<T>(count)` creates typed host-shadow storage. `Buffer<T>::write(span)` copies
+exactly `count` trivially-copyable values into that shadow; `read()` returns a copy. The first runtime
+execution path creates a Vulkan storage buffer lazily, uploads read/read-write shadows, submits one
+compute dispatch, then downloads write/read-write outputs before the returned `Event` completes.
+This conservative path is correct but synchronizes input uploads and performs output readback; it does
+not yet provide cross-dispatch device residency or graph-level transfer elision.
+
+`load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module.
+The metadata is checked against reflected descriptor bindings, push-constant size, local size, and
+specialization constants when the pipeline is created. `dispatch(kernel)` returns a fluent
+`DispatchBuilder`; each `.read`, `.write`, or `.read_write` call corresponds to the next metadata
+binding in vector order. `global(x[, y, z])` specifies invocation extents (not work-group counts), and
+the runtime rounds each dimension up by the reflected local size. A bounds check in the shader remains
+the caller's responsibility for non-multiple extents. `.push(value)` copies a trivially-copyable
+value's bytes; its total size must exactly match metadata and fit the selected device's push-constant
+limit. `submit()` returns an `Event` whose `wait()` covers compute completion and output readback.
+
+This first dispatch version supports storage-buffer descriptors only. Other descriptor kinds return
+`UnsupportedFeature`. Invalid dimensions, binding counts/access modes, push-constant sizes, and device
+limits are rejected before pipeline/dispatch Vulkan calls. A runtime, its `Kernel`, and builders should
+not be used concurrently with or after destruction of that runtime.
 
 ## Example
 
@@ -52,8 +76,5 @@ for (const auto& device : runtime.value().devices()) {
 
 - UUID selection requires UUID properties; Vulkan 1.0 devices without the properties2 identity query do
   not produce a UUID and therefore cannot match `ByUuid` selection.
-- The Runtime currently creates the selected device and memory manager, but the existing host-shadow
-  `BufferManager` has not yet been connected to Vulkan pools. Consequently pool counters remain zero
-  until a pool-allocating runtime subsystem registers pools.
-- `DevicePolicy::AllEligible` creates all selected logical devices; callers should account for the
-  associated driver resources.
+- `DevicePolicy::AllEligible` initializes queue and transfer services for every selected device;
+  callers should account for the associated driver resources and staging allocations.

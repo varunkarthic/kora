@@ -55,6 +55,7 @@ struct ComputePipeline {
     VkPipeline handle = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
+    std::vector<KernelBindingMetadata> bindings;
     std::uint64_t key_hash = 0;
 
 private:
@@ -80,6 +81,9 @@ public:
 
     Result<PipelineRef> get_or_create(std::span<const std::uint32_t> module, const KernelMetadata& metadata,
                                       std::string_view entry_point = "main");
+    Result<PipelineRef> get_or_create(std::span<const std::uint32_t> module, const KernelMetadata& metadata,
+                                      std::span<const SpecializationConstantMetadata> overrides,
+                                      std::string_view entry_point = "main");
     Result<VkDescriptorSet> allocate_descriptor_set(const PipelineRef& pipeline, std::uint32_t set_index);
     Status free_descriptor_set(VkDescriptorSet descriptor_set);
     Status save_pipeline_cache();
@@ -100,6 +104,7 @@ private:
     Result<VkPipelineLayout> pipeline_layout(const KernelMetadata& metadata,
                                              const std::vector<VkDescriptorSetLayout>& set_layouts);
     Result<PipelineRef> create_pipeline(std::span<const std::uint32_t> module, const KernelMetadata& metadata,
+                                        std::span<const SpecializationConstantMetadata> specialization,
                                         std::string_view entry_point, std::string key,
                                         std::uint64_t key_hash);
     Status grow_descriptor_pools(VkDescriptorSetLayout layout);

@@ -1,6 +1,7 @@
 #include "kernel/spirv.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cmath>
@@ -108,11 +109,14 @@ class ModuleParser {
 public:
     explicit ModuleParser(std::span<const std::uint32_t> words) : words_(words) {}
 
+    Status validate_header() { return validate_header_impl(); }
+    Status parse_instructions() { return parse_instructions_impl(); }
+
     Result<Reflection> run(const KernelMetadata& metadata, const DeviceCapabilities& device,
                            std::string_view selected_entry_point) {
-        auto header = validate_header();
+        auto header = validate_header_impl();
         if (!header) return std::move(header).error();
-        auto instructions = parse_instructions();
+        auto instructions = parse_instructions_impl();
         if (!instructions) return std::move(instructions).error();
 
         Reflection reflection;
@@ -130,9 +134,27 @@ public:
 
         const auto local_size = execution_sizes_.find(entry->id);
         if (local_size == execution_sizes_.end()) return invalid("compute entry point has no LocalSize mode");
-        if (local_size->second.id_based)
-            return invalid("LocalSizeId execution modes are not supported by metadata version 1");
         reflection.local_size = local_size->second.dimensions;
+        reflection.local_size_id_based = local_size->second.id_based;
+        if (local_size->second.id_based) {
+            reflection.local_size_ids = local_size->second.dimensions;
+            for (std::size_t dimension = 0; dimension < 3; ++dimension) {
+                const auto constant = std::find_if(
+                    spec_constants_.begin(), spec_constants_.end(),
+                    [&](const auto& item) { return item.result_id == reflection.local_size_ids[dimension]; });
+                if (constant == spec_constants_.end())
+                    return invalid("LocalSizeId must refer directly to a scalar specialization constant");
+                const auto decoration = decorations_.find(constant->result_id);
+                const auto type = types_.find(constant->type_id);
+                if (decoration == decorations_.end() || !decoration->second.spec_id || type == types_.end() ||
+                    type->second.kind != TypeKind::Integer || type->second.width != 32 ||
+                    type->second.is_signed || constant->boolean)
+                    return invalid("LocalSizeId specialization constants must be unsigned 32-bit integers");
+                reflection.local_size_spec_ids[dimension] = *decoration->second.spec_id;
+                reflection.local_size_spec_defaults[dimension] = static_cast<std::uint32_t>(constant->bits);
+                reflection.local_size[dimension] = reflection.local_size_spec_defaults[dimension];
+            }
+        }
         if (std::any_of(reflection.local_size.begin(), reflection.local_size.end(),
                         [](std::uint32_t dimension) { return dimension == 0; }))
             return invalid("LocalSize dimensions must all be nonzero");
@@ -154,7 +176,7 @@ public:
     }
 
 private:
-    Status validate_header() const {
+    Status validate_header_impl() const {
         if (words_.size() < kHeaderWords) return invalid("module is shorter than the five-word header");
         if (words_.size() > kMaximumModuleWords) return invalid("module exceeds the 16 MiB word limit");
         if (words_[0] != kMagic) return invalid("invalid magic number or byte order");
@@ -183,7 +205,7 @@ private:
         return invalid("instruction contains an unterminated literal string");
     }
 
-    Status parse_instructions() {
+    Status parse_instructions_impl() {
         std::size_t cursor = kHeaderWords;
         while (cursor < words_.size()) {
             const auto instruction = words_[cursor];
@@ -767,7 +789,7 @@ private:
     }
 
     Status compare_metadata(const Reflection& reflection, const KernelMetadata& metadata) const {
-        if (reflection.local_size != metadata.local_size)
+        if (!reflection.local_size_id_based && reflection.local_size != metadata.local_size)
             return invalid("local_size does not match the selected entry point");
         if (reflection.bindings.size() != metadata.bindings.size())
             return invalid("bindings count does not match the module");
@@ -810,10 +832,14 @@ private:
             const auto path = "specialization_constants[" + std::to_string(i) + "]";
             if (found == reflection.specialization_constants.end())
                 return invalid(path + ".id is absent from the module");
+            const bool is_local_size =
+                reflection.local_size_id_based &&
+                std::find(reflection.local_size_spec_ids.begin(), reflection.local_size_spec_ids.end(),
+                          expected.id) != reflection.local_size_spec_ids.end();
             if (found->type != expected.type) return invalid(path + ".type does not match the module");
             if (!expected.name.empty() && !found->name.empty() && found->name != expected.name)
                 return invalid(path + ".name does not match the module");
-            if (!same_spec_value(*found, expected))
+            if (!is_local_size && !same_spec_value(*found, expected))
                 return invalid(path + ".default does not match the module");
         }
         return {};
@@ -922,6 +948,16 @@ Result<Reflection> validate_and_reflect(std::span<const std::uint32_t> words, co
     if (!tools_status) return std::move(tools_status).error();
 #endif
     return ModuleParser(words).run(metadata, device, entry_point);
+}
+
+Status validate_module_structure(std::span<const std::uint32_t> words) {
+    if (words.size() < kHeaderWords) return invalid("module is shorter than the five-word header");
+    if (words.size() > kMaximumModuleWords) return invalid("module exceeds the 16 MiB word limit");
+    if (words[0] != kMagic) return invalid("invalid magic number or byte order");
+    ModuleParser parser(words);
+    auto header = parser.validate_header();
+    if (!header) return header;
+    return parser.parse_instructions();
 }
 
 }  // namespace kora::detail::spirv

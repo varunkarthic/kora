@@ -2,8 +2,10 @@
 
 `kora/buffer.hpp` provides the first logical-buffer API layer: reference-counted handles, typed
 host-shadow storage, mapped ranges, generation-checked identities, and completion-gated reclamation.
-This layer is CPU-side bookkeeping today. It does not create a Vulkan `VkBuffer`, upload data, or
-claim device residency; those behaviors will be integrated by later execution and residency work.
+The standalone `BufferManager` is CPU-side bookkeeping. When created through `Runtime`, a buffer can
+be bound to a storage-buffer kernel: the first dispatch creates a Vulkan `VkBuffer` lazily and uses
+the host shadow as its upload/readback source. This initial path synchronizes transfers and does not
+yet retain authoritative multi-device replicas between dispatches.
 
 ## Create and map
 
@@ -34,6 +36,11 @@ when the map succeeds (a conservative declaration, even if the caller does not m
 `MapAccess` is a caller contract; the current C++ view remains mutable for all modes, so callers must
 not write through a `Read` mapping.
 Dirty-range merging and non-coherent Vulkan flush alignment are separate follow-up behavior.
+
+`Buffer<T>::write(span)` and `read(span)` provide checked whole-buffer copies without exposing a
+long-lived mapping. The element count must exactly match the buffer capacity. `read()` returns a newly
+allocated vector. After `Event::wait()` succeeds for a runtime dispatch, these methods observe its
+GPU output copied back to the host shadow.
 
 ## References, use tracking, and deferred free
 

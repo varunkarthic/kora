@@ -61,6 +61,10 @@ struct DeviceState {
     PFN_vkCreatePipelineCache create_pipeline_cache = nullptr;
     PFN_vkDestroyPipelineCache destroy_pipeline_cache = nullptr;
     PFN_vkGetPipelineCacheData get_pipeline_cache_data = nullptr;
+    PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+    PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
+    PFN_vkCmdPushConstants cmd_push_constants = nullptr;
+    PFN_vkCmdDispatch cmd_dispatch = nullptr;
     PFN_vkCreateBuffer create_buffer = nullptr;
     PFN_vkDestroyBuffer destroy_buffer = nullptr;
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
@@ -706,6 +710,7 @@ struct Device::State {
     uint32_t transfer_queue_family = std::numeric_limits<uint32_t>::max();
     EnabledFeatures enabled_features;
     std::vector<std::string> enabled_extensions;
+    BufferMemoryInfo buffer_memory_info;
     PFN_vkDestroyDevice destroy_device = nullptr;
 
     ~State() {
@@ -1108,6 +1113,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     get_device_queue(device_state->device, transfer_family, 0, &device_state->transfer_queue);
     device_state->compute_queue_family = compute_family;
     device_state->transfer_queue_family = transfer_family;
+    device_state->buffer_memory_info.memory_properties = physical_device.memory_properties;
+    device_state->buffer_memory_info.memory_type_count = physical_device.memory_properties.memoryTypeCount;
+    device_state->buffer_memory_info.properties = physical_device.properties;
     device_state->enabled_features = {timeline, bda, descriptor_indexing, sync2};
     for (const char* extension : extensions) device_state->enabled_extensions.emplace_back(extension);
 
@@ -1145,6 +1153,14 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkDestroyPipelineCache");
     api_state->get_pipeline_cache_data = load_device_function<PFN_vkGetPipelineCacheData>(
         get_device_proc, device_state->device, "vkGetPipelineCacheData");
+    api_state->cmd_bind_pipeline = load_device_function<PFN_vkCmdBindPipeline>(
+        get_device_proc, device_state->device, "vkCmdBindPipeline");
+    api_state->cmd_bind_descriptor_sets = load_device_function<PFN_vkCmdBindDescriptorSets>(
+        get_device_proc, device_state->device, "vkCmdBindDescriptorSets");
+    api_state->cmd_push_constants = load_device_function<PFN_vkCmdPushConstants>(
+        get_device_proc, device_state->device, "vkCmdPushConstants");
+    api_state->cmd_dispatch =
+        load_device_function<PFN_vkCmdDispatch>(get_device_proc, device_state->device, "vkCmdDispatch");
     api_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device_state->device, "vkCreateBuffer");
     api_state->destroy_buffer =
@@ -1226,6 +1242,10 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.create_pipeline_cache = api_state->create_pipeline_cache;
     api.destroy_pipeline_cache = api_state->destroy_pipeline_cache;
     api.get_pipeline_cache_data = api_state->get_pipeline_cache_data;
+    api.cmd_bind_pipeline = api_state->cmd_bind_pipeline;
+    api.cmd_bind_descriptor_sets = api_state->cmd_bind_descriptor_sets;
+    api.cmd_push_constants = api_state->cmd_push_constants;
+    api.cmd_dispatch = api_state->cmd_dispatch;
     api.create_buffer = {api_state.get(), create_buffer};
     api.destroy_buffer = {api_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
@@ -1286,6 +1306,10 @@ const std::vector<std::string>& Device::enabled_extensions() const noexcept {
 const Api& Device::api() const noexcept {
     return api_;
 }
+const BufferMemoryInfo& Device::buffer_memory_info() const noexcept {
+    static const BufferMemoryInfo empty;
+    return state_ ? state_->buffer_memory_info : empty;
+}
 
 Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     if (!state_ || instance == VK_NULL_HANDLE || device == VK_NULL_HANDLE) {
@@ -1332,6 +1356,14 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         load_device_function<PFN_vkDestroyPipelineCache>(get_device_proc, device, "vkDestroyPipelineCache");
     device_state->get_pipeline_cache_data =
         load_device_function<PFN_vkGetPipelineCacheData>(get_device_proc, device, "vkGetPipelineCacheData");
+    device_state->cmd_bind_pipeline =
+        load_device_function<PFN_vkCmdBindPipeline>(get_device_proc, device, "vkCmdBindPipeline");
+    device_state->cmd_bind_descriptor_sets =
+        load_device_function<PFN_vkCmdBindDescriptorSets>(get_device_proc, device, "vkCmdBindDescriptorSets");
+    device_state->cmd_push_constants =
+        load_device_function<PFN_vkCmdPushConstants>(get_device_proc, device, "vkCmdPushConstants");
+    device_state->cmd_dispatch =
+        load_device_function<PFN_vkCmdDispatch>(get_device_proc, device, "vkCmdDispatch");
     device_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device, "vkCreateBuffer");
     device_state->destroy_buffer =
@@ -1414,6 +1446,10 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.create_pipeline_cache = device_state->create_pipeline_cache;
     api.destroy_pipeline_cache = device_state->destroy_pipeline_cache;
     api.get_pipeline_cache_data = device_state->get_pipeline_cache_data;
+    api.cmd_bind_pipeline = device_state->cmd_bind_pipeline;
+    api.cmd_bind_descriptor_sets = device_state->cmd_bind_descriptor_sets;
+    api.cmd_push_constants = device_state->cmd_push_constants;
+    api.cmd_dispatch = device_state->cmd_dispatch;
     api.create_buffer = {device_state.get(), create_buffer};
     api.destroy_buffer = {device_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
