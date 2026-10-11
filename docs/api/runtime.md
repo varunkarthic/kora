@@ -26,6 +26,15 @@ replacement creation fails, the original failed Runtime remains intact.
 `device_fault_report(id)` returns best-effort extension records when `VK_EXT_device_fault` is
 supported; KORA bounds the report to 256 address and vendor records and never persists or logs these
 diagnostic details. Query the report before `recover()`, which replaces the per-device fault state.
+For `DevicePolicy::AllEligible`, devices that fail logical-device initialization are skipped while
+other selected devices continue; `quarantined_devices()` lists those identities. Creation fails if
+none initialize. Other selection policies remain fail-fast.
+Call `DispatchBuilder::verify_with(policy, type)` before `submit()` to run the same dispatch on every
+initialized, non-quarantined device and compare writable outputs. Matching bytes are published to the
+host shadow. Any mismatch returns `ValidationError`, marks outputs `DataLoss`, and quarantines every
+participant because the Runtime cannot establish a trustworthy result. See
+[`api/verification`](verification) for comparator modes, data types, and limitations. Verification
+requires at least two devices that can run the kernel.
 
 ## Memory snapshots
 

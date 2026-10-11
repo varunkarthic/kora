@@ -71,7 +71,7 @@ public:
     /// Borrowed timeline semaphore used to establish a dependency from another queue.
     VkSemaphore completion_semaphore() const noexcept { return use_timeline_ ? timeline_ : VK_NULL_HANDLE; }
     bool uses_synchronization2() const noexcept { return use_synchronization2_; }
-    Status wait_for_value(uint64_t value, uint64_t timeout_ns = UINT64_MAX) const;
+    Status wait_for_value(uint64_t value, uint64_t timeout_ns = UINT64_MAX);
     /// Stop accepting work, then drain or cancel work that has not reached vkQueueSubmit.
     Status shutdown(ShutdownMode mode = ShutdownMode::Graceful);
 

@@ -62,6 +62,7 @@ TEST(Runtime, OwnsSelectedDeviceAndExposesMemoryStats) {
     ASSERT_TRUE(runtime) << runtime.error().describe();
     const auto devices = runtime.value().devices();
     ASSERT_FALSE(devices.empty());
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
 
     auto info = runtime.value().device_info(devices.front());
     ASSERT_TRUE(info) << info.error().describe();
@@ -110,6 +111,103 @@ TEST(Runtime, HonorsExplicitDeviceIndexSelection) {
     const auto devices = runtime.value().devices();
     ASSERT_EQ(devices.size(), 1U);
     EXPECT_EQ(devices.front().index, 0U);
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
+}
+
+TEST(Runtime, AllEligibleReportsQuarantinedDevicesSeparately) {
+    kora::RuntimeOptions options;
+    options.device_policy = kora::DevicePolicy::AllEligible;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    EXPECT_FALSE(runtime.value().devices().empty());
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
+}
+
+TEST(Runtime, VerifiedDispatchPublishesMatchingResultsAndQuarantinesMismatches) {
+    kora::RuntimeOptions options;
+    options.device_policy = kora::DevicePolicy::AllEligible;
+    auto created = kora::Runtime::create(options);
+    if (!created && (created.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     created.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(created) << created.error().describe();
+    auto runtime = std::move(created).value();
+    const auto devices = runtime.devices();
+    if (devices.size() < 2) GTEST_SKIP() << "duplicate verification requires two initialized devices";
+
+    constexpr std::uint32_t count = 32;
+    auto input_a = runtime.create_buffer<std::uint32_t>(count);
+    auto input_b = runtime.create_buffer<std::uint32_t>(count);
+    auto output = runtime.create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_a);
+    ASSERT_TRUE(input_b);
+    ASSERT_TRUE(output);
+    std::vector<std::uint32_t> left(count);
+    std::vector<std::uint32_t> right(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        left[index] = index * 2U;
+        right[index] = index + 7U;
+    }
+    ASSERT_TRUE(input_a.value().write(left));
+    ASSERT_TRUE(input_b.value().write(right));
+    auto kernel =
+        runtime.load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata(), devices[0]);
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+
+    kora::VerificationPolicy matching;
+    matching.mode = kora::VerificationMode::Custom;
+    matching.custom = [](std::span<const std::byte> first, std::span<const std::byte> second) {
+        return std::equal(first.begin(), first.end(), second.begin(), second.end());
+    };
+    auto verified = runtime.dispatch(kernel.value())
+                        .global(count)
+                        .read(input_a.value())
+                        .read(input_b.value())
+                        .write(output.value())
+                        .push(count)
+                        .verify_with(matching)
+                        .submit();
+    ASSERT_TRUE(verified) << verified.error().describe();
+    const auto success = verified.value().wait();
+    ASSERT_TRUE(success) << success.error().describe();
+    auto actual = output.value().read();
+    ASSERT_TRUE(actual) << actual.error().describe();
+    for (std::uint32_t index = 0; index < count; ++index)
+        EXPECT_EQ(actual.value()[index], left[index] + right[index]);
+    EXPECT_TRUE(runtime.quarantined_devices().empty());
+
+    kora::VerificationPolicy injected_mismatch;
+    injected_mismatch.mode = kora::VerificationMode::Custom;
+    injected_mismatch.custom = [](std::span<const std::byte>, std::span<const std::byte>) { return false; };
+    auto mismatched = runtime.dispatch(kernel.value())
+                          .global(count)
+                          .read(input_a.value())
+                          .read(input_b.value())
+                          .write(output.value())
+                          .push(count)
+                          .verify_with(injected_mismatch)
+                          .submit();
+    ASSERT_TRUE(mismatched) << mismatched.error().describe();
+    const auto mismatch_status = mismatched.value().wait();
+    ASSERT_FALSE(mismatch_status);
+    EXPECT_EQ(mismatch_status.error().code, kora::ErrorCode::ValidationError);
+    EXPECT_EQ(output.value().read().error().code, kora::ErrorCode::DataLoss);
+    EXPECT_GE(runtime.quarantined_devices().size(), 2U);
+
+    auto rejected = runtime.dispatch(kernel.value())
+                        .global(count)
+                        .read(input_a.value())
+                        .read(input_b.value())
+                        .write(output.value())
+                        .push(count)
+                        .submit();
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code, kora::ErrorCode::ValidationError);
 }
 
 TEST(Runtime, RecoversTransactionallyAndRetainsAuthoritativeBufferHandles) {

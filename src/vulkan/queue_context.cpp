@@ -173,7 +173,7 @@ Result<uint64_t> QueueContext::completed_value() const {
     return value;
 }
 
-Status QueueContext::wait_for_value(uint64_t value, uint64_t timeout_ns) const {
+Status QueueContext::wait_for_value(uint64_t value, uint64_t timeout_ns) {
     if (value == 0) return ok_status();
     if (!use_timeline_) {
         std::unique_lock lock(fence_mutex_);
@@ -195,6 +195,10 @@ Status QueueContext::wait_for_value(uint64_t value, uint64_t timeout_ns) const {
     wait_info.pValues = &value;
     const auto result = api_.wait_semaphores(device_, &wait_info, timeout_ns);
     if (result == VK_TIMEOUT) return Error(ErrorCode::Timeout, "Queue completion wait timed out");
+    if (result == VK_ERROR_DEVICE_LOST && fault_state_) {
+        fault_state_->mark_lost(result);
+        fail_queued_device_lost();
+    }
     if (result != VK_SUCCESS) return vk_error("Waiting for queue completion timeline failed", result);
     return ok_status();
 }

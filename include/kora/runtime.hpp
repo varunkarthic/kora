@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,12 +21,14 @@
 #include "kora/kernel_metadata.hpp"
 #include "kora/memory_stats.hpp"
 #include "kora/options.hpp"
+#include "kora/verification.hpp"
 
 namespace kora {
 
 namespace detail {
 struct KernelState;
 struct DispatchContext;
+struct VerificationTargetSet;
 struct RuntimeTestAccess;
 }  // namespace detail
 
@@ -79,6 +82,9 @@ public:
     DispatchBuilder& defer_readback();
     /// Priority is a scheduler hint; High and RealtimeHint dispatches bypass coalescing delay.
     DispatchBuilder& priority(DispatchPriority priority);
+    /// Duplicate this dispatch across the runtime's eligible devices and compare every writable output.
+    DispatchBuilder& verify_with(VerificationPolicy policy,
+                                 VerificationDataType type = VerificationDataType::Float32);
     template <class T>
     DispatchBuilder& read(const Buffer<T>& buffer) {
         return read(buffer.handle());
@@ -103,6 +109,7 @@ private:
     friend class Runtime;
     DispatchBuilder(std::shared_ptr<detail::DispatchContext> context,
                     std::shared_ptr<const detail::KernelState> kernel);
+    Result<Event> submit_verified();
     std::shared_ptr<detail::DispatchContext> context_;
     std::shared_ptr<const detail::KernelState> kernel_;
     std::array<std::uint64_t, 3> global_size_{};
@@ -111,6 +118,9 @@ private:
     std::vector<std::byte> push_constants_;
     bool defer_readback_ = false;
     DispatchPriority priority_ = DispatchPriority::Normal;
+    std::shared_ptr<const detail::VerificationTargetSet> verification_targets_;
+    std::optional<VerificationPolicy> verification_policy_;
+    VerificationDataType verification_type_ = VerificationDataType::Float32;
     friend class Runtime;
 };
 
@@ -168,6 +178,8 @@ public:
 
     /// IDs are stable for this Runtime's lifetime and retain Vulkan enumeration indices.
     std::vector<DeviceId> devices() const;
+    /// Devices skipped during `AllEligible` initialization; explicitly selected devices still fail fast.
+    std::vector<DeviceId> quarantined_devices() const;
     Result<DeviceInfo> device_info(const DeviceId& device) const;
     /// Returns pool totals and per-heap budget data; an unused device has zero pool counters.
     Result<MemoryStats> memory_stats(const DeviceId& device) const;

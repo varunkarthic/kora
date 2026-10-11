@@ -51,6 +51,7 @@ struct Mock {
     std::atomic<uint64_t> submit_calls{0};
     std::atomic<uint64_t> wait_calls{0};
     std::atomic<bool> timeout_next_wait{false};
+    std::atomic<bool> device_lost_next_wait{false};
     std::atomic<uint64_t> destroy_calls{0};
     std::atomic<uint64_t> completed_timeline{0};
     std::atomic<uint32_t> active_submit_calls{0};
@@ -90,6 +91,7 @@ VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice, const VkSemaphoreWai
     auto& mock = *static_cast<Mock*>(context);
     ++mock.wait_calls;
     if (mock.timeout_next_wait.exchange(false)) return VK_TIMEOUT;
+    if (mock.device_lost_next_wait.exchange(false)) return VK_ERROR_DEVICE_LOST;
     return VK_SUCCESS;
 }
 VkResult VKAPI_PTR create_fence(void* context, VkDevice, const VkFenceCreateInfo*,
@@ -579,8 +581,9 @@ TEST(QueueContext, DoesNotCoalesceHighPriorityOrConflictingDispatches) {
 TEST(QueueContext, CompletionTimeoutPollsCounterBeforeDeliveringCallback) {
     Mock mock;
     mock.timeout_next_wait = true;
+    auto fault_state = std::make_shared<DeviceFaultState>();
     auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
-                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, fault_state);
     ASSERT_TRUE(result);
     auto context = std::move(result).value();
     std::atomic<bool> callback_success{false};
@@ -590,6 +593,35 @@ TEST(QueueContext, CompletionTimeoutPollsCounterBeforeDeliveringCallback) {
     ASSERT_TRUE(context->shutdown());
     EXPECT_TRUE(callback_success.load());
     EXPECT_EQ(mock.wait_calls.load(), 1u);
+    EXPECT_TRUE(fault_state->healthy());
+    EXPECT_EQ(fault_state->last_result(), VK_SUCCESS);
+}
+
+TEST(QueueContext, ExplicitWaitDistinguishesTimeoutFromDeviceLoss) {
+    Mock mock;
+    auto fault_state = std::make_shared<DeviceFaultState>();
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, fault_state);
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+
+    mock.timeout_next_wait = true;
+    auto timeout = context->wait_for_value(1, 1);
+    ASSERT_FALSE(timeout);
+    EXPECT_EQ(timeout.error().code, ErrorCode::Timeout);
+    EXPECT_TRUE(fault_state->healthy());
+
+    mock.device_lost_next_wait = true;
+    auto lost = context->wait_for_value(1, 1);
+    ASSERT_FALSE(lost);
+    EXPECT_EQ(lost.error().code, ErrorCode::DeviceLost);
+    EXPECT_FALSE(fault_state->healthy());
+    EXPECT_EQ(fault_state->last_result(), VK_ERROR_DEVICE_LOST);
+    auto rejected = context->submit({});
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code, ErrorCode::DeviceLost);
+    EXPECT_EQ(mock.submit_calls.load(), 0U);
+    EXPECT_TRUE(context->shutdown());
 }
 
 }  // namespace
