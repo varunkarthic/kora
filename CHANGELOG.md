@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-10-11
+
 ### Added
 
 - Added keyed native CPU fallback registration and asynchronous `Runtime::run_cpu_fallback()` with
@@ -249,7 +251,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.41...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.42...HEAD
+[0.1.42]: https://github.com/varunkarthic/kora/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/varunkarthic/kora/compare/v0.1.40...v0.1.41
 [0.1.40]: https://github.com/varunkarthic/kora/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/varunkarthic/kora/compare/v0.1.38...v0.1.39
