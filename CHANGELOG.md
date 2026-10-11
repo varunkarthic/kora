@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-10-11
+
 - Add a fluent storage-buffer dispatch API with checked workgroup limits, typed host-shadow buffer
   copies, compiled vector-add/SAXPY integration fixtures, and event completion covering output readback.
 
@@ -188,7 +190,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.29...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.30...HEAD
+[0.1.30]: https://github.com/varunkarthic/kora/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/varunkarthic/kora/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/varunkarthic/kora/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/varunkarthic/kora/compare/v0.1.26...v0.1.27
