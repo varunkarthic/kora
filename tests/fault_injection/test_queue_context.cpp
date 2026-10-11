@@ -23,6 +23,7 @@ struct Mock {
     std::atomic<uint32_t> active_submit_calls{0};
     std::atomic<uint32_t> maximum_active{0};
     std::atomic<uint32_t> malformed_submit_infos{0};
+    std::atomic<uint32_t> submitted_command_buffers{0};
     std::atomic<uint32_t> non_monotonic_timeline_values{0};
     std::atomic<uint32_t> non_null_fences{0};
     std::atomic<uint32_t> external_wait_calls{0};
@@ -100,6 +101,8 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const Vk
         }
     }
     if (fence != VK_NULL_HANDLE) ++mock.non_null_fences;
+    if (count == 1 && submits != nullptr)
+        mock.submitted_command_buffers.fetch_add(submits[0].commandBufferCount);
     const auto active = ++mock.active_submit_calls;
     auto maximum = mock.maximum_active.load();
     while (active > maximum && !mock.maximum_active.compare_exchange_weak(maximum, active)) {
@@ -409,6 +412,99 @@ TEST(QueueContext, RecordFailureSkipsQueueSubmitAndReportsSubmissionFailure) {
     EXPECT_TRUE(submitted_failure.load());
     EXPECT_TRUE(completion_failure.load());
     EXPECT_EQ(mock.submit_calls.load(), 0U);
+}
+
+TEST(QueueContext, CoalescesCompatibleDispatchesIntoOneTimelineSubmission) {
+    Mock mock;
+    QueueContext::CoalescingOptions options;
+    options.enabled = true;
+    constexpr uint32_t kDispatches = 32;
+    options.maximum_batch_size = 8;
+    options.maximum_wait_ns = 5'000'000;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, options);
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+    std::atomic<uint32_t> recorded{0};
+    std::atomic<uint32_t> submitted{0};
+    std::atomic<uint32_t> completed{0};
+    std::atomic<uint32_t> callback_errors{0};
+    std::mutex completed_ids_mutex;
+    std::vector<uint64_t> completed_ids;
+    std::vector<uint64_t> timeline_values(kDispatches, 0);
+    for (uint32_t index = 0; index < kDispatches; ++index) {
+        QueueContext::Submission submission;
+        submission.coalescible = true;
+        submission.dependency_free = true;
+        submission.coalescing_key = 1234;
+        submission.resources.push_back({index, 1, false});
+        submission.record_commands = [&, index](uint64_t, std::vector<VkCommandBuffer>& commands) {
+            ++recorded;
+            commands.push_back(reinterpret_cast<VkCommandBuffer>(uintptr_t{200 + index}));
+            return ok_status();
+        };
+        submission.on_submitted = [&, index](uint64_t value, Status status) {
+            timeline_values[index] = value;
+            if (!status) ++callback_errors;
+            ++submitted;
+        };
+        submission.on_complete = [&](uint64_t id, Status status) {
+            if (!status) ++callback_errors;
+            {
+                std::lock_guard lock(completed_ids_mutex);
+                completed_ids.push_back(id);
+            }
+            ++completed;
+        };
+        ASSERT_TRUE(context->submit(std::move(submission)));
+    }
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_LT(mock.submit_calls.load(), kDispatches);
+    EXPECT_EQ(mock.submitted_command_buffers.load(), kDispatches);
+    EXPECT_EQ(recorded.load(), kDispatches);
+    EXPECT_EQ(submitted.load(), kDispatches);
+    EXPECT_EQ(completed.load(), kDispatches);
+    std::sort(completed_ids.begin(), completed_ids.end());
+    for (uint32_t index = 0; index < kDispatches; ++index)
+        EXPECT_EQ(completed_ids[index], static_cast<uint64_t>(index + 1));
+    EXPECT_EQ(callback_errors.load(), 0U);
+    EXPECT_EQ(timeline_values[0], timeline_values[1]);
+    EXPECT_EQ(timeline_values[1], timeline_values[2]);
+    EXPECT_EQ(timeline_values[2], timeline_values[3]);
+    EXPECT_LT(timeline_values[0], timeline_values.back());
+}
+
+TEST(QueueContext, DoesNotCoalesceHighPriorityOrConflictingDispatches) {
+    Mock mock;
+    QueueContext::CoalescingOptions options;
+    options.enabled = true;
+    options.maximum_wait_ns = 5'000'000;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, options);
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+    for (uint32_t index = 0; index < 4; ++index) {
+        QueueContext::Submission submission;
+        submission.coalescible = true;
+        submission.dependency_free = index < 2;
+        submission.coalescing_key = 1234;
+        submission.priority = index < 2 ? 2 : 1;
+        submission.resources.push_back({index < 2 ? 1U : 9U, 1, index >= 2});
+        ASSERT_TRUE(context->submit(std::move(submission)));
+    }
+    for (uint64_t value = 1; value <= 2; ++value) {
+        QueueContext::Submission submission;
+        submission.coalescible = true;
+        submission.dependency_free = true;
+        submission.coalescing_key = 5678;
+        submission.resources.push_back({static_cast<uint32_t>(20 + value), 1, false});
+        submission.wait_semaphores.push_back(reinterpret_cast<VkSemaphore>(uintptr_t{77}));
+        submission.wait_stages.push_back(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        submission.wait_values.push_back(value);
+        ASSERT_TRUE(context->submit(std::move(submission)));
+    }
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_EQ(mock.submit_calls.load(), 6U);
 }
 
 TEST(QueueContext, CompletionTimeoutPollsCounterBeforeDeliveringCallback) {

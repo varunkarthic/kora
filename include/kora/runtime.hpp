@@ -63,6 +63,8 @@ private:
 
 using CpuFallbackFunction = std::function<Status(CpuTaskContext&)>;
 
+enum class DispatchPriority : std::uint8_t { Low, Normal, High, RealtimeHint };
+
 class DispatchBuilder final {
 public:
     DispatchBuilder() = default;
@@ -74,6 +76,8 @@ public:
     /// Keep device-written outputs resident instead of copying them to the host on completion.
     /// Use Runtime::readback() when host access is subsequently required.
     DispatchBuilder& defer_readback();
+    /// Priority is a scheduler hint; High and RealtimeHint dispatches bypass coalescing delay.
+    DispatchBuilder& priority(DispatchPriority priority);
     template <class T>
     DispatchBuilder& read(const Buffer<T>& buffer) {
         return read(buffer.handle());
@@ -105,6 +109,7 @@ private:
     std::vector<KernelAccess> accesses_;
     std::vector<std::byte> push_constants_;
     bool defer_readback_ = false;
+    DispatchPriority priority_ = DispatchPriority::Normal;
     friend class Runtime;
 };
 

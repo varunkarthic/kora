@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -80,6 +82,63 @@ TEST(QueueContext, CompletesConcurrentRealVulkanSubmissions) {
     ASSERT_TRUE(context->shutdown(ShutdownMode::Graceful));
     EXPECT_EQ(completed.load(), kThreads * kSubmissionsPerThread);
     EXPECT_EQ(errors.load(), 0u);
+}
+
+TEST(QueueContext, CoalescesIndependentRecordsWithPerSubmissionCompletionIds) {
+    auto loader = Loader::load();
+    if (!loader) GTEST_SKIP() << loader.error().describe();
+    auto instance = loader.value().create_instance();
+    if (!instance) GTEST_SKIP() << instance.error().describe();
+    auto physical_devices = instance.value().physical_devices();
+    ASSERT_TRUE(physical_devices) << physical_devices.error().describe();
+    if (physical_devices.value().empty()) GTEST_SKIP() << "No Vulkan physical device is available";
+    auto device = instance.value().create_device(physical_devices.value().front());
+    if (!device) GTEST_SKIP() << device.error().describe();
+    if (!device.value().enabled_features().timeline_semaphore)
+        GTEST_SKIP() << "Timeline semaphores are unavailable on this device";
+
+    QueueContext::CoalescingOptions options;
+    options.enabled = true;
+    options.maximum_batch_size = 8;
+    options.maximum_wait_ns = 2'000'000;
+    auto created = QueueContext::create(device.value().api(), device.value().handle(),
+                                        device.value().compute_queue(), false, options);
+    if (!created) GTEST_SKIP() << created.error().describe();
+    auto context = std::move(created).value();
+
+    constexpr uint64_t kSubmissions = 24;
+    std::atomic<uint64_t> completed{0};
+    std::atomic<uint64_t> errors{0};
+    std::mutex values_mutex;
+    std::vector<uint64_t> submitted_values;
+    std::vector<uint64_t> completed_ids;
+    for (uint64_t index = 0; index < kSubmissions; ++index) {
+        QueueContext::Submission submission;
+        submission.coalescible = true;
+        submission.dependency_free = true;
+        submission.coalescing_key = 42;
+        submission.resources.push_back({static_cast<uint32_t>(index), 1, false});
+        submission.on_submitted = [&](uint64_t value, Status status) {
+            if (!status) ++errors;
+            std::lock_guard lock(values_mutex);
+            submitted_values.push_back(value);
+        };
+        submission.on_complete = [&](uint64_t id, Status status) {
+            if (!status) ++errors;
+            std::lock_guard lock(values_mutex);
+            completed_ids.push_back(id);
+            ++completed;
+        };
+        ASSERT_TRUE(context->submit(std::move(submission)));
+    }
+    ASSERT_TRUE(context->shutdown(ShutdownMode::Graceful));
+    EXPECT_EQ(completed.load(), kSubmissions);
+    EXPECT_EQ(errors.load(), 0U);
+    ASSERT_EQ(submitted_values.size(), kSubmissions);
+    ASSERT_EQ(completed_ids.size(), kSubmissions);
+    std::sort(completed_ids.begin(), completed_ids.end());
+    for (uint64_t index = 0; index < kSubmissions; ++index) EXPECT_EQ(completed_ids[index], index + 1);
+    for (const auto value : submitted_values) EXPECT_NE(value, 0U);
 }
 
 TEST(QueueContext, RepeatedCreateSubmitShutdownDrainsCompletionBeforeDestruction) {

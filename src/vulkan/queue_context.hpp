@@ -18,6 +18,18 @@ namespace kora::vk {
 /// Serializes submissions for one VkQueue and reports GPU completion on a separate thread.
 class QueueContext {
 public:
+    struct CoalescingOptions {
+        bool enabled = false;
+        uint32_t maximum_batch_size = 8;
+        uint64_t maximum_wait_ns = 100'000;
+    };
+
+    struct ResourceAccess {
+        uint32_t slot = 0;
+        uint64_t generation = 0;
+        bool write = false;
+    };
+
     struct Submission {
         std::vector<VkSemaphore> wait_semaphores;
         std::vector<VkPipelineStageFlags> wait_stages;
@@ -26,6 +38,11 @@ public:
         std::vector<VkSemaphore> signal_semaphores;
         std::vector<uint64_t> signal_values;
         VkFence fence = VK_NULL_HANDLE;
+        bool coalescible = false;
+        bool dependency_free = false;
+        uint64_t coalescing_key = 0;
+        uint8_t priority = 1;
+        std::vector<ResourceAccess> resources;
         std::function<Status(uint64_t, std::vector<VkCommandBuffer>&)> record_commands;
         std::function<void(uint64_t, Status)> on_submitted;
         std::function<void(uint64_t, Status)> on_complete;
@@ -33,6 +50,9 @@ public:
 
     static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
                                                         bool force_fence_fallback = false);
+    static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
+                                                        bool force_fence_fallback,
+                                                        CoalescingOptions coalescing);
 
     QueueContext() = default;
     ~QueueContext();
@@ -67,7 +87,7 @@ private:
     };
 
     QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
-                 bool use_synchronization2, std::vector<VkFence> fence_pool);
+                 bool use_synchronization2, std::vector<VkFence> fence_pool, CoalescingOptions coalescing);
     Status start();
     void submission_loop();
     void completion_loop();
@@ -82,6 +102,7 @@ private:
     VkSemaphore timeline_ = VK_NULL_HANDLE;
     bool use_timeline_ = true;
     bool use_synchronization2_ = false;
+    CoalescingOptions coalescing_;
     std::vector<VkFence> fence_pool_;
     mutable std::mutex fence_mutex_;
     mutable std::condition_variable fence_changed_;

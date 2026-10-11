@@ -149,9 +149,9 @@ Status CommandPoolSet::discard(VkCommandBuffer buffer) {
 
 Status CommandPoolSet::submitted(VkCommandBuffer buffer, uint64_t signal_value) {
     KORA_TRY_STATUS(check_thread());
-    if (signal_value == 0 || signal_value <= last_signal_value_) {
+    if (signal_value == 0 || signal_value < last_signal_value_) {
         return Error(ErrorCode::InvalidArgument,
-                     "Submission timeline values must be nonzero and strictly increasing");
+                     "Submission timeline values must be nonzero and nondecreasing");
     }
     for (auto& slot : slots_) {
         if (slot.buffer != buffer || !slot.acquired || !slot.ended) continue;

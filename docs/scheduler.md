@@ -99,3 +99,25 @@ The policy accepts candidate estimates rather than invoking Runtime, executing w
 random values internally. This makes the decision boundary replayable and testable; the future runtime
 scheduler is responsible for constructing candidates, sampling measurements, and supplying a random
 draw only when nondeterministic mode is enabled.
+
+## Small-dispatch coalescing
+
+Runtime compute queues enable a bounded queue-level coalescing window (100 microseconds, at most eight
+dispatch records). Dispatches are eligible only when they share the exact cached pipeline/layout key,
+declare no explicit dependencies, have identical external semaphore waits, and have no cross-dispatch
+read/write conflict on a generation-aware buffer identity. Identical waits avoid delaying an otherwise
+independent dispatch behind a later transfer prerequisite. Compatible command buffers are recorded
+independently and submitted in one Vulkan queue-submit call with a shared completion timeline value;
+every dispatch still receives its own Event completion callback. Read/read sharing is allowed, while
+any shared write forces separate submissions.
+
+High and real-time-hint priorities bypass the waiting window and are never merged. Low/normal work may
+wait up to the bounded window for compatible peers; an incompatible or elevated-priority queue head
+ends collection. Fence-only queue contexts disable coalescing because dispatch Events rely on a shared
+timeline completion. The optimization does not delay work beyond the configured window and does not
+batch work with unresolved task dependencies.
+
+Queue-level fault-injection coverage submits 32 compatible tiny-dispatch records and verifies that
+fewer queue-submit calls carry all 32 command buffers and callbacks, with shared timeline values within
+each batch. Additional tests ensure high-priority and conflicting writes remain separate. Coalescing is
+an overhead optimization only; it does not merge task semantics or promise lower latency for large work.
