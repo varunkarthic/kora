@@ -43,6 +43,20 @@ option disables timeline semaphore and synchronization2 feature enablement durin
 creation so this path is exercised even on capable Vulkan implementations. It does not change the
 queried physical-device capability snapshot.
 
+## Buffer hazard planning
+
+`vk::HazardTracker` stores a buffer's most recent writer and the read scopes since that write. A read
+after a write receives a RAW barrier; a write after a write receives a WAW barrier; and a write after
+one or more reads receives WAR barriers for those reader scopes. Read-after-read adds no barrier. The
+planner uses explicit host, transfer, and compute stages/access masks and returns queue-independent
+`BarrierPlan` records. Those records can be emitted with legacy `vkCmdPipelineBarrier` now or lowered
+to synchronization2 structures when the device path is selected. No normal plan uses `ALL_COMMANDS`.
+
+The transfer engine feeds per-buffer access sequences to this planner for upload, download, copy, and
+fill, replacing its former broad all-commands memory barriers. The tracker is deliberately internal;
+the runtime has not yet exposed arbitrary task access declarations, and queue-family ownership transfer
+is handled by a separate follow-up issue.
+
 ## Invariants
 
 - Queue handles are externally synchronized by one QueueContext; do not submit directly while it owns

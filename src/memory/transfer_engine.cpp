@@ -11,6 +11,7 @@
 #include "core/event_state.hpp"
 #include "kora/detail/checked.hpp"
 #include "vulkan/command_pool_set.hpp"
+#include "vulkan/hazard_tracker.hpp"
 
 namespace kora::detail {
 namespace {
@@ -65,15 +66,16 @@ Status mapped_memory_operation(const vk::Api& api, VkDevice device, const Transf
     return ok_status();
 }
 
-void record_memory_barrier(const vk::Api& api, VkCommandBuffer command_buffer,
-                           VkPipelineStageFlags source_stage, VkAccessFlags source_access,
-                           VkPipelineStageFlags destination_stage, VkAccessFlags destination_access) {
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = source_access;
-    barrier.dstAccessMask = destination_access;
-    api.cmd_pipeline_barrier(command_buffer, source_stage, destination_stage, 0, 1, &barrier, 0, nullptr, 0,
-                             nullptr);
+void record_hazards(const vk::Api& api, VkCommandBuffer command_buffer,
+                    const std::vector<vk::BarrierPlan>& plans) {
+    for (const auto& plan : plans) {
+        VkMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = plan.source_access;
+        barrier.dstAccessMask = plan.destination_access;
+        api.cmd_pipeline_barrier(command_buffer, plan.source_stage, plan.destination_stage, 0, 1, &barrier, 0,
+                                 nullptr, 0, nullptr);
+    }
 }
 
 }  // namespace
@@ -310,19 +312,25 @@ Result<Event> TransferEngine::upload(TransferBuffer destination, VkDeviceSize de
     auto record = [api, destination, destination_offset, size = static_cast<VkDeviceSize>(source.size()),
                    direct, staging](VkCommandBuffer command) {
         if (direct) {
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT);
+            vk::HazardTracker hazards;
+            (void)hazards.access(vk::AccessKind::HostWrite);
+            record_hazards(api, command, hazards.access(vk::AccessKind::ComputeRead));
+            record_hazards(api, command, hazards.access(vk::AccessKind::ComputeWrite));
         } else {
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            vk::HazardTracker staging_hazards;
+            (void)staging_hazards.access(vk::AccessKind::HostWrite);
+            record_hazards(api, command, staging_hazards.access(vk::AccessKind::TransferRead));
+            vk::HazardTracker destination_hazards;
+            (void)destination_hazards.access(vk::AccessKind::ComputeRead);
+            (void)destination_hazards.access(vk::AccessKind::ComputeWrite);
+            record_hazards(api, command, destination_hazards.access(vk::AccessKind::TransferWrite));
             VkBufferCopy region{};
             region.srcOffset = staging->offset;
             region.dstOffset = destination_offset;
             region.size = size;
             api.cmd_copy_buffer(command, staging->buffer, destination.buffer, 1, &region);
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                  VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeRead));
+            record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeWrite));
         }
         return ok_status();
     };
@@ -368,20 +376,22 @@ Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize sourc
     const auto size = static_cast<VkDeviceSize>(destination.size());
     auto record = [api, source, source_offset, size, direct, staging](VkCommandBuffer command) {
         if (direct) {
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                  VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                                  VK_ACCESS_HOST_READ_BIT);
+            vk::HazardTracker hazards;
+            (void)hazards.access(vk::AccessKind::ComputeWrite);
+            record_hazards(api, command, hazards.access(vk::AccessKind::HostRead));
         } else {
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                  VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                  VK_ACCESS_TRANSFER_READ_BIT);
+            vk::HazardTracker source_hazards;
+            (void)source_hazards.access(vk::AccessKind::ComputeWrite);
+            record_hazards(api, command, source_hazards.access(vk::AccessKind::TransferRead));
+            vk::HazardTracker staging_hazards;
+            (void)staging_hazards.access(vk::AccessKind::HostRead);
+            record_hazards(api, command, staging_hazards.access(vk::AccessKind::TransferWrite));
             VkBufferCopy region{};
             region.srcOffset = source_offset;
             region.dstOffset = staging->offset;
             region.size = size;
             api.cmd_copy_buffer(command, source.buffer, staging->buffer, 1, &region);
-            record_memory_barrier(api, command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                  VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+            record_hazards(api, command, staging_hazards.access(vk::AccessKind::HostRead));
         }
         return ok_status();
     };
@@ -424,17 +434,25 @@ Result<Event> TransferEngine::copy(TransferBuffer source, VkDeviceSize source_of
     auto api = impl_->device->api();
     auto record = [api, source, source_offset, destination, destination_offset,
                    size](VkCommandBuffer command) {
-        record_memory_barrier(api, command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        vk::HazardTracker source_hazards;
+        (void)source_hazards.access(vk::AccessKind::ComputeWrite);
+        record_hazards(api, command, source_hazards.access(vk::AccessKind::TransferRead));
+        vk::HazardTracker destination_hazards;
+        (void)destination_hazards.access(vk::AccessKind::ComputeWrite);
+        record_hazards(api, command, destination_hazards.access(vk::AccessKind::TransferWrite));
         VkBufferCopy region{};
         region.srcOffset = source_offset;
         region.dstOffset = destination_offset;
         region.size = size;
         api.cmd_copy_buffer(command, source.buffer, destination.buffer, 1, &region);
-        record_memory_barrier(api, command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                              VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+        vk::HazardTracker source_result;
+        (void)source_result.access(vk::AccessKind::TransferRead);
+        record_hazards(api, command, source_result.access(vk::AccessKind::ComputeRead));
+        record_hazards(api, command, source_result.access(vk::AccessKind::ComputeWrite));
+        vk::HazardTracker destination_result;
+        (void)destination_result.access(vk::AccessKind::TransferWrite);
+        record_hazards(api, command, destination_result.access(vk::AccessKind::ComputeRead));
+        record_hazards(api, command, destination_result.access(vk::AccessKind::ComputeWrite));
         return ok_status();
     };
     return enqueue(std::move(record), {}, std::nullopt, nullptr);
@@ -448,12 +466,12 @@ Result<Event> TransferEngine::fill(TransferBuffer destination, VkDeviceSize offs
                      "vkCmdFillBuffer requires a nonzero size and 4-byte alignment");
     auto api = impl_->device->api();
     auto record = [api, destination, offset, size, value](VkCommandBuffer command) {
-        record_memory_barrier(api, command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        vk::HazardTracker hazards;
+        (void)hazards.access(vk::AccessKind::ComputeWrite);
+        record_hazards(api, command, hazards.access(vk::AccessKind::TransferWrite));
         api.cmd_fill_buffer(command, destination.buffer, offset, size, value);
-        record_memory_barrier(api, command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                              VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+        record_hazards(api, command, hazards.access(vk::AccessKind::ComputeRead));
+        record_hazards(api, command, hazards.access(vk::AccessKind::ComputeWrite));
         return ok_status();
     };
     return enqueue(std::move(record), {}, std::nullopt, nullptr);

@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add per-buffer RAW/WAR/WAW hazard planning with precise host/transfer/compute barrier scopes and
+  replace broad transfer barriers with tracker-generated plans.
+
 - Add reusable-fence completion fallback for devices without timeline semaphores and wire the
   force-legacy validation option through device creation and Runtime submissions.
 

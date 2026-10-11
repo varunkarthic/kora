@@ -17,6 +17,7 @@ kora_add_test(kora_unit_tests unit
     test_buffer_manager.cpp
     test_dirty_ranges.cpp
     test_residency.cpp
+    test_hazard_tracker.cpp
 )
 target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})
 
