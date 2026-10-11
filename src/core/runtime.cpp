@@ -222,7 +222,8 @@ struct Runtime::Impl {
                     vk::Device logical_device,
                     std::unique_ptr<detail::kernel::PipelineManager> pipeline_manager,
                     std::uint64_t runtime_identity, bool force_fallback,
-                    std::vector<VkTimeDomainKHR> calibrated_time_domains)
+                    std::vector<VkTimeDomainKHR> calibrated_time_domains,
+                    ShutdownMode configured_shutdown_mode)
             : id(std::move(device_id)),
               info(std::move(device_info)),
               memory_manager(std::move(manager)),
@@ -231,7 +232,8 @@ struct Runtime::Impl {
               pipelines(std::move(pipeline_manager)),
               runtime_id(runtime_identity),
               force_legacy_sync(force_fallback),
-              calibrated_time_domains(std::move(calibrated_time_domains)) {}
+              calibrated_time_domains(std::move(calibrated_time_domains)),
+              shutdown_mode(configured_shutdown_mode) {}
 
         Status initialize() {
 #ifdef VK_EXT_device_fault
@@ -449,12 +451,16 @@ struct Runtime::Impl {
             }
         }
 
-        ~DeviceEntry() {
+        void shutdown(ShutdownMode mode) noexcept {
+            if (stopped) return;
+            stopped = true;
             if (dispatch) dispatch->accepting_work.store(false, std::memory_order_release);
-            if (queue) (void)queue->shutdown(ShutdownMode::Graceful);
-            if (dedicated_transfer_queue) (void)dedicated_transfer_queue->shutdown(ShutdownMode::Graceful);
+            if (queue) (void)queue->shutdown(mode);
+            if (dedicated_transfer_queue) (void)dedicated_transfer_queue->shutdown(mode);
             if (dispatch) dispatch->release_buffers();
         }
+
+        ~DeviceEntry() { shutdown(shutdown_mode); }
 
         DeviceId id;
         DeviceInfo info;
@@ -480,6 +486,8 @@ struct Runtime::Impl {
         std::vector<VkTimeDomainKHR> calibrated_time_domains;
         std::uint32_t driver_version = 0;
         detail::calibration::Record calibration_record;
+        ShutdownMode shutdown_mode = ShutdownMode::Graceful;
+        bool stopped = false;
     };
 
     vk::Loader loader;
@@ -491,6 +499,7 @@ struct Runtime::Impl {
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
     bool calibrate_on_start = true;
+    ShutdownMode shutdown_mode = ShutdownMode::Graceful;
     std::shared_ptr<detail::PerformanceDatabase> performance_database =
         std::make_shared<detail::PerformanceDatabase>();
     std::filesystem::path performance_database_path;
@@ -499,7 +508,13 @@ struct Runtime::Impl {
     std::shared_ptr<CpuExecutor> cpu_executor;
 
     ~Impl() {
-        if (cpu_executor) (void)cpu_executor->shutdown();
+        for (auto& device : devices)
+            if (device && device->dispatch)
+                device->dispatch->accepting_work.store(false, std::memory_order_release);
+        for (auto& device : devices)
+            if (device) device->shutdown(shutdown_mode);
+        if (cpu_executor) (void)cpu_executor->shutdown(shutdown_mode);
+        devices.clear();
     }
 };
 
@@ -1216,7 +1231,7 @@ Result<Event> DispatchBuilder::submit_verified() {
 Runtime::Runtime() = default;
 Runtime::Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options)
     : impl_(std::move(impl)), options_(std::move(options)) {}
-Runtime::~Runtime() = default;
+Runtime::~Runtime() noexcept = default;
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
 
@@ -1458,6 +1473,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     auto impl = std::make_unique<Impl>(std::move(loader_result).value(), std::move(instance_result).value());
     impl->calibration_directory = resolved.cache_dir;
     impl->calibration_budget_ms = resolved.calibration_budget_ms;
+    impl->shutdown_mode = resolved.shutdown_mode;
     impl->calibrate_on_start = resolved.enable_startup_calibration;
     impl->performance_database_path = std::filesystem::path(resolved.cache_dir) / "performance-db.json";
     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1507,7 +1523,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         auto entry = std::make_unique<Impl::DeviceEntry>(
             id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
             std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
-            physical.calibrated_time_domains);
+            physical.calibrated_time_domains, resolved.shutdown_mode);
         entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();

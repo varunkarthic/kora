@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Honor `RuntimeOptions::shutdown_mode` during teardown: graceful shutdown drains accepted work,
+  while cancel-pending shutdown completes queued CPU/GPU work with cancellation status and still
+  waits for work already executing or submitted. Runtime destruction is explicitly `noexcept`.
+
 ## [0.1.51] - 2026-10-11
 
 ## [0.1.50] - 2026-10-11
