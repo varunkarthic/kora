@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add isolated, budget-bounded H2D, D2H, and device-copy startup calibration probes with byte validation,
+  repairable atomic cache replacement, and an explicit `Runtime::calibrate()` refresh operation.
+
 ## [0.1.52] - 2026-10-11
 
 - Honor `RuntimeOptions::shutdown_mode` during teardown: graceful shutdown drains accepted work,

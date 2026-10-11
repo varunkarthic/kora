@@ -418,34 +418,190 @@ struct Runtime::Impl {
             return status;
         }
 
-        void calibrate(const std::filesystem::path& directory, std::uint32_t budget_ms) noexcept {
+        void calibrate(const std::filesystem::path& directory, std::uint32_t budget_ms,
+                       bool force = false) noexcept {
             try {
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+                const auto started = std::chrono::steady_clock::now();
+                const auto hard_deadline = started + std::chrono::milliseconds(budget_ms);
+                const auto write_reserve =
+                    std::min(std::chrono::milliseconds(10), std::chrono::milliseconds(budget_ms / 5));
+                const auto deadline = hard_deadline - write_reserve;
                 const auto key = id.uuid.empty() ? std::to_string(id.index) : id.uuid;
                 const auto path = directory / "calibration" / (key + ".json");
                 detail::calibration::Record cached;
                 if (id.uuid.empty()) return;
-                if (detail::calibration::read(path, id.uuid, driver_version, cached)) {
+                if (!force && detail::calibration::read(path, id.uuid, driver_version, cached)) {
                     calibration_record = cached;
                     return;
                 }
                 detail::calibration::Record record;
                 record.device_uuid = id.uuid;
                 record.driver_version = driver_version;
-                constexpr auto iterations = 1000;
-                const auto start = std::chrono::steady_clock::now();
-                for (std::uint32_t index = 0; index < iterations; ++index) {
-                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                std::array<std::uint64_t, 3> submit_samples{};
+                std::size_t submit_sample_count = 0;
+                for (auto& sample : submit_samples) {
+                    if (std::chrono::steady_clock::now() >= deadline || !queue) break;
+                    const auto sample_start = std::chrono::steady_clock::now();
+                    auto submitted = queue->submit(vk::QueueContext::Submission{});
+                    if (!submitted) break;
+                    const auto remaining = deadline - std::chrono::steady_clock::now();
+                    if (remaining <= std::chrono::steady_clock::duration::zero()) break;
+                    const auto remaining_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(remaining);
+                    auto completed = queue->wait_for_value(submitted.value(),
+                                                           static_cast<std::uint64_t>(remaining_ns.count()));
+                    if (!completed) break;
+                    sample = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                            std::chrono::steady_clock::now() - sample_start)
+                                                            .count());
+                    ++submit_sample_count;
                 }
-                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                         std::chrono::steady_clock::now() - start)
-                                         .count();
-                record.submit_overhead_ns = static_cast<std::uint64_t>(elapsed) / iterations;
-                // No transfer or arithmetic probe is enabled until a safe scratch-buffer API
-                // exists; zero explicitly means "not measured", not a zero-cost transfer.
-                if (std::chrono::steady_clock::now() >= deadline) return;
+                if (submit_sample_count > 0) {
+                    std::sort(submit_samples.begin(), submit_samples.begin() + submit_sample_count);
+                    record.submit_overhead_ns = submit_samples[submit_sample_count / 2];
+                }
+                // Transfer measurements use private, temporary buffers and are bounded by the
+                // remaining startup budget. They never inspect or modify application buffers.
+                if (std::chrono::steady_clock::now() < deadline && transfers) {
+                    struct ScratchBuffer {
+                        const vk::Device* device = nullptr;
+                        detail::MemoryPool* pool = nullptr;
+                        detail::PoolAllocation allocation;
+                        detail::TransferBuffer transfer;
+                        ~ScratchBuffer() {
+                            if (device && transfer.buffer != VK_NULL_HANDLE)
+                                device->api().destroy_buffer(device->handle(), transfer.buffer, nullptr);
+                            if (pool && allocation.token != 0) (void)pool->deallocate(allocation);
+                        }
+                    };
+                    const auto make_scratch = [&](VkDeviceSize size) -> std::shared_ptr<ScratchBuffer> {
+                        auto scratch = std::make_shared<ScratchBuffer>();
+                        scratch->device = &device;
+                        VkBufferCreateInfo buffer_info{};
+                        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                        buffer_info.size = size;
+                        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                        const std::array families{queue_family_policy.compute_family,
+                                                  queue_family_policy.transfer_family};
+                        if (queue_family_policy.uses_concurrent_sharing()) {
+                            buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                            buffer_info.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
+                            buffer_info.pQueueFamilyIndices = families.data();
+                        } else {
+                            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                        }
+                        VkBuffer buffer = VK_NULL_HANDLE;
+                        if (device.api().create_buffer(device.handle(), &buffer_info, nullptr, &buffer) !=
+                            VK_SUCCESS)
+                            return {};
+                        scratch->transfer.buffer = buffer;
+                        VkMemoryRequirements requirements{};
+                        device.api().get_buffer_memory_requirements(device.handle(), buffer, &requirements);
+                        auto type = detail::MemoryManager::select_memory_type(
+                            info.memory_types(), info.memory_type_preferences(),
+                            detail::MemoryPolicy::DevicePreferred, requirements.memoryTypeBits);
+                        if (!type) return {};
+                        auto pool = std::find_if(pools.begin(), pools.end(), [&](const auto& candidate) {
+                            return candidate->memory_type_index() == type.value();
+                        });
+                        if (pool == pools.end()) return {};
+                        auto allocation =
+                            (*pool)->allocate({requirements.size, requirements.alignment, false, false});
+                        if (!allocation) return {};
+                        scratch->pool = pool->get();
+                        scratch->allocation = allocation.value();
+                        const auto bound = device.api().bind_buffer_memory(
+                            device.handle(), buffer, allocation.value().memory, allocation.value().offset);
+                        if (bound != VK_SUCCESS) return {};
+                        const auto& memory_type = info.memory_types()[type.value()];
+                        scratch->transfer = detail::TransferBuffer{
+                            .buffer = buffer,
+                            .size = size,
+                            .memory = allocation.value().memory,
+                            .memory_offset = allocation.value().offset,
+                            .memory_allocation_size = allocation.value().dedicated
+                                                          ? allocation.value().allocated_size
+                                                          : (*pool)->block_size(),
+                            .mapped_data = static_cast<std::byte*>(allocation.value().mapped_data),
+                            .host_visible = memory_type.host_visible,
+                            .host_coherent = memory_type.host_coherent,
+                            .queue_use = std::make_shared<detail::QueueTimelineUse>()};
+                        return scratch;
+                    };
+
+                    const auto bytes_per_second = [](std::uint64_t bytes, std::uint64_t nanoseconds) {
+                        if (nanoseconds == 0) return std::uint64_t{0};
+                        const auto rate = static_cast<long double>(bytes) * 1'000'000'000.0L /
+                                          static_cast<long double>(nanoseconds);
+                        return rate >= static_cast<long double>(UINT64_MAX)
+                                   ? UINT64_MAX
+                                   : static_cast<std::uint64_t>(rate);
+                    };
+                    const auto first = make_scratch(256U * 1024U);
+                    const auto second = first ? make_scratch(256U * 1024U) : nullptr;
+                    const auto measure = [&](std::uint64_t bytes, const auto& submit,
+                                             std::uint64_t& best_rate,
+                                             const std::shared_ptr<ScratchBuffer>& keep_first,
+                                             const std::shared_ptr<ScratchBuffer>& keep_second = {},
+                                             const std::shared_ptr<void>& keep_extra = {}) {
+                        if (std::chrono::steady_clock::now() >= deadline) return false;
+                        const auto started = std::chrono::steady_clock::now();
+                        auto event = submit();
+                        if (!event) return false;
+                        auto retained =
+                            event.value().on_complete([keep_first, keep_second, keep_extra](Status) {});
+                        if (!retained) {
+                            (void)event.value().wait();
+                            return false;
+                        }
+                        const auto remaining = deadline - std::chrono::steady_clock::now();
+                        if (remaining <= std::chrono::steady_clock::duration::zero()) return false;
+                        auto completed = event.value().wait_for(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(remaining));
+                        if (!completed) return false;
+                        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                 std::chrono::steady_clock::now() - started)
+                                                 .count();
+                        best_rate =
+                            std::max(best_rate, bytes_per_second(bytes, static_cast<std::uint64_t>(elapsed)));
+                        return true;
+                    };
+                    if (first && second) {
+                        for (const std::uint64_t size : {4'096U, 65'536U, 256U * 1024U}) {
+                            if (std::chrono::steady_clock::now() >= deadline) break;
+                            auto input = std::make_shared<std::vector<std::byte>>(
+                                static_cast<std::size_t>(size), std::byte{0x5a});
+                            auto output =
+                                std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(size));
+                            const bool uploaded = measure(
+                                size, [&] { return transfers->upload(first->transfer, 0, *input); },
+                                record.h2d_bytes_per_second, first, second, input);
+                            if (!uploaded) break;
+                            const bool downloaded = measure(
+                                size, [&] { return transfers->download(first->transfer, 0, *output); },
+                                record.d2h_bytes_per_second, first, second, output);
+                            if (!downloaded || *output != *input) break;
+                            const bool copied = measure(
+                                size,
+                                [&] {
+                                    return transfers->copy(first->transfer, 0, second->transfer, 0, size);
+                                },
+                                record.device_copy_bytes_per_second, first, second);
+                            if (!copied) break;
+                            std::fill(output->begin(), output->end(), std::byte{0});
+                            const bool copy_readback = measure(
+                                size, [&] { return transfers->download(second->transfer, 0, *output); },
+                                record.d2h_bytes_per_second, first, second, output);
+                            if (!copy_readback || *output != *input) break;
+                        }
+                    }
+                }
+                // Tiny dispatch, streaming kernel and ALU fields remain zero unless a validated
+                // shader probe is available; zero means unmeasured, never infinite performance.
+                if (std::chrono::steady_clock::now() >= hard_deadline) return;
                 auto status = detail::calibration::write_atomic(path, record);
-                if (status && std::chrono::steady_clock::now() <= deadline) calibration_record = record;
+                if (status && std::chrono::steady_clock::now() <= hard_deadline) calibration_record = record;
             } catch (...) {
                 // Calibration is best-effort; it must never prevent Runtime creation.
             }
@@ -1698,6 +1854,13 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
                                  latest.duration_nanoseconds,
                                  latest.host_timestamp_nanoseconds,
                                  latest.calibration_deviation_nanoseconds};
+}
+
+Status Runtime::calibrate() {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    for (auto& device : impl_->devices)
+        if (device) device->calibrate(impl_->calibration_directory, impl_->calibration_budget_ms, true);
+    return ok_status();
 }
 
 Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {
