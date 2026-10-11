@@ -45,6 +45,11 @@ private:
 
 /// Device-level Vulkan entry points used by the initial backend and fault-injection seam.
 struct Api {
+    DispatchFunction<VkResult(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer*)>
+        create_buffer;
+    DispatchFunction<void(VkDevice, VkBuffer, const VkAllocationCallbacks*)> destroy_buffer;
+    DispatchFunction<void(VkDevice, VkBuffer, VkMemoryRequirements*)> get_buffer_memory_requirements;
+    DispatchFunction<VkResult(VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize)> bind_buffer_memory;
     DispatchFunction<VkResult(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*,
                               VkDeviceMemory*)>
         allocate_memory;

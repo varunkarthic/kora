@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add persistent, bounded upload/readback staging rings with timeline-tagged reservations, safe
+  reclamation, growth/wait exhaustion handling, and topology-aware transfer-path selection.
+
 ## [0.1.22] - 2026-10-11
 
 - Add an MPSC Vulkan queue service with serialized submission, timeline-based GPU completion callbacks,

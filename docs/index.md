@@ -36,6 +36,7 @@ internals/suballocator
 internals/memory-pool
 internals/command-pools
 internals/queue-context
+internals/staging-ring
 internals/dirty-ranges
 device-selection
 memory-model

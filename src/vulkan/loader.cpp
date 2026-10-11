@@ -45,6 +45,10 @@ struct LoaderState {
 
 struct DeviceState {
     std::shared_ptr<LoaderState> loader;
+    PFN_vkCreateBuffer create_buffer = nullptr;
+    PFN_vkDestroyBuffer destroy_buffer = nullptr;
+    PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
+    PFN_vkBindBufferMemory bind_buffer_memory = nullptr;
     PFN_vkAllocateMemory allocate_memory = nullptr;
     PFN_vkFreeMemory free_memory = nullptr;
     PFN_vkMapMemory map_memory = nullptr;
@@ -64,6 +68,27 @@ struct DeviceState {
     PFN_vkGetSemaphoreCounterValue get_semaphore_counter_value = nullptr;
     PFN_vkWaitSemaphores wait_semaphores = nullptr;
 };
+
+VkResult VKAPI_PTR create_buffer(void* context, VkDevice device, const VkBufferCreateInfo* info,
+                                 const VkAllocationCallbacks* allocator, VkBuffer* buffer) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->create_buffer;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, allocator, buffer);
+}
+void VKAPI_PTR destroy_buffer(void* context, VkDevice device, VkBuffer buffer,
+                              const VkAllocationCallbacks* allocator) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->destroy_buffer;
+    if (function != nullptr) function(device, buffer, allocator);
+}
+void VKAPI_PTR get_buffer_memory_requirements(void* context, VkDevice device, VkBuffer buffer,
+                                              VkMemoryRequirements* requirements) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->get_buffer_memory_requirements;
+    if (function != nullptr) function(device, buffer, requirements);
+}
+VkResult VKAPI_PTR bind_buffer_memory(void* context, VkDevice device, VkBuffer buffer, VkDeviceMemory memory,
+                                      VkDeviceSize offset) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->bind_buffer_memory;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, buffer, memory, offset);
+}
 
 VkResult VKAPI_PTR allocate_memory(void* context, VkDevice device, const VkMemoryAllocateInfo* info,
                                    const VkAllocationCallbacks* allocator, VkDeviceMemory* memory) noexcept {
@@ -1040,6 +1065,14 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
 
     auto api_state = std::make_shared<DeviceState>();
     api_state->loader = state_->loader;
+    api_state->create_buffer =
+        load_device_function<PFN_vkCreateBuffer>(get_device_proc, device_state->device, "vkCreateBuffer");
+    api_state->destroy_buffer =
+        load_device_function<PFN_vkDestroyBuffer>(get_device_proc, device_state->device, "vkDestroyBuffer");
+    api_state->get_buffer_memory_requirements = load_device_function<PFN_vkGetBufferMemoryRequirements>(
+        get_device_proc, device_state->device, "vkGetBufferMemoryRequirements");
+    api_state->bind_buffer_memory = load_device_function<PFN_vkBindBufferMemory>(
+        get_device_proc, device_state->device, "vkBindBufferMemory");
     api_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device_state->device, "vkAllocateMemory");
     api_state->free_memory =
@@ -1089,6 +1122,10 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device is missing required backend entry points");
     }
     Api api;
+    api.create_buffer = {api_state.get(), create_buffer};
+    api.destroy_buffer = {api_state.get(), destroy_buffer};
+    api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
+    api.bind_buffer_memory = {api_state.get(), bind_buffer_memory};
     api.allocate_memory = {api_state.get(), allocate_memory};
     api.free_memory = {api_state.get(), free_memory};
     api.map_memory = {api_state.get(), map_memory};
@@ -1155,6 +1192,14 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     }
     auto device_state = std::make_shared<DeviceState>();
     device_state->loader = loader;
+    device_state->create_buffer =
+        load_device_function<PFN_vkCreateBuffer>(get_device_proc, device, "vkCreateBuffer");
+    device_state->destroy_buffer =
+        load_device_function<PFN_vkDestroyBuffer>(get_device_proc, device, "vkDestroyBuffer");
+    device_state->get_buffer_memory_requirements = load_device_function<PFN_vkGetBufferMemoryRequirements>(
+        get_device_proc, device, "vkGetBufferMemoryRequirements");
+    device_state->bind_buffer_memory =
+        load_device_function<PFN_vkBindBufferMemory>(get_device_proc, device, "vkBindBufferMemory");
     device_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device, "vkAllocateMemory");
     device_state->free_memory =
@@ -1205,6 +1250,10 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide vkQueueSubmit");
 
     Api api;
+    api.create_buffer = {device_state.get(), create_buffer};
+    api.destroy_buffer = {device_state.get(), destroy_buffer};
+    api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
+    api.bind_buffer_memory = {device_state.get(), bind_buffer_memory};
     api.allocate_memory = {device_state.get(), allocate_memory};
     api.free_memory = {device_state.get(), free_memory};
     api.map_memory = {device_state.get(), map_memory};

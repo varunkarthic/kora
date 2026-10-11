@@ -5,6 +5,7 @@ kora_add_test(kora_integration_tests integration
     test_runtime.cpp
     test_command_pool_set.cpp
     test_queue_context.cpp
+    test_staging_ring.cpp
     test_vulkan_instance.cpp
     test_vulkan_skip.cpp
 )

@@ -70,6 +70,9 @@ public:
     Status deallocate(const PoolAllocation& allocation);
     MemoryPoolStats stats() const noexcept;
     std::uint64_t block_size() const noexcept { return block_size_; }
+    std::uint32_t memory_type_index() const noexcept { return config_.memory_type_index; }
+    bool host_visible() const noexcept { return config_.host_visible; }
+    bool host_coherent() const noexcept { return config_.host_coherent; }
 
 private:
     struct Block;

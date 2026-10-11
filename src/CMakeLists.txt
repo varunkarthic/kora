@@ -9,6 +9,7 @@ add_library(kora
   core/version.cpp
   memory/suballocator.cpp
   memory/memory_pool.cpp
+    memory/staging_ring.cpp
   memory/memory_manager.cpp
   memory/dirty_ranges.cpp
   memory/residency.cpp
