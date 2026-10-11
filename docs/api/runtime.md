@@ -78,3 +78,6 @@ for (const auto& device : runtime.value().devices()) {
   not produce a UUID and therefore cannot match `ByUuid` selection.
 - `DevicePolicy::AllEligible` initializes queue and transfer services for every selected device;
   callers should account for the associated driver resources and staging allocations.
+- Startup calibration currently stores only a bounded host-side overhead probe. Tiny GPU dispatch,
+  H2D/D2H, device-copy, streaming-kernel, and ALU measurements are recorded as unavailable and do not
+  influence device selection. See [Startup calibration](../calibration.md).

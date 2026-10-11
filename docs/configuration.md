@@ -19,6 +19,8 @@ also reset to the default with a warning.
 | `KORA_PROFILE` | `off`, `basic`, `profile`, `trace` | `basic` | Telemetry detail |
 | `KORA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `off` | `warn` | Default log threshold |
 | `KORA_CACHE_DIR` | Filesystem path | Platform cache path | Persistent cache location |
+| `KORA_STARTUP_CALIBRATION` | Boolean | `true` | Enable best-effort startup calibration |
+| `KORA_CALIBRATION_BUDGET_MS` | Integer, 1–60000 | `250` | Per-device startup calibration time budget |
 | `KORA_DETERMINISTIC` | Boolean | `false` | Deterministic scheduling policy |
 | `KORA_SHUTDOWN_MODE` | `graceful`, `cancel_pending` | `graceful` | Runtime shutdown behavior |
 | `KORA_DISABLE_AUTOTUNE` | Boolean | `false` | Disable online tuning |

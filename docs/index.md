@@ -15,6 +15,7 @@ overview
 getting-started
 building
 testing
+calibration
 configuration
 ```
 

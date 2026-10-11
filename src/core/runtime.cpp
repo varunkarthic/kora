@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/calibration.hpp"
 #include "core/device_caps.hpp"
 #include "core/event_state.hpp"
 #include "kernel/pipeline_manager.hpp"
@@ -200,6 +202,39 @@ struct Runtime::Impl {
             return {};
         }
 
+        void calibrate(const std::filesystem::path& directory, std::uint32_t budget_ms) noexcept {
+            try {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+                const auto key = id.uuid.empty() ? std::to_string(id.index) : id.uuid;
+                const auto path = directory / "calibration" / (key + ".json");
+                detail::calibration::Record cached;
+                if (id.uuid.empty()) return;
+                if (detail::calibration::read(path, id.uuid, driver_version, cached)) {
+                    calibration_record = cached;
+                    return;
+                }
+                detail::calibration::Record record;
+                record.device_uuid = id.uuid;
+                record.driver_version = driver_version;
+                constexpr auto iterations = 1000;
+                const auto start = std::chrono::steady_clock::now();
+                for (std::uint32_t index = 0; index < iterations; ++index) {
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                }
+                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - start)
+                                         .count();
+                record.submit_overhead_ns = static_cast<std::uint64_t>(elapsed) / iterations;
+                // No transfer or arithmetic probe is enabled until a safe scratch-buffer API
+                // exists; zero explicitly means "not measured", not a zero-cost transfer.
+                if (std::chrono::steady_clock::now() >= deadline) return;
+                auto status = detail::calibration::write_atomic(path, record);
+                if (status && std::chrono::steady_clock::now() <= deadline) calibration_record = record;
+            } catch (...) {
+                // Calibration is best-effort; it must never prevent Runtime creation.
+            }
+        }
+
         ~DeviceEntry() {
             if (dispatch) dispatch->accepting_work.store(false, std::memory_order_release);
             if (queue) (void)queue->shutdown(ShutdownMode::Graceful);
@@ -218,12 +253,17 @@ struct Runtime::Impl {
         // Queue destruction drains callbacks before their dispatch/transfer/pool dependencies go away.
         std::unique_ptr<vk::QueueContext> queue;
         std::uint64_t runtime_id = 0;
+        std::uint32_t driver_version = 0;
+        detail::calibration::Record calibration_record;
     };
 
     vk::Loader loader;
     vk::Instance instance;
     std::vector<std::unique_ptr<DeviceEntry>> devices;
     std::uint64_t runtime_id = 0;
+    std::filesystem::path calibration_directory;
+    std::uint32_t calibration_budget_ms = 250;
+    bool calibrate_on_start = true;
 };
 
 namespace {
@@ -641,6 +681,9 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     if (!selected) return std::move(selected).error();
 
     auto impl = std::make_unique<Impl>(std::move(loader_result).value(), std::move(instance_result).value());
+    impl->calibration_directory = resolved.cache_dir;
+    impl->calibration_budget_ms = resolved.calibration_budget_ms;
+    impl->calibrate_on_start = resolved.enable_startup_calibration;
     for (const auto& id : selected.value()) {
         if (id.index >= physical_devices.value().size()) {
             return Error(ErrorCode::InternalInvariantViolation,
@@ -672,8 +715,11 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         auto entry = std::make_unique<Impl::DeviceEntry>(
             id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
             std::move(pipeline_manager).value(), impl->runtime_id);
+        entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();
+        if (impl->calibrate_on_start)
+            entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
         impl->devices.push_back(std::move(entry));
     }
     return Runtime(std::move(impl));

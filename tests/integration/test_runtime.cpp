@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,28 @@ TEST(Runtime, HonorsExplicitDeviceIndexSelection) {
     const auto devices = runtime.value().devices();
     ASSERT_EQ(devices.size(), 1U);
     EXPECT_EQ(devices.front().index, 0U);
+}
+
+TEST(Runtime, CorruptCalibrationCacheNeverBlocksStartup) {
+    const auto directory = std::filesystem::temp_directory_path() / "kora-calibration-runtime-test";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory / "calibration", ignored);
+    {
+        std::ofstream corrupt(directory / "calibration" / "00112233445566778899aabbccddeeff.json");
+        corrupt << "corrupt";
+    }
+    kora::RuntimeOptions options;
+    options.cache_dir = directory.string();
+    options.calibration_budget_ms = 50;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        std::filesystem::remove_all(directory, ignored);
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    std::filesystem::remove_all(directory, ignored);
 }
 
 TEST(Runtime, DispatchesVectorAddOnEveryEnumeratedDevice) {

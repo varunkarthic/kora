@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add versioned, device-identity-bound startup calibration records with bounded best-effort probing,
+  corruption-safe cache loading, and explicit configuration. Transfer and compute measurements remain
+  marked unavailable until safe scratch-buffer probes are implemented.
+
 ## [0.1.30] - 2026-10-11
 
 - Add a fluent storage-buffer dispatch API with checked workgroup limits, typed host-shadow buffer

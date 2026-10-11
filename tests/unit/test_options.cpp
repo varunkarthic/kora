@@ -24,6 +24,23 @@ TEST(Options, Defaults) {
     EXPECT_EQ(r.telemetry, TelemetryLevel::Basic);
     EXPECT_TRUE(r.warnings.empty());
     EXPECT_FALSE(r.cache_dir.empty());
+    EXPECT_TRUE(r.enable_startup_calibration);
+    EXPECT_EQ(r.calibration_budget_ms, 250U);
+}
+
+TEST(Options, StartupCalibrationCanBeDisabledAndBudgetConfigured) {
+    auto from_environment =
+        resolve({}, fake({{"KORA_STARTUP_CALIBRATION", "false"}, {"KORA_CALIBRATION_BUDGET_MS", "500"}}));
+    EXPECT_FALSE(from_environment.enable_startup_calibration);
+    EXPECT_EQ(from_environment.calibration_budget_ms, 500U);
+    auto explicit_options = RuntimeOptions{};
+    explicit_options.enable_startup_calibration = true;
+    explicit_options.calibration_budget_ms = 75;
+    auto from_api =
+        resolve(explicit_options,
+                fake({{"KORA_STARTUP_CALIBRATION", "false"}, {"KORA_CALIBRATION_BUDGET_MS", "900"}}));
+    EXPECT_TRUE(from_api.enable_startup_calibration);
+    EXPECT_EQ(from_api.calibration_budget_ms, 75U);
 }
 
 TEST(Options, EnvApplies) {

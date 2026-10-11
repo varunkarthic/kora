@@ -14,6 +14,10 @@ Header: `include/kora/options.hpp`
 `ShutdownMode`
 : Chooses graceful completion or cancellation of pending work during runtime shutdown.
 
+`enable_startup_calibration`, `calibration_budget_ms`
+: Enable/disable best-effort per-device startup calibration and configure its budget (1–60,000 ms,
+  default 250 ms). Corresponding environment variables are documented in `configuration.md`.
+
 `RuntimeOptions`
 : User-facing optional overrides. An unset field permits environment/default resolution.
 
