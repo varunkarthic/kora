@@ -95,8 +95,11 @@ def test_python_vector_add_and_awaitable_event(tmp_path):
     async def wait_for_event():
         await event
 
+    async def wait_for_readback():
+        await runtime.readback(output, source_device)
+
     asyncio.run(wait_for_event())
-    asyncio.run(runtime.readback(output, source_device))
+    asyncio.run(wait_for_readback())
     result = struct.unpack(f"<{count}I", output.read())
     assert list(result) == [left + right for left, right in zip(values_a, values_b)]
 
