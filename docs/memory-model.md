@@ -170,11 +170,26 @@ stateDiagram-v2
 Transfers therefore happen only for absent or stale destinations. Copy freshness is determined by
 version equality; stale allocations are never considered valid sources. `begin_transfer` compares a
 plan with a fresh query so a plan cannot be submitted after an intervening write. The tracker is a
-policy/model layer and does not submit GPU copies itself; the future transfer engine will consume
-these plans. Its per-device validity map may refine the coarse transition result (for example, a
-host-to-device completion with one device copy is `HostAndDeviceClean`, while multiple current
-replicas are summarized as `Shared`). A tracker is single-owner and not thread-safe; its caller must
-serialize writes, transfer completion, and eviction for that logical allocation.
+policy/model layer; runtime dispatch applies the same freshness principle per buffer using a monotonic
+host-shadow version and a per-device cache. A cached device version is reused for subsequent
+read/read-write bindings, including intermediate outputs marked `DeviceNewer`, while host writes and
+writable mappings advance the host version and force a new upload.
+
+By default, dispatch completion preserves the existing host-readable behavior by downloading every
+written binding. `DispatchBuilder::defer_readback()` keeps outputs device-resident for a later dispatch;
+`Runtime::readback(buffer)` explicitly requests host freshness after the producing dispatch completes.
+`Runtime::transfer_stats()` reports upload and download operation counts, allowing chain tests to
+assert that only initial inputs are uploaded and only the requested final output is downloaded.
+Device copies live only as long as their Runtime context and are not shared across Runtime instances.
+The tracker remains single-owner and not thread-safe; callers must serialize writes, submissions, and
+readback requests for a logical allocation.
+
+| Runtime API | Residency contract |
+| --- | --- |
+| `BufferHandle::host_version()` | Returns a monotonic host-shadow generation, advanced by writes and writable mappings. |
+| `DispatchBuilder::defer_readback()` | Leaves write/read-write outputs device-newer when dispatch completes instead of scheduling host copies. |
+| `Runtime::readback(buffer)` | Schedules a device-to-host copy for a deferred device-newer buffer; wait for the returned event before reading the host shadow. Already host-current buffers return a completed event. |
+| `Runtime::transfer_stats()` | Reports upload/download operation counts issued by the runtime for verification and diagnostics. |
 
 For every non-disposed tracker, at least one host or device copy must equal `current_version`. An
 eviction that would remove the last such copy returns `InvalidArgument` and leaves the tracker
@@ -194,7 +209,8 @@ properties.
 Residency tests exhaust every state/event pair, check host/device freshness for single and multiple
 devices, verify stale or absent destinations trigger plans while current destinations do not, and
 exercise transfer failure, eviction, disposal, and a deterministic operation sequence against the
-current-copy invariant.
+current-copy invariant. Runtime integration tests execute a two-dispatch chain, assert exact upload
+and download counters, and verify explicit readback returns the final result.
 
 Run the focused tests with:
 

@@ -203,3 +203,125 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
     }
 #endif
 }
+
+TEST(Runtime, ReusesDeviceResidentIntermediateAcrossDispatchChain) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    auto runtime = kora::Runtime::create();
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+
+    constexpr std::uint32_t count = 257;
+    std::vector<std::uint32_t> input(count), zero(count, 0);
+    for (std::uint32_t index = 0; index < count; ++index) input[index] = index * 5U + 3U;
+    kora::KernelMetadata metadata;
+    metadata.kernel_id = "integration.vector_add.residency_chain";
+    metadata.local_size = {64, 1, 1};
+    metadata.push_constant_size = sizeof(std::uint32_t);
+    metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    metadata.bindings = {
+        {.set = 0,
+         .binding = 0,
+         .name = "input_a",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 1,
+         .name = "input_b",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 2,
+         .name = "output_data",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Write},
+    };
+    auto kernel = runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", metadata);
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    auto input_buffer = runtime.value().create_buffer<std::uint32_t>(count);
+    auto zero_buffer = runtime.value().create_buffer<std::uint32_t>(count);
+    auto intermediate = runtime.value().create_buffer<std::uint32_t>(count);
+    auto output = runtime.value().create_buffer<std::uint32_t>(count);
+    auto host_updated_output = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_buffer);
+    ASSERT_TRUE(zero_buffer);
+    ASSERT_TRUE(intermediate);
+    ASSERT_TRUE(output);
+    ASSERT_TRUE(host_updated_output);
+    ASSERT_TRUE(input_buffer.value().write(input));
+    ASSERT_TRUE(zero_buffer.value().write(zero));
+
+    const auto byte_count = count;
+    auto first = runtime.value()
+                     .dispatch(kernel.value())
+                     .global(count)
+                     .read(input_buffer.value())
+                     .read(zero_buffer.value())
+                     .write(intermediate.value())
+                     .push(byte_count)
+                     .defer_readback()
+                     .submit();
+    ASSERT_TRUE(first) << first.error().describe();
+    ASSERT_TRUE(first.value().wait());
+    auto before_second = runtime.value().transfer_stats();
+    ASSERT_TRUE(before_second);
+    EXPECT_EQ(before_second.value().uploads, 2U);
+    EXPECT_EQ(before_second.value().downloads, 0U);
+
+    auto second = runtime.value()
+                      .dispatch(kernel.value())
+                      .global(count)
+                      .read(intermediate.value())
+                      .read(zero_buffer.value())
+                      .write(output.value())
+                      .push(byte_count)
+                      .defer_readback()
+                      .submit();
+    ASSERT_TRUE(second) << second.error().describe();
+    ASSERT_TRUE(second.value().wait());
+    auto before_readback = runtime.value().transfer_stats();
+    ASSERT_TRUE(before_readback);
+    EXPECT_EQ(before_readback.value().uploads, 2U);
+    EXPECT_EQ(before_readback.value().downloads, 0U);
+
+    auto readback = runtime.value().readback(output.value().handle());
+    ASSERT_TRUE(readback) << readback.error().describe();
+    ASSERT_TRUE(readback.value().wait());
+    auto after_readback = runtime.value().transfer_stats();
+    ASSERT_TRUE(after_readback);
+    EXPECT_EQ(after_readback.value().uploads, 2U);
+    EXPECT_EQ(after_readback.value().downloads, 1U);
+    const auto values = output.value().read();
+    ASSERT_TRUE(values) << values.error().describe();
+    EXPECT_EQ(values.value(), input);
+
+    std::vector<std::uint32_t> host_override(count, 9U);
+    ASSERT_TRUE(output.value().write(host_override));
+    auto already_host_current = runtime.value().readback(output.value().handle());
+    ASSERT_TRUE(already_host_current);
+    ASSERT_TRUE(already_host_current.value().wait());
+    EXPECT_EQ(runtime.value().transfer_stats().value().downloads, 1U);
+    EXPECT_EQ(output.value().read().value(), host_override);
+
+    auto third = runtime.value()
+                     .dispatch(kernel.value())
+                     .global(count)
+                     .read(output.value())
+                     .read(zero_buffer.value())
+                     .write(host_updated_output.value())
+                     .push(byte_count)
+                     .defer_readback()
+                     .submit();
+    ASSERT_TRUE(third) << third.error().describe();
+    ASSERT_TRUE(third.value().wait());
+    EXPECT_EQ(runtime.value().transfer_stats().value().uploads, 3U);
+    auto final_readback = runtime.value().readback(host_updated_output.value().handle());
+    ASSERT_TRUE(final_readback);
+    ASSERT_TRUE(final_readback.value().wait());
+    EXPECT_EQ(host_updated_output.value().read().value(), host_override);
+#endif
+}

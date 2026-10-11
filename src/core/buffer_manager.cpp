@@ -14,6 +14,7 @@ struct BufferRecord {
     std::vector<std::byte> host_shadow;
     DirtyRangeSet dirty_ranges;
     std::uint64_t size_bytes = 0;
+    std::uint64_t host_version = 1;
     std::uint64_t last_use_timeline_value = 0;
     std::uint32_t reference_count = 0;
     std::uint32_t pin_count = 0;
@@ -223,6 +224,15 @@ std::uint64_t BufferHandle::size_bytes() const noexcept {
     return record == nullptr ? 0 : record->size_bytes;
 }
 
+Result<std::uint64_t> BufferHandle::host_version() const {
+    if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
+    std::lock_guard lock(state_->mutex);
+    const auto* record = state_->find(id_);
+    if (record == nullptr || record->pending_free)
+        return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    return record->host_version;
+}
+
 Result<std::vector<std::byte>> BufferHandle::read_bytes() const {
     if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
     std::lock_guard lock(state_->mutex);
@@ -240,9 +250,36 @@ Status BufferHandle::write_bytes(std::span<const std::byte> bytes) const {
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
     if (bytes.size() != record->host_shadow.size())
         return Error(ErrorCode::InvalidArgument, "buffer write byte count does not match its capacity");
-    std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
-    if (!bytes.empty()) return record->dirty_ranges.add({0, bytes.size()});
+    if (!bytes.empty() && record->host_version == std::numeric_limits<std::uint64_t>::max())
+        return Error(ErrorCode::Overflow, "buffer host content version overflow");
+    if (!bytes.empty()) {
+        auto status = record->dirty_ranges.add({0, bytes.size()});
+        if (!status) return status;
+        std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
+        ++record->host_version;
+    }
     return ok_status();
+}
+
+Result<ConditionalBufferWrite> BufferHandle::write_bytes_if_version(std::span<const std::byte> bytes,
+                                                                    std::uint64_t expected_version) const {
+    if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
+    std::lock_guard lock(state_->mutex);
+    auto* record = state_->find(id_);
+    if (record == nullptr || record->pending_free)
+        return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    if (record->host_version != expected_version) return ConditionalBufferWrite{false, record->host_version};
+    if (bytes.size() != record->host_shadow.size())
+        return Error(ErrorCode::InvalidArgument, "buffer write byte count does not match its capacity");
+    if (!bytes.empty() && record->host_version == std::numeric_limits<std::uint64_t>::max())
+        return Error(ErrorCode::Overflow, "buffer host content version overflow");
+    if (!bytes.empty()) {
+        auto status = record->dirty_ranges.add({0, bytes.size()});
+        if (!status) return status.error();
+        std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
+        ++record->host_version;
+    }
+    return ConditionalBufferWrite{true, record->host_version};
 }
 
 Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, std::uint64_t size) const {
@@ -263,8 +300,11 @@ Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, st
     }
     if (record->pin_count == UINT32_MAX) return Error(ErrorCode::Overflow, "buffer pin count overflow");
     if (access != MapAccess::Read && size != 0) {
+        if (record->host_version == std::numeric_limits<std::uint64_t>::max())
+            return Error(ErrorCode::Overflow, "buffer host content version overflow");
         auto status = record->dirty_ranges.add({offset, size});
         if (!status) return status.error();
+        ++record->host_version;
     }
     ++record->pin_count;
     auto* data = record->host_shadow.data() + static_cast<std::size_t>(offset);
