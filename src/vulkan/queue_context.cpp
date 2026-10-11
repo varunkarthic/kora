@@ -1,5 +1,6 @@
 #include "vulkan/queue_context.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <system_error>
