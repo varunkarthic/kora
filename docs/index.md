@@ -34,6 +34,7 @@ internals/queues
 internals/logical-device
 internals/suballocator
 internals/memory-pool
+internals/dirty-ranges
 device-selection
 memory-model
 ci-cd

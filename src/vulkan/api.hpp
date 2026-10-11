@@ -52,6 +52,9 @@ struct Api {
     DispatchFunction<VkResult(VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags, void**)>
         map_memory;
     DispatchFunction<void(VkDevice, VkDeviceMemory)> unmap_memory;
+    DispatchFunction<VkResult(VkDevice, uint32_t, const VkMappedMemoryRange*)> flush_mapped_memory_ranges;
+    DispatchFunction<VkResult(VkDevice, uint32_t, const VkMappedMemoryRange*)>
+        invalidate_mapped_memory_ranges;
     DispatchFunction<VkResult(VkQueue, uint32_t, const VkSubmitInfo*, VkFence)> queue_submit;
 
 private:

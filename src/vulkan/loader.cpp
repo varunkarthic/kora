@@ -49,6 +49,8 @@ struct DeviceState {
     PFN_vkFreeMemory free_memory = nullptr;
     PFN_vkMapMemory map_memory = nullptr;
     PFN_vkUnmapMemory unmap_memory = nullptr;
+    PFN_vkFlushMappedMemoryRanges flush_mapped_memory_ranges = nullptr;
+    PFN_vkInvalidateMappedMemoryRanges invalidate_mapped_memory_ranges = nullptr;
     PFN_vkQueueSubmit queue_submit = nullptr;
 };
 
@@ -73,6 +75,18 @@ VkResult VKAPI_PTR map_memory(void* context, VkDevice device, VkDeviceMemory mem
 void VKAPI_PTR unmap_memory(void* context, VkDevice device, VkDeviceMemory memory) noexcept {
     const auto& state = *static_cast<DeviceState*>(context);
     state.unmap_memory(device, memory);
+}
+
+VkResult VKAPI_PTR flush_mapped_memory_ranges(void* context, VkDevice device, uint32_t count,
+                                              const VkMappedMemoryRange* ranges) noexcept {
+    const auto& state = *static_cast<DeviceState*>(context);
+    return state.flush_mapped_memory_ranges(device, count, ranges);
+}
+
+VkResult VKAPI_PTR invalidate_mapped_memory_ranges(void* context, VkDevice device, uint32_t count,
+                                                   const VkMappedMemoryRange* ranges) noexcept {
+    const auto& state = *static_cast<DeviceState*>(context);
+    return state.invalidate_mapped_memory_ranges(device, count, ranges);
 }
 
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue queue, uint32_t count, const VkSubmitInfo* submits,
@@ -962,11 +976,16 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         load_device_function<PFN_vkMapMemory>(get_device_proc, device_state->device, "vkMapMemory");
     api_state->unmap_memory =
         load_device_function<PFN_vkUnmapMemory>(get_device_proc, device_state->device, "vkUnmapMemory");
+    api_state->flush_mapped_memory_ranges = load_device_function<PFN_vkFlushMappedMemoryRanges>(
+        get_device_proc, device_state->device, "vkFlushMappedMemoryRanges");
+    api_state->invalidate_mapped_memory_ranges = load_device_function<PFN_vkInvalidateMappedMemoryRanges>(
+        get_device_proc, device_state->device, "vkInvalidateMappedMemoryRanges");
     api_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device_state->device, "vkQueueSubmit");
     if (api_state->allocate_memory == nullptr || api_state->free_memory == nullptr ||
         api_state->map_memory == nullptr || api_state->unmap_memory == nullptr ||
-        api_state->queue_submit == nullptr) {
+        api_state->flush_mapped_memory_ranges == nullptr ||
+        api_state->invalidate_mapped_memory_ranges == nullptr || api_state->queue_submit == nullptr) {
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device is missing required backend entry points");
     }
     Api api;
@@ -974,6 +993,8 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.free_memory = {api_state.get(), free_memory};
     api.map_memory = {api_state.get(), map_memory};
     api.unmap_memory = {api_state.get(), unmap_memory};
+    api.flush_mapped_memory_ranges = {api_state.get(), flush_mapped_memory_ranges};
+    api.invalidate_mapped_memory_ranges = {api_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {api_state.get(), queue_submit};
     api.lifetime_ = std::move(api_state);
     return Device(std::move(device_state), std::move(api));
@@ -1030,10 +1051,16 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     device_state->map_memory = load_device_function<PFN_vkMapMemory>(get_device_proc, device, "vkMapMemory");
     device_state->unmap_memory =
         load_device_function<PFN_vkUnmapMemory>(get_device_proc, device, "vkUnmapMemory");
+    device_state->flush_mapped_memory_ranges = load_device_function<PFN_vkFlushMappedMemoryRanges>(
+        get_device_proc, device, "vkFlushMappedMemoryRanges");
+    device_state->invalidate_mapped_memory_ranges = load_device_function<PFN_vkInvalidateMappedMemoryRanges>(
+        get_device_proc, device, "vkInvalidateMappedMemoryRanges");
     device_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device, "vkQueueSubmit");
     if (device_state->allocate_memory == nullptr || device_state->free_memory == nullptr ||
-        device_state->map_memory == nullptr || device_state->unmap_memory == nullptr)
+        device_state->map_memory == nullptr || device_state->unmap_memory == nullptr ||
+        device_state->flush_mapped_memory_ranges == nullptr ||
+        device_state->invalidate_mapped_memory_ranges == nullptr)
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide memory entry points");
     if (device_state->queue_submit == nullptr)
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide vkQueueSubmit");
@@ -1043,6 +1070,8 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.free_memory = {device_state.get(), free_memory};
     api.map_memory = {device_state.get(), map_memory};
     api.unmap_memory = {device_state.get(), unmap_memory};
+    api.flush_mapped_memory_ranges = {device_state.get(), flush_mapped_memory_ranges};
+    api.invalidate_mapped_memory_ranges = {device_state.get(), invalidate_mapped_memory_ranges};
     api.queue_submit = {device_state.get(), queue_submit};
     api.lifetime_ = std::move(device_state);
     return api;
@@ -1113,6 +1142,8 @@ Api FaultInjector::api() const {
     result.free_memory = state_->inner.free_memory;
     result.map_memory = state_->inner.map_memory;
     result.unmap_memory = state_->inner.unmap_memory;
+    result.flush_mapped_memory_ranges = state_->inner.flush_mapped_memory_ranges;
+    result.invalidate_mapped_memory_ranges = state_->inner.invalidate_mapped_memory_ranges;
     result.queue_submit = {state_.get(), State::queue_submit};
     result.lifetime_ = state_;
     return result;

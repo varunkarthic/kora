@@ -6,12 +6,13 @@
 #include <utility>
 
 #include "kora/buffer.hpp"
+#include "memory/dirty_ranges.hpp"
 
 namespace kora::detail {
 
 struct BufferRecord {
     std::vector<std::byte> host_shadow;
-    std::vector<DirtyRange> dirty_ranges;
+    DirtyRangeSet dirty_ranges;
     std::uint64_t size_bytes = 0;
     std::uint64_t last_use_timeline_value = 0;
     std::uint32_t reference_count = 0;
@@ -233,13 +234,8 @@ Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, st
     }
     if (record->pin_count == UINT32_MAX) return Error(ErrorCode::Overflow, "buffer pin count overflow");
     if (access != MapAccess::Read && size != 0) {
-        try {
-            record->dirty_ranges.push_back({offset, size});
-        } catch (const std::bad_alloc&) {
-            return Error(ErrorCode::AllocationFailed, "unable to record the mapped buffer dirty range");
-        } catch (const std::length_error&) {
-            return Error(ErrorCode::Overflow, "buffer dirty-range metadata exceeds container capacity");
-        }
+        auto status = record->dirty_ranges.add({offset, size});
+        if (!status) return status.error();
     }
     ++record->pin_count;
     auto* data = record->host_shadow.data() + static_cast<std::size_t>(offset);
@@ -316,7 +312,7 @@ Result<std::vector<DirtyRange>> BufferManager::dirty_ranges(BufferId id) const {
         return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
     }
     try {
-        return record->dirty_ranges;
+        return record->dirty_ranges.ranges();
     } catch (const std::bad_alloc&) {
         return Error(ErrorCode::AllocationFailed, "unable to copy buffer dirty-range metadata");
     }
