@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -29,8 +30,12 @@ public:
     explicit operator bool() const noexcept { return callback_ != nullptr; }
 
     R operator()(Args... args) const noexcept {
-        if (callback_ == nullptr) return VK_ERROR_INITIALIZATION_FAILED;
-        return callback_(context_, args...);
+        if constexpr (std::is_void_v<R>) {
+            if (callback_ != nullptr) callback_(context_, args...);
+        } else {
+            if (callback_ == nullptr) return static_cast<R>(VK_ERROR_INITIALIZATION_FAILED);
+            return callback_(context_, args...);
+        }
     }
 
 private:
@@ -43,6 +48,10 @@ struct Api {
     DispatchFunction<VkResult(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*,
                               VkDeviceMemory*)>
         allocate_memory;
+    DispatchFunction<void(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*)> free_memory;
+    DispatchFunction<VkResult(VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags, void**)>
+        map_memory;
+    DispatchFunction<void(VkDevice, VkDeviceMemory)> unmap_memory;
     DispatchFunction<VkResult(VkQueue, uint32_t, const VkSubmitInfo*, VkFence)> queue_submit;
 
 private:

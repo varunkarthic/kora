@@ -19,6 +19,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Vulkan memory blocks and pools with bounded small-buffer suballocation, persistent host mapping,
+  dedicated-allocation bypass, adaptive block sizing, and allocation-call telemetry.
 - Checked, alignment-aware two-level segregated-fit suballocation with immediate coalescing,
   fragmentation telemetry, Debug invariant validation, and deterministic randomized tests.
 - Detailed human and schema-versioned JSON `kora-info` diagnostics for device queues, memory,
