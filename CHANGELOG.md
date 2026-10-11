@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add public Task/TaskGraph metadata, automatic RAW/WAR/WAW dependencies, explicit ordering, and
+  deterministic topological cycle validation.
 - Add cached queue-family policy, concurrent runtime-buffer sharing, and timeline semaphore ordering
   between dedicated transfer and compute queues when their families differ.
 
