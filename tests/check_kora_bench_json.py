@@ -34,6 +34,12 @@ if "--gpu" in arguments:
         "gpu_saxpy_4096_end_to_end",
     }
     expected_names |= {f"gpu_vector_add_{count}_end_to_end" for count in (64, 256, 1024, 4096)}
+    expected_names |= {
+        "gpu_reduction_4096_end_to_end",
+        "gpu_tiled_scan_4096_end_to_end",
+        "gpu_tiled_matmul_64_end_to_end",
+        "gpu_stencil_4096_end_to_end",
+    }
 assert {item["name"] for item in report["results"]} == expected_names
 for result in report["results"]:
     assert result["unit"] == "ns"

@@ -20,7 +20,11 @@ if [[ ! -x "$install_dir/bin/kora-bench" ]]; then
 fi
 python3 tests/check_kora_bench_json.py "$install_dir/bin/kora-bench"
 if [[ -f "$install_dir/share/kora/benchmarks/kora_bench_vector_add.spv" &&
-      -f "$install_dir/share/kora/benchmarks/kora_bench_saxpy.spv" ]]; then
+      -f "$install_dir/share/kora/benchmarks/kora_bench_saxpy.spv" &&
+      -f "$install_dir/share/kora/benchmarks/kora_bench_reduction.spv" &&
+      -f "$install_dir/share/kora/benchmarks/kora_bench_scan.spv" &&
+      -f "$install_dir/share/kora/benchmarks/kora_bench_tiled_matmul.spv" &&
+      -f "$install_dir/share/kora/benchmarks/kora_bench_stencil.spv" ]]; then
   if python3 tests/check_kora_bench_json.py "$install_dir/bin/kora-bench" --gpu --smoke; then
     :
   else

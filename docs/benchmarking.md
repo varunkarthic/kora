@@ -38,7 +38,8 @@ build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 > kora-gpu-be
 ctest --preset debug -R KoraBench.GpuSmoke --output-on-failure
 ```
 
-The GPU run requires a usable Vulkan device and compiled vector-add/SAXPY fixtures. Missing build-time
+The GPU run requires a usable Vulkan device and compiled vector-add, SAXPY, reduction, scan, tiled
+matmul, and stencil fixtures. Missing build-time
 shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper reports that as a
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
@@ -57,6 +58,10 @@ skip. The installed executable looks for its shader next to the binary or under
 | `gpu_tiny_dispatch_1` | Submit one vector-add work item on Vulkan and wait for completion. | End-to-end host latency, including runtime buffer transfers. |
 | `gpu_vector_add_N_end_to_end` | Submit N vector-add work items for N in 64, 256, 1024, and 4096. | Includes upload, dispatch, and output readback; not a kernel-only duration. |
 | `gpu_saxpy_4096_end_to_end` | Submit a 4096-element SAXPY on Vulkan and wait. | Resets host input each iteration; includes upload and readback. |
+| `gpu_reduction_4096_end_to_end` | Reduce 4096 float values into 64 workgroup sums. | Sum of each 64-value tile is validated before timing. |
+| `gpu_tiled_scan_4096_end_to_end` | Inclusive scan each 64-value workgroup tile. | Each tile resets its prefix at the workgroup boundary; validates tile results. |
+| `gpu_tiled_matmul_64_end_to_end` | Multiply two 64×64 matrices using 8×8 shared-memory tiles. | Inputs are all ones and every output is checked. |
+| `gpu_stencil_4096_end_to_end` | Apply a three-point 1D stencil to 4096 values. | Checks both boundary and interior outputs. |
 
 ## Report contract
 
@@ -70,9 +75,9 @@ are recorded alongside them.
 ## Scope and interpretation
 
 CPU-side measurements are always available. Optional GPU cases cover tiny dispatch and size-swept
-vector-add/SAXPY, allowing a coarse CPU/GPU crossover comparison. Device transfer bandwidth,
-direct-versus-staged copies, reduction/scan/matmul/stencil kernels, raw-Vulkan baselines, and Python
-overhead are not currently measured. Those require workload-specific fixtures and
+vector-add/SAXPY, reduction, tiled scan, tiled matmul, and stencil. Device transfer bandwidth,
+direct-versus-staged copies, raw-Vulkan baselines, and Python overhead are not currently measured.
+Those require additional workload-specific fixtures and
 hardware/environment qualification; do not infer them from other results. Scheduler results do not
 include end-to-end Runtime device selection because the candidate cost model is not yet wired into
 `Runtime::dispatch()`.

@@ -310,6 +310,169 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                       [](float value) { return value == 5.0F; }))
         return false;
     results.push_back(run("gpu_saxpy_4096_end_to_end", [&] { run_saxpy(); }, options));
+
+    kora::KernelMetadata reduction_metadata;
+    reduction_metadata.kernel_id = "kora_bench.reduction";
+    reduction_metadata.local_size = {64, 1, 1};
+    reduction_metadata.push_constant_size = sizeof(std::uint32_t);
+    reduction_metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    reduction_metadata.bindings = {
+        {0, 0, "input_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "output_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Write},
+    };
+    auto reduction_fixture = fixture.parent_path() / KORA_BENCH_REDUCTION_FIXTURE_NAME;
+    if (!std::filesystem::exists(reduction_fixture))
+        reduction_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
+                            KORA_BENCH_REDUCTION_FIXTURE_NAME;
+    auto reduction = runtime.load_kernel(reduction_fixture, "main", std::move(reduction_metadata));
+    if (!reduction) {
+        std::cerr << "GPU benchmarks unavailable: " << reduction.error().describe() << '\n';
+        return false;
+    }
+    std::vector<float> reduction_input(element_count, 1.0F);
+    auto reduction_source = runtime.create_buffer<float>(element_count);
+    auto reduction_output = runtime.create_buffer<float>(element_count / 64);
+    if (!reduction_source || !reduction_output || !reduction_source.value().write(reduction_input))
+        return false;
+    const auto run_reduction = [&] {
+        auto event = runtime.dispatch(reduction.value())
+                         .global(element_count)
+                         .read(reduction_source.value())
+                         .write(reduction_output.value())
+                         .push(element_count)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan reduction dispatch failed");
+    };
+    run_reduction();
+    auto reduced_values = reduction_output.value().read();
+    if (!reduced_values || !std::all_of(reduced_values.value().begin(), reduced_values.value().end(),
+                                        [](float value) { return value == 64.0F; }))
+        return false;
+    results.push_back(run("gpu_reduction_4096_end_to_end", run_reduction, options));
+
+    kora::KernelMetadata scan_metadata;
+    scan_metadata.kernel_id = "kora_bench.scan_tile64";
+    scan_metadata.local_size = {64, 1, 1};
+    scan_metadata.push_constant_size = sizeof(std::uint32_t);
+    scan_metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    scan_metadata.bindings = {
+        {0, 0, "input_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "output_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Write},
+    };
+    auto scan_fixture = fixture.parent_path() / KORA_BENCH_SCAN_FIXTURE_NAME;
+    if (!std::filesystem::exists(scan_fixture))
+        scan_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
+                       KORA_BENCH_SCAN_FIXTURE_NAME;
+    auto scan = runtime.load_kernel(scan_fixture, "main", std::move(scan_metadata));
+    if (!scan) {
+        std::cerr << "GPU benchmarks unavailable: " << scan.error().describe() << '\n';
+        return false;
+    }
+    std::vector<std::uint32_t> scan_input(element_count, 1U);
+    auto scan_source = runtime.create_buffer<std::uint32_t>(element_count);
+    auto scan_output = runtime.create_buffer<std::uint32_t>(element_count);
+    if (!scan_source || !scan_output || !scan_source.value().write(scan_input)) return false;
+    const auto run_scan = [&] {
+        auto event = runtime.dispatch(scan.value())
+                         .global(element_count)
+                         .read(scan_source.value())
+                         .write(scan_output.value())
+                         .push(element_count)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan scan dispatch failed");
+    };
+    run_scan();
+    auto scanned_values = scan_output.value().read();
+    if (!scanned_values || !std::all_of(scanned_values.value().begin(), scanned_values.value().end(),
+                                        [index = std::uint32_t{0}](std::uint32_t value) mutable {
+                                            return value == (index++ % 64) + 1;
+                                        }))
+        return false;
+    results.push_back(run("gpu_tiled_scan_4096_end_to_end", run_scan, options));
+
+    kora::KernelMetadata matmul_metadata;
+    matmul_metadata.kernel_id = "kora_bench.tiled_matmul";
+    matmul_metadata.local_size = {8, 8, 1};
+    matmul_metadata.push_constant_size = sizeof(std::uint32_t);
+    matmul_metadata.push_constants = {{"dimension", "u32", 0, sizeof(std::uint32_t)}};
+    matmul_metadata.bindings = {
+        {0, 0, "matrix_a", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "matrix_b", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 2, "matrix_c", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Write},
+    };
+    auto matmul_fixture = fixture.parent_path() / KORA_BENCH_MATMUL_FIXTURE_NAME;
+    if (!std::filesystem::exists(matmul_fixture))
+        matmul_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
+                         KORA_BENCH_MATMUL_FIXTURE_NAME;
+    auto matmul = runtime.load_kernel(matmul_fixture, "main", std::move(matmul_metadata));
+    if (!matmul) {
+        std::cerr << "GPU benchmarks unavailable: " << matmul.error().describe() << '\n';
+        return false;
+    }
+    constexpr std::uint32_t matrix_dimension = 64;
+    constexpr std::uint32_t matrix_elements = matrix_dimension * matrix_dimension;
+    std::vector<float> matrix_values(matrix_elements, 1.0F);
+    auto matrix_a = runtime.create_buffer<float>(matrix_elements);
+    auto matrix_b = runtime.create_buffer<float>(matrix_elements);
+    auto matrix_c = runtime.create_buffer<float>(matrix_elements);
+    if (!matrix_a || !matrix_b || !matrix_c || !matrix_a.value().write(matrix_values) ||
+        !matrix_b.value().write(matrix_values))
+        return false;
+    const auto run_matmul = [&] {
+        auto event = runtime.dispatch(matmul.value())
+                         .global(matrix_dimension, matrix_dimension, 1)
+                         .read(matrix_a.value())
+                         .read(matrix_b.value())
+                         .write(matrix_c.value())
+                         .push(matrix_dimension)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan tiled matmul failed");
+    };
+    run_matmul();
+    auto matrix_values_out = matrix_c.value().read();
+    if (!matrix_values_out || !std::all_of(matrix_values_out.value().begin(), matrix_values_out.value().end(),
+                                           [](float value) { return value == 64.0F; }))
+        return false;
+    results.push_back(run("gpu_tiled_matmul_64_end_to_end", run_matmul, options));
+
+    kora::KernelMetadata stencil_metadata;
+    stencil_metadata.kernel_id = "kora_bench.stencil";
+    stencil_metadata.local_size = {64, 1, 1};
+    stencil_metadata.push_constant_size = sizeof(std::uint32_t);
+    stencil_metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    stencil_metadata.bindings = {
+        {0, 0, "input_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "output_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Write},
+    };
+    auto stencil_fixture = fixture.parent_path() / KORA_BENCH_STENCIL_FIXTURE_NAME;
+    if (!std::filesystem::exists(stencil_fixture))
+        stencil_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
+                          KORA_BENCH_STENCIL_FIXTURE_NAME;
+    auto stencil = runtime.load_kernel(stencil_fixture, "main", std::move(stencil_metadata));
+    if (!stencil) {
+        std::cerr << "GPU benchmarks unavailable: " << stencil.error().describe() << '\n';
+        return false;
+    }
+    std::vector<float> stencil_input(element_count, 1.0F);
+    auto stencil_source = runtime.create_buffer<float>(element_count);
+    auto stencil_output = runtime.create_buffer<float>(element_count);
+    if (!stencil_source || !stencil_output || !stencil_source.value().write(stencil_input)) return false;
+    const auto run_stencil = [&] {
+        auto event = runtime.dispatch(stencil.value())
+                         .global(element_count)
+                         .read(stencil_source.value())
+                         .write(stencil_output.value())
+                         .push(element_count)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan stencil dispatch failed");
+    };
+    run_stencil();
+    auto stencil_values = stencil_output.value().read();
+    if (!stencil_values || stencil_values.value().front() != 2.0F || stencil_values.value().back() != 2.0F ||
+        !std::all_of(stencil_values.value().begin() + 1, stencil_values.value().end() - 1,
+                     [](float value) { return value == 3.0F; }))
+        return false;
+    results.push_back(run("gpu_stencil_4096_end_to_end", run_stencil, options));
     return true;
 }
 #endif
