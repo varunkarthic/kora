@@ -63,4 +63,8 @@ if(TARGET kora-bench)
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_kora_bench_json.py"
       $<TARGET_FILE:kora-bench>)
   set_tests_properties(KoraBench.Smoke PROPERTIES LABELS integration TIMEOUT 30)
+  add_test(NAME KoraBench.GpuSmoke
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_kora_bench_json.py"
+      $<TARGET_FILE:kora-bench> --gpu --smoke)
+  set_tests_properties(KoraBench.GpuSmoke PROPERTIES LABELS integration TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()

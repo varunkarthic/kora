@@ -1,8 +1,11 @@
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <numeric>
@@ -14,6 +17,7 @@
 
 #include "core/scheduler_cost.hpp"
 #include "kora/execution_plan.hpp"
+#include "kora/runtime.hpp"
 #include "kora/task_graph.hpp"
 #include "memory/suballocator.hpp"
 
@@ -23,6 +27,7 @@ using Clock = std::chrono::steady_clock;
 struct Options {
     std::size_t iterations = 100;
     std::size_t warmup = 10;
+    bool gpu = false;
 };
 
 struct Result {
@@ -45,13 +50,17 @@ bool parse_options(int argc, char** argv, Options& options) {
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if (argument == "--help" || argument == "-h") {
-            std::cout << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke]\n"
-                         "Runs deterministic CPU-side microbenchmarks and writes a JSON report to stdout.\n";
+            std::cout << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke] [--gpu]\n"
+                         "Runs CPU microbenchmarks; --gpu adds Vulkan tiny-dispatch and vector-add cases.\n";
             return false;
         }
         if (argument == "--smoke") {
             options.iterations = 3;
             options.warmup = 1;
+            continue;
+        }
+        if (argument == "--gpu") {
+            options.gpu = true;
             continue;
         }
         if (argument == "--iterations" || argument == "--warmup") {
@@ -144,6 +153,18 @@ bool allocation_operation() {
     return bytes.front() == std::byte{0};
 }
 
+bool cpu_vector_add_operation() {
+    std::array<std::uint32_t, 1024> left{};
+    std::array<std::uint32_t, 1024> right{};
+    std::array<std::uint32_t, 1024> output{};
+    left.fill(3);
+    right.fill(7);
+    for (std::size_t index = 0; index < output.size(); ++index) output[index] = left[index] + right[index];
+    static std::atomic<std::uint32_t> sink{0};
+    sink.store(output.back(), std::memory_order_relaxed);
+    return sink.load(std::memory_order_relaxed) == 10;
+}
+
 bool allocator_throughput_operation() {
     auto created = kora::detail::Suballocator::create(1U << 20U);
     if (!created) return false;
@@ -178,6 +199,111 @@ bool allocator_fragmentation_operation() {
            stats.external_fragmentation_bytes > 0;
 }
 
+#ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
+bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path) {
+    kora::RuntimeOptions runtime_options;
+    runtime_options.telemetry = kora::TelemetryLevel::Off;
+    runtime_options.enable_startup_calibration = false;
+    runtime_options.disable_autotune = true;
+    auto runtime_result = kora::Runtime::create(runtime_options);
+    if (!runtime_result) {
+        std::cerr << "GPU benchmarks unavailable: " << runtime_result.error().describe() << '\n';
+        return false;
+    }
+    auto runtime = std::move(runtime_result).value();
+    kora::KernelMetadata metadata;
+    metadata.kernel_id = "kora_bench.vector_add";
+    metadata.local_size = {64, 1, 1};
+    metadata.push_constant_size = sizeof(std::uint32_t);
+    metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    metadata.bindings = {
+        {0, 0, "input_a", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "input_b", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 2, "output_data", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Write},
+    };
+    auto fixture =
+        std::filesystem::absolute(executable_path).parent_path() / KORA_BENCH_VECTOR_ADD_FIXTURE_NAME;
+    if (!std::filesystem::exists(fixture))
+        fixture = std::filesystem::absolute(executable_path).parent_path().parent_path() / "share" / "kora" /
+                  "benchmarks" / KORA_BENCH_VECTOR_ADD_FIXTURE_NAME;
+    auto kernel = runtime.load_kernel(fixture, "main", std::move(metadata));
+    if (!kernel) {
+        std::cerr << "GPU benchmarks unavailable: " << kernel.error().describe() << '\n';
+        return false;
+    }
+    constexpr std::uint32_t element_count = 1024;
+    std::vector<std::uint32_t> input_a(element_count, 3), input_b(element_count, 7);
+    auto a = runtime.create_buffer<std::uint32_t>(element_count);
+    auto b = runtime.create_buffer<std::uint32_t>(element_count);
+    auto output = runtime.create_buffer<std::uint32_t>(element_count);
+    if (!a || !b || !output || !a.value().write(input_a) || !b.value().write(input_b)) return false;
+    const auto dispatch = [&](std::uint32_t count) {
+        auto event = runtime.dispatch(kernel.value())
+                         .global(count)
+                         .read(a.value())
+                         .read(b.value())
+                         .write(output.value())
+                         .push(count)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan dispatch failed");
+    };
+    results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
+    dispatch(element_count);
+    auto sum_values = output.value().read();
+    if (!sum_values || !std::all_of(sum_values.value().begin(), sum_values.value().end(),
+                                    [](std::uint32_t value) { return value == 10; }))
+        return false;
+    results.push_back(run("gpu_vector_add_1024_end_to_end", [&] { dispatch(element_count); }, options));
+
+    kora::KernelMetadata saxpy_metadata;
+    saxpy_metadata.kernel_id = "kora_bench.saxpy";
+    saxpy_metadata.local_size = {64, 1, 1};
+    saxpy_metadata.push_constant_size = sizeof(float) + sizeof(std::uint32_t);
+    saxpy_metadata.push_constants = {{"scale", "f32", 0, sizeof(float)},
+                                     {"count", "u32", sizeof(float), sizeof(std::uint32_t)}};
+    saxpy_metadata.bindings = {
+        {0, 0, "input_x", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::Read},
+        {0, 1, "input_y", kora::KernelBindingKind::StorageBuffer, kora::KernelAccess::ReadWrite},
+    };
+    auto saxpy_fixture = fixture.parent_path() / KORA_BENCH_SAXPY_FIXTURE_NAME;
+    if (!std::filesystem::exists(saxpy_fixture))
+        saxpy_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
+                        KORA_BENCH_SAXPY_FIXTURE_NAME;
+    auto saxpy = runtime.load_kernel(saxpy_fixture, "main", std::move(saxpy_metadata));
+    if (!saxpy) {
+        std::cerr << "GPU benchmarks unavailable: " << saxpy.error().describe() << '\n';
+        return false;
+    }
+    std::vector<float> saxpy_x(element_count, 2.0F), saxpy_y(element_count, 1.0F);
+    auto x = runtime.create_buffer<float>(element_count);
+    auto y = runtime.create_buffer<float>(element_count);
+    if (!x || !y || !x.value().write(saxpy_x) || !y.value().write(saxpy_y)) return false;
+    struct SaxpyParams {
+        float scale;
+        std::uint32_t count;
+    };
+    static_assert(sizeof(SaxpyParams) == sizeof(float) + sizeof(std::uint32_t));
+    const SaxpyParams params{2.0F, element_count};
+    const auto run_saxpy = [&] {
+        if (!y.value().write(saxpy_y)) throw std::runtime_error("SAXPY input reset failed");
+        auto event = runtime.dispatch(saxpy.value())
+                         .global(element_count)
+                         .read(x.value())
+                         .read_write(y.value())
+                         .push(params)
+                         .submit();
+        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan SAXPY dispatch failed");
+    };
+    run_saxpy();
+    auto saxpy_values = y.value().read();
+    if (!saxpy_values || !std::all_of(saxpy_values.value().begin(), saxpy_values.value().end(),
+                                      [](float value) { return value == 5.0F; }))
+        return false;
+    results.push_back(run("gpu_saxpy_1024_end_to_end", [&] { run_saxpy(); }, options));
+    return true;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -196,6 +322,7 @@ int main(int argc, char** argv) {
                  {"task_graph_replay_64", graph_replay_operation},
                  {"allocator_allocate_free_256", allocator_throughput_operation},
                  {"allocator_fragmentation_128", allocator_fragmentation_operation},
+                 {"cpu_vector_add_1024", cpu_vector_add_operation},
                  {"host_allocation_4k", allocation_operation}}) {
             auto result = run(
                 std::move(name),
@@ -208,6 +335,14 @@ int main(int argc, char** argv) {
     } catch (const std::exception& error) {
         std::cerr << "benchmark workload failed: " << error.what() << '\n';
         return 1;
+    }
+    if (options.gpu) {
+#ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
+        if (!add_gpu_benchmarks(results, options, argv[0])) return 3;
+#else
+        std::cerr << "GPU benchmarks require glslangValidator at build time\n";
+        return 3;
+#endif
     }
     std::cout << "{\"schema_version\":1,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
               << ",\"warmup\":" << options.warmup << ",\"results\":[";

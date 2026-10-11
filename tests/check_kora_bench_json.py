@@ -1,24 +1,40 @@
 #!/usr/bin/env python3
-"""Validate the tiny benchmark smoke report and its percentile/sample invariants."""
+"""Validate tiny benchmark reports and their percentile/sample invariants."""
 
 import json
 import subprocess
 import sys
 
 
-report = json.loads(subprocess.check_output([sys.argv[1], "--smoke"], text=True))
+arguments = [sys.argv[1], *sys.argv[2:]]
+if "--smoke" not in arguments:
+    arguments.append("--smoke")
+completed = subprocess.run(arguments, text=True, capture_output=True)
+if completed.returncode == 3:
+    print("GPU benchmark skipped: " + completed.stderr.strip())
+    sys.exit(77)
+completed.check_returncode()
+report = json.loads(completed.stdout)
 assert report["schema_version"] == 1
 assert report["clock"] == "steady_clock"
 assert report["iterations"] == 3
 assert report["warmup"] == 1
-assert {item["name"] for item in report["results"]} == {
+expected_names = {
     "scheduler_cost",
     "task_graph_finalize_64",
     "task_graph_replay_64",
     "allocator_allocate_free_256",
     "allocator_fragmentation_128",
+    "cpu_vector_add_1024",
     "host_allocation_4k",
 }
+if "--gpu" in arguments:
+    expected_names |= {
+        "gpu_tiny_dispatch_1",
+        "gpu_vector_add_1024_end_to_end",
+        "gpu_saxpy_1024_end_to_end",
+    }
+assert {item["name"] for item in report["results"]} == expected_names
 for result in report["results"]:
     assert result["unit"] == "ns"
     assert len(result["samples"]) == 3
