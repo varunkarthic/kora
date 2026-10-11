@@ -1,35 +1,86 @@
 # KORA documentation
 
-KORA is a vendor-neutral C++20 runtime for explicit heterogeneous CPU and Vulkan GPU workloads. It
-turns prebuilt SPIR-V compute kernels, buffers, dependencies, and runtime policies into portable
-execution without requiring CUDA, ROCm/HIP, oneAPI, or OpenCL.
+KORA is a C++20 runtime for explicit CPU and Vulkan compute. This handbook documents the current
+contracts, practical setup, operating limits, and internal design. It distinguishes working features
+from planned integrations: in particular, graph replay is caller-controlled and scheduler scoring is
+not yet wired into automatic Runtime placement.
 
-KORA is under active development. The documentation distinguishes implemented behavior from planned
-architecture. Interfaces described as planned are not yet available in the current source tree.
+## Choose a path
+
+```{mermaid}
+flowchart TD
+  START["What are you doing?"] --> BUILD["Trying KORA"]
+  START --> USE["Using the Runtime"]
+  START --> DEV["Developing or diagnosing"]
+  START --> PERF["Measuring performance"]
+  BUILD --> QUICK["Getting started → Building → Testing"]
+  USE --> API["Runtime API → Kernel format → Configuration"]
+  DEV --> DESIGN["Architecture → Invariants → Subsystem internals"]
+  DEV --> DEBUG["Debugging → Recovery → Security"]
+  PERF --> BENCH["Profiling → Benchmarking → Autotuning"]
+```
+
+## Get running
 
 ```{toctree}
-:maxdepth: 2
-:caption: Start here
+:maxdepth: 1
+:caption: Build and try
 
 overview
 platform-support
 getting-started
 building
 testing
-calibration
-profiling
-benchmarking
-autotuning
-python-api
+```
+
+## Use KORA
+
+```{toctree}
+:maxdepth: 1
+:caption: User guides
+
 configuration
+device-selection
+memory-model
+task-graph
+cpu-executor
+multi-gpu
+kernel-format
+python-api
+api/runtime
+api/options
+api/buffer
+api/event
+api/kernel
+api/errors
+api/verification
+api/logging
+api/version
+api/checked
+```
+
+## Design, diagnostics, and performance
+
+```{toctree}
+:maxdepth: 1
+:caption: Design and operations
+
+architecture
+internals/invariants
+synchronization
+profiling
+calibration
+autotuning
+scheduler
+benchmarking
+debugging
+recovery
 ```
 
 ```{toctree}
-:maxdepth: 2
-:caption: Design and operation
+:maxdepth: 1
+:caption: Internal references
 
-architecture
-debugging
 internals/core
 internals/checked-arithmetic
 internals/vulkan-backend
@@ -41,7 +92,6 @@ internals/logical-device
 internals/suballocator
 internals/memory-pool
 internals/eviction
-recovery
 internals/command-pools
 internals/queue-context
 internals/completion
@@ -52,48 +102,30 @@ internals/spirv
 internals/pipelines
 internals/aliasing
 internals/performance-db
-internals/invariants
-scheduler
-cpu-executor
-device-selection
-multi-gpu
-memory-model
+```
+
+## Install, release, and maintain
+
+```{toctree}
+:maxdepth: 1
+:caption: Project operations
+
 ci-cd
 releases
-synchronization
 security
 maintenance
 ```
 
+## Tools and API reference
+
 ```{toctree}
-:maxdepth: 2
+:maxdepth: 1
 :caption: Tools
 
 tools/kora-info
 ```
 
-```{toctree}
-:maxdepth: 2
-:caption: API reference
-
-api/errors
-api/options
-api/runtime
-kernel-format
-api/logging
-api/version
-api/checked
-api/buffer
-api/event
-api/kernel
-api/verification
-task-graph
-```
-
-## Documentation guarantees
-
-- Commands are written for the checked-in CMake presets.
-- Required and optional dependencies are identified separately.
-- Security, platform, and Vulkan limitations are stated explicitly.
-- A source-level design is not presented as runtime-verified behavior.
-- Release status reflects milestone gates: open gates mean Beta; all closed means Stable.
+The API reference pages above describe stable behavior only to the extent stated by each page; KORA
+is pre-1.0 and its public API may evolve. Commands use the checked-in presets unless explicitly
+labelled platform-specific. Benchmark values are observations from named local configurations, not
+hardware-independent guarantees. See [release maturity](releases.md) and [support boundaries](platform-support.md).

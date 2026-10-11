@@ -3,6 +3,10 @@
 KORA releases use `MAJOR.MINOR.PATCH`. The repository `VERSION` file selects the release line and
 automation increments the patch for every successfully validated push to `main`.
 
+`VERSION` is now `0.2`, so the next successful main-branch release is `v0.2.0`; later successful
+main commits produce `v0.2.1`, `v0.2.2`, and so on. The workflow looks up the matching `v0.2`
+milestone. An empty release milestone is never Stable; any open issue keeps the release Beta.
+
 ## Choosing a release
 
 Use Stable releases when all published validation gates are closed. Use Beta releases only when you
@@ -52,12 +56,13 @@ does not claim that a checklist template is evidence for a run that has not take
 ## Source build
 
 ```sh
-git clone --branch v0.1.0 https://github.com/varunkarthic/kora.git
+git clone --branch v0.2.0 https://github.com/varunkarthic/kora.git
 cd kora
 cmake --preset release -DKORA_VERSION_PATCH=0
 cmake --build --preset release --parallel
 ctest --preset release --output-on-failure
 ```
 
-Replace the example tag and patch with the selected release. See [CI and releases](ci-cd.md) for the
-automation and failure-recovery model.
+The example targets the first v0.2.x patch. For another patch, substitute its tag and the final
+numeric component in `KORA_VERSION_PATCH`. See [CI and releases](ci-cd.md) for automation and
+failure recovery.

@@ -32,7 +32,7 @@ upload/download.
 
 ## Version calculation
 
-[`VERSION`](../VERSION) stores `MAJOR.MINOR`, for example `0.1`. After CI succeeds for a push to
+[`VERSION`](../VERSION) stores `MAJOR.MINOR`, currently `0.2`. After CI succeeds for a push to
 `main`, `.github/workflows/release.yml` lists tags matching `vMAJOR.MINOR.*` and increments the highest
 patch number. With no prior matching tag, the first version is `MAJOR.MINOR.0`.
 

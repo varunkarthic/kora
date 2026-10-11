@@ -42,8 +42,8 @@ inside the selected build tree.
 | `ubsan` | Debug | UndefinedBehaviorSanitizer instrumentation |
 | `tsan` | Debug | ThreadSanitizer instrumentation |
 | `tests` | Debug | Explicit test-enabled build |
-| `benchmarks` | Release | Enables benchmark targets as they are added |
-| `python` | Release | Enables Python binding targets as they are added |
+| `benchmarks` | Release | Builds the optional `kora-bench` benchmark targets |
+| `python` | Release | Builds the optional pybind11 extension and Python test targets |
 
 Sanitizer presets require compiler and platform support. Each sanitizer is isolated in its own
 build tree because AddressSanitizer and ThreadSanitizer cannot be combined safely.
