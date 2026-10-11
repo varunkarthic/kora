@@ -39,9 +39,10 @@ this solo-maintained project.
 ## Scope and trust boundaries
 
 KORA parses kernel metadata and SPIR-V and interacts with Vulkan drivers, device memory, persistent
-caches, and user-provided buffers. Until the security documentation and validation layers are
-complete, treat untrusted kernel packages, cache files, and trace inputs as unsafe. Run them only in
-an operating-system sandbox with least privilege.
+caches, and user-provided buffers. Treat untrusted kernel packages, cache files, and trace inputs as
+unsafe even when KORA's structural validation succeeds. Run untrusted workloads only in an
+operating-system sandbox with least privilege; KORA is not a GPU sandbox and does not provide a
+complete process, device-time, or resource-isolation boundary.
 
 Vulkan validation layers are diagnostic tools; they are not a security boundary. TLS protects data
 in transit but does not authenticate a caller by itself. Never place secrets in command-line
