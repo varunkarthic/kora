@@ -15,6 +15,7 @@ struct Mock {
     std::atomic<uint32_t> resets{0};
     std::atomic<uint32_t> begins{0};
     std::atomic<uint32_t> ends{0};
+    std::atomic<uint32_t> command_resets{0};
     std::array<uintptr_t, 16> handles{};
 };
 
@@ -52,6 +53,10 @@ VkResult VKAPI_PTR end_buffer(void* context, VkCommandBuffer) noexcept {
     ++static_cast<Mock*>(context)->ends;
     return VK_SUCCESS;
 }
+VkResult VKAPI_PTR reset_buffer(void* context, VkCommandBuffer, VkCommandBufferResetFlags) noexcept {
+    ++static_cast<Mock*>(context)->command_resets;
+    return VK_SUCCESS;
+}
 
 Api mock_api(Mock& mock) {
     Api api;
@@ -62,6 +67,7 @@ Api mock_api(Mock& mock) {
     api.free_command_buffers = {&mock, free_buffers};
     api.begin_command_buffer = {&mock, begin_buffer};
     api.end_command_buffer = {&mock, end_buffer};
+    api.reset_command_buffer = {&mock, reset_buffer};
     return api;
 }
 
@@ -101,6 +107,19 @@ TEST(CommandPoolSet, RejectsUnacquiredBufferAndZeroTimelineValue) {
     ASSERT_TRUE(pools.end_recording(buffer.value()));
     ASSERT_TRUE(pools.submitted(buffer.value(), 1));
     EXPECT_EQ(pools.submitted(buffer.value(), 2).error().code, ErrorCode::InvalidArgument);
+}
+
+TEST(CommandPoolSet, DiscardsARecordingAfterSubmissionPreparationFails) {
+    Mock mock;
+    CommandPoolSet::Options options;
+    options.ring_size = 1;
+    CommandPoolSet pools(mock_api(mock), reinterpret_cast<VkDevice>(uintptr_t{99}), options);
+    auto buffer = pools.acquire(0);
+    ASSERT_TRUE(buffer);
+    ASSERT_TRUE(pools.discard(buffer.value()));
+    EXPECT_EQ(mock.command_resets.load(), 1U);
+    auto reusable = pools.acquire(0);
+    EXPECT_TRUE(reusable);
 }
 
 }  // namespace

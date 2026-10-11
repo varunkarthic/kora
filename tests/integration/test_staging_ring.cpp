@@ -66,7 +66,7 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
         auto slice = ring.reserve(size, 16, completed, [&](std::uint64_t value) {
             waited = true;
             completed = std::max(completed, value);
-            return ok_status();
+            return Result<std::uint64_t>(completed);
         });
         ASSERT_TRUE(slice) << slice.error().describe();
         live.erase(std::remove_if(live.begin(), live.end(),
@@ -80,6 +80,7 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
                         other.offset + other.size <= slice.value().offset);
         }
         std::fill_n(slice.value().mapped_data, static_cast<std::size_t>(size), std::byte{0x6d});
+        ASSERT_TRUE(ring.flush(slice.value()));
         ASSERT_TRUE(ring.retire(slice.value(), next_timeline));
         live.emplace_back(slice.value(), next_timeline);
         ++next_timeline;
@@ -92,7 +93,7 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
     bool waited_for_unsubmitted = false;
     auto exhausted = ring.reserve(1, 1, next_timeline, [&](std::uint64_t) {
         waited_for_unsubmitted = true;
-        return ok_status();
+        return Result<std::uint64_t>(next_timeline);
     });
     EXPECT_FALSE(exhausted);
     EXPECT_EQ(exhausted.error().code, ErrorCode::AllocationFailed);
@@ -108,7 +109,8 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
     auto readback_slice = readback_result.value()->reserve(128, 16, next_timeline, {});
     ASSERT_TRUE(readback_slice) << readback_slice.error().describe();
     EXPECT_NE(readback_slice.value().mapped_data, nullptr);
-    EXPECT_TRUE(readback_result.value()->cancel(readback_slice.value()));
+    ASSERT_TRUE(readback_result.value()->retire(readback_slice.value(), next_timeline));
+    EXPECT_TRUE(readback_result.value()->invalidate(readback_slice.value()));
 }
 
 }  // namespace

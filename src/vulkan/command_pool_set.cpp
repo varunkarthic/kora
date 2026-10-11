@@ -14,12 +14,13 @@ CommandPoolSet::CommandPoolSet(Api api, VkDevice device, const Options& options)
     if (device_ == VK_NULL_HANDLE || options.ring_size == 0 ||
         options.ring_size > std::numeric_limits<uint32_t>::max() || !api_.create_command_pool ||
         !api_.destroy_command_pool || !api_.reset_command_pool || !api_.allocate_command_buffers ||
-        !api_.begin_command_buffer || !api_.end_command_buffer) {
+        !api_.begin_command_buffer || !api_.end_command_buffer || !api_.reset_command_buffer) {
         return;
     }
     VkCommandPoolCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    create_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    create_info.flags =
+        VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     create_info.queueFamilyIndex = options.queue_family;
     if (api_.create_command_pool(device_, &create_info, nullptr, &pool_) != VK_SUCCESS) {
         pool_ = VK_NULL_HANDLE;
@@ -130,6 +131,22 @@ Status CommandPoolSet::end_recording(VkCommandBuffer buffer) {
     return Error(ErrorCode::InvalidArgument, "Command buffer was not recording in this pool set");
 }
 
+Status CommandPoolSet::discard(VkCommandBuffer buffer) {
+    KORA_TRY_STATUS(check_thread());
+    for (auto& slot : slots_) {
+        if (slot.buffer != buffer || !slot.acquired) continue;
+        const auto result = api_.reset_command_buffer(buffer, 0);
+        if (result != VK_SUCCESS)
+            return Error(ErrorCode::NoVulkanImplementation, "Failed to reset a discarded command buffer")
+                .with_vk(result);
+        slot.acquired = false;
+        slot.ended = false;
+        slot.completion_value = 0;
+        return ok_status();
+    }
+    return Error(ErrorCode::InvalidArgument, "Command buffer was not acquired from this pool set");
+}
+
 Status CommandPoolSet::submitted(VkCommandBuffer buffer, uint64_t signal_value) {
     KORA_TRY_STATUS(check_thread());
     if (signal_value == 0 || signal_value <= last_signal_value_) {
@@ -152,6 +169,15 @@ size_t CommandPoolSet::capacity() const noexcept {
 }
 size_t CommandPoolSet::allocation_count() const noexcept {
     return slots_.size();
+}
+
+uint64_t CommandPoolSet::oldest_pending_value() const noexcept {
+    uint64_t oldest = 0;
+    for (const auto& slot : slots_) {
+        if (slot.completion_value != 0 && (oldest == 0 || slot.completion_value < oldest))
+            oldest = slot.completion_value;
+    }
+    return oldest;
 }
 
 }  // namespace kora::vk

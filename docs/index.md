@@ -37,6 +37,7 @@ internals/memory-pool
 internals/command-pools
 internals/queue-context
 internals/staging-ring
+internals/transfers
 internals/dirty-ranges
 device-selection
 memory-model
@@ -64,6 +65,7 @@ api/logging
 api/version
 api/checked
 api/buffer
+api/event
 ```
 
 ## Documentation guarantees

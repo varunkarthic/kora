@@ -19,8 +19,11 @@ enum class StagingDirection : std::uint8_t { Upload, Readback };
 struct StagingSlice {
     std::uint64_t reservation = 0;
     VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
     std::uint64_t offset = 0;
     std::uint64_t size = 0;
+    std::uint64_t reserved_size = 0;
+    VkDeviceSize memory_offset = 0;
     std::byte* mapped_data = nullptr;
 };
 
@@ -34,9 +37,11 @@ public:
         VkBufferUsageFlags additional_usage = 0;
         MemoryTopology topology = MemoryTopology::Unknown;
         bool measured_staging_benefit = false;
+        VkDeviceSize non_coherent_atom_size = 1;
     };
 
-    using WaitForTimeline = std::function<Status(std::uint64_t)>;
+    /// Waits for a release value and returns an updated completed-timeline snapshot.
+    using WaitForTimeline = std::function<Result<std::uint64_t>(std::uint64_t)>;
 
     static Result<std::unique_ptr<StagingRing>> create(const vk::Device& device, MemoryPool& host_pool,
                                                        Options options);
@@ -51,6 +56,10 @@ public:
                                  const WaitForTimeline& wait_for);
     Status retire(const StagingSlice& slice, std::uint64_t release_timeline);
     Status cancel(const StagingSlice& slice);
+    Status flush(const StagingSlice& slice) const;
+    Status invalidate(const StagingSlice& slice) const;
+    /// Reclaims submitted reservations whose release timeline is at or below this value.
+    Status reclaim_completed(std::uint64_t completed_timeline);
 
     static bool should_use_staging(MemoryTopology topology, bool measured_staging_benefit = false) noexcept;
     VkDeviceSize capacity() const noexcept;

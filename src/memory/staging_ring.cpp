@@ -20,6 +20,7 @@ struct StagingRing::Segment {
     std::uint64_t id = 0;
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
+    VkDeviceSize reserved_size = 0;
     std::optional<std::uint64_t> release_timeline;
 };
 
@@ -42,7 +43,8 @@ Result<std::unique_ptr<StagingRing>> StagingRing::create(const vk::Device& devic
         return Error(ErrorCode::InvalidArgument,
                      "StagingRing requires a live device, host-visible pool, and buffer dispatch");
     }
-    if (options.initial_capacity == 0 || options.maximum_capacity < options.initial_capacity) {
+    if (options.initial_capacity == 0 || options.maximum_capacity < options.initial_capacity ||
+        !checked::is_pow2(options.non_coherent_atom_size)) {
         return Error(ErrorCode::InvalidArgument, "StagingRing capacity limits are invalid");
     }
     if (!should_use_staging(options.topology, options.measured_staging_benefit)) {
@@ -89,7 +91,14 @@ Result<void> StagingRing::add_block(VkDeviceSize capacity) {
         return Error(ErrorCode::UnsupportedFeature,
                      "StagingRing host-visible pool memory type is incompatible with its Vulkan buffer");
     }
-    auto allocation = host_pool_->allocate({requirements.size, requirements.alignment, false, false});
+    const auto storage_size = checked::align_up(requirements.size, options_.non_coherent_atom_size);
+    if (!storage_size) {
+        api.destroy_buffer(device_->handle(), buffer, nullptr);
+        return Error(ErrorCode::Overflow, "StagingRing memory requirement alignment overflowed");
+    }
+    const auto memory_alignment =
+        std::max<VkDeviceSize>(requirements.alignment, options_.non_coherent_atom_size);
+    auto allocation = host_pool_->allocate({*storage_size, memory_alignment, false, false});
     if (!allocation) {
         api.destroy_buffer(device_->handle(), buffer, nullptr);
         return std::move(allocation).error();
@@ -118,38 +127,48 @@ void StagingRing::reclaim(std::uint64_t completed_timeline) {
     }
 }
 
+Status StagingRing::reclaim_completed(std::uint64_t completed_timeline) {
+    std::lock_guard lock(mutex_);
+    reclaim(completed_timeline);
+    return ok_status();
+}
+
 Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignment,
                                           std::uint64_t completed_timeline, const WaitForTimeline& wait_for) {
     if (size == 0 || !checked::is_pow2(alignment)) {
         return Error(ErrorCode::InvalidArgument,
                      "staging reservation requires nonzero size and power-of-two alignment");
     }
+    const auto reserved_size = checked::align_up(size, options_.non_coherent_atom_size);
+    if (!reserved_size) return Error(ErrorCode::Overflow, "staging reservation alignment overflowed");
+    alignment = std::max(alignment, options_.non_coherent_atom_size);
     std::unique_lock lock(mutex_);
     auto completed = completed_timeline;
     for (;;) {
         reclaim(completed);
         for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
             auto& block = *blocks_[block_index];
-            if (size > block.capacity) continue;
+            if (*reserved_size > block.capacity) continue;
             auto try_gap = [&](VkDeviceSize begin) -> std::optional<VkDeviceSize> {
                 auto aligned = checked::align_up(begin, alignment);
-                if (!aligned || *aligned > block.capacity || size > block.capacity - *aligned)
+                if (!aligned || *aligned > block.capacity || *reserved_size > block.capacity - *aligned)
                     return std::nullopt;
                 std::vector<std::pair<VkDeviceSize, VkDeviceSize>> occupied;
                 occupied.reserve(block.segments.size());
                 for (const auto& segment : block.segments)
-                    occupied.emplace_back(segment.offset, segment.offset + segment.size);
+                    occupied.emplace_back(segment.offset, segment.offset + segment.reserved_size);
                 std::sort(occupied.begin(), occupied.end());
                 auto candidate = *aligned;
                 for (const auto& [start, end] : occupied) {
-                    if (candidate <= start && size <= start - candidate) return candidate;
+                    if (candidate <= start && *reserved_size <= start - candidate) return candidate;
                     if (candidate < end) {
                         auto next = checked::align_up(end, alignment);
                         if (!next) return std::nullopt;
                         candidate = *next;
                     }
                 }
-                if (candidate <= block.capacity && size <= block.capacity - candidate) return candidate;
+                if (candidate <= block.capacity && *reserved_size <= block.capacity - candidate)
+                    return candidate;
                 return std::nullopt;
             };
             auto offset = try_gap(block.cursor);
@@ -158,13 +177,15 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
                 if (next_reservation_ == std::numeric_limits<std::uint64_t>::max())
                     return Error(ErrorCode::Overflow, "staging reservation ID space is exhausted");
                 const auto id = next_reservation_++;
-                block.segments.push_back(Segment{id, *offset, size, std::nullopt});
-                block.cursor = (*offset + size) % block.capacity;
+                block.segments.push_back(Segment{id, *offset, size, *reserved_size, std::nullopt});
+                block.cursor = (*offset + *reserved_size) % block.capacity;
                 auto* mapped = static_cast<std::byte*>(block.allocation.mapped_data);
                 if (mapped == nullptr)
                     return Error(ErrorCode::InternalInvariantViolation,
                                  "host-visible staging allocation is not mapped");
-                return StagingSlice{id, block.buffer, *offset, size, mapped + *offset};
+                return StagingSlice{
+                    id,   block.buffer,   block.allocation.memory,           *offset,
+                    size, *reserved_size, block.allocation.offset + *offset, mapped + *offset};
             }
         }
 
@@ -190,7 +211,8 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
         auto waited = wait_for(*oldest);
         if (!waited) return std::move(waited).error();
         lock.lock();
-        completed = std::max(completed, *oldest);
+        completed = std::max(completed, waited.value());
+        reclaim(completed);
     }
 }
 
@@ -229,6 +251,57 @@ Status StagingRing::cancel(const StagingSlice& slice) {
         return ok_status();
     }
     return Error(ErrorCode::InvalidArgument, "staging reservation is unknown or already released");
+}
+
+Status StagingRing::flush(const StagingSlice& slice) const {
+    std::lock_guard lock(mutex_);
+    for (const auto& block : blocks_) {
+        if (block->buffer != slice.buffer || block->allocation.memory != slice.memory) continue;
+        const auto found =
+            std::find_if(block->segments.begin(), block->segments.end(), [&](const Segment& segment) {
+                return segment.id == slice.reservation && segment.offset == slice.offset &&
+                       segment.size == slice.size && segment.reserved_size == slice.reserved_size &&
+                       !segment.release_timeline;
+            });
+        if (found == block->segments.end()) break;
+        if (host_pool_->host_coherent()) return ok_status();
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = slice.memory;
+        range.offset = slice.memory_offset;
+        range.size = slice.reserved_size;
+        const auto result = device_->api().flush_mapped_memory_ranges(device_->handle(), 1, &range);
+        if (result != VK_SUCCESS)
+            return Error(ErrorCode::TransferFailed, "Flushing staging upload bytes failed").with_vk(result);
+        return ok_status();
+    }
+    return Error(ErrorCode::InvalidArgument, "staging upload slice is unknown or already submitted");
+}
+
+Status StagingRing::invalidate(const StagingSlice& slice) const {
+    std::lock_guard lock(mutex_);
+    for (const auto& block : blocks_) {
+        if (block->buffer != slice.buffer || block->allocation.memory != slice.memory) continue;
+        const auto found =
+            std::find_if(block->segments.begin(), block->segments.end(), [&](const Segment& segment) {
+                return segment.id == slice.reservation && segment.offset == slice.offset &&
+                       segment.size == slice.size && segment.reserved_size == slice.reserved_size &&
+                       segment.release_timeline.has_value();
+            });
+        if (found == block->segments.end()) break;
+        if (host_pool_->host_coherent()) return ok_status();
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = slice.memory;
+        range.offset = slice.memory_offset;
+        range.size = slice.reserved_size;
+        const auto result = device_->api().invalidate_mapped_memory_ranges(device_->handle(), 1, &range);
+        if (result != VK_SUCCESS)
+            return Error(ErrorCode::TransferFailed, "Invalidating staging readback bytes failed")
+                .with_vk(result);
+        return ok_status();
+    }
+    return Error(ErrorCode::InvalidArgument, "staging readback slice is unknown or not submitted");
 }
 
 bool StagingRing::should_use_staging(MemoryTopology topology, bool measured_staging_benefit) noexcept {

@@ -1,5 +1,6 @@
 add_library(kora
   core/errors.cpp
+  core/event.cpp
   core/device_caps.cpp
   core/buffer_manager.cpp
   core/device_selection.cpp
@@ -9,7 +10,8 @@ add_library(kora
   core/version.cpp
   memory/suballocator.cpp
   memory/memory_pool.cpp
-    memory/staging_ring.cpp
+  memory/staging_ring.cpp
+  memory/transfer_engine.cpp
   memory/memory_manager.cpp
   memory/dirty_ranges.cpp
   memory/residency.cpp
