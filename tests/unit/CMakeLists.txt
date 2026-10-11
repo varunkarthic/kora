@@ -1,5 +1,6 @@
 kora_add_test(kora_unit_tests unit
   SOURCES
+    test_assert.cpp
     test_errors.cpp
     test_event.cpp
     test_json.cpp

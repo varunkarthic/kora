@@ -52,6 +52,7 @@ internals/spirv
 internals/pipelines
 internals/aliasing
 internals/performance-db
+internals/invariants
 scheduler
 cpu-executor
 device-selection

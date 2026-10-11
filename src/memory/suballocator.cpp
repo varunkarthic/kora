@@ -2,9 +2,9 @@
 
 #include <algorithm>
 #include <bit>
-#include <cassert>
 #include <string>
 
+#include "kora/detail/assert.hpp"
 #include "kora/detail/checked.hpp"
 
 namespace kora::detail {
@@ -25,7 +25,7 @@ Suballocator::Suballocator(std::uint64_t capacity) : capacity_(capacity) {
 }
 
 std::pair<std::size_t, std::size_t> Suballocator::size_class(std::uint64_t size) noexcept {
-    assert(size != 0);
+    KORA_ASSERT(size != 0);
     const auto first = static_cast<std::size_t>(std::bit_width(size) - 1U);
     const std::uint64_t base = std::uint64_t{1} << first;
     const std::uint64_t step = std::max<std::uint64_t>(base / kSecondLevelCount, 1);
@@ -55,7 +55,7 @@ void Suballocator::retire_region(std::size_t index) noexcept {
 
 void Suballocator::insert_free(std::size_t index) noexcept {
     auto& region = regions_[index];
-    assert(region.active && region.free && region.size != 0);
+    KORA_ASSERT(region.active && region.free && region.size != 0);
     const auto [first, second] = size_class(region.size);
     const auto bin = bin_index(first, second);
     region.previous_free = kInvalid;
@@ -68,11 +68,11 @@ void Suballocator::insert_free(std::size_t index) noexcept {
 
 void Suballocator::remove_free(std::size_t index) noexcept {
     auto& region = regions_[index];
-    assert(region.active && region.free);
+    KORA_ASSERT(region.active && region.free);
     const auto [first, second] = size_class(region.size);
     const auto bin = bin_index(first, second);
     if (region.previous_free == kInvalid) {
-        assert(free_heads_[bin] == index);
+        KORA_ASSERT(free_heads_[bin] == index);
         free_heads_[bin] = region.next_free;
     } else {
         regions_[region.previous_free].next_free = region.next_free;
@@ -305,7 +305,7 @@ bool Suballocator::validate_invariants() const noexcept {
 
 void Suballocator::debug_validate() const noexcept {
 #ifndef NDEBUG
-    assert(validate_invariants());
+    KORA_ASSERT(validate_invariants());
 #endif
 }
 
