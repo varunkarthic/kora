@@ -16,6 +16,16 @@ TEST(JsonParser, ParsesStrictValuesAndPreservesIntegerTokens) {
     EXPECT_EQ(number->text, "18446744073709551615");
 }
 
+TEST(JsonParser, AcceptsFiniteDecimalAndExponentTokensOnly) {
+    auto parsed = parse("[1.25,-2.5e1]");
+    ASSERT_TRUE(parsed) << parsed.error().describe();
+    const auto& values = std::get<kora::detail::json::Value::Array>(parsed.value().storage);
+    EXPECT_EQ(std::get<kora::detail::json::Value::Number>(values[0].storage).text, "1.25");
+    EXPECT_EQ(std::get<kora::detail::json::Value::Number>(values[1].storage).text, "-2.5e1");
+    EXPECT_FALSE(parse("1e9999"));
+    EXPECT_FALSE(parse("1e-9999"));
+}
+
 TEST(JsonParser, RejectsMalformedDuplicateAndTruncatedInput) {
     for (const auto input : {"{\"a\":1,\"a\":2}", "[1,", "01", "\"\\ud800\"", "true false"}) {
         auto parsed = parse(input);

@@ -66,3 +66,10 @@ TEST(KernelMetadata, RejectsEveryTruncatedPrefixOfAValidManifest) {
         if (!parsed) EXPECT_EQ(parsed.error().code, ErrorCode::InvalidKernel);
     }
 }
+
+TEST(KernelMetadata, ParsesFiniteFloatingSpecializationDefaults) {
+    auto parsed = parse_kernel_metadata(
+        R"({"schema_version":1,"kernel_id":"float","bindings":[],"push_constant_size":0,"push_constants":[],"specialization_constants":[{"id":0,"name":"scale","type":"f32","default":1.25e1}],"local_size":[1,1,1]})");
+    ASSERT_TRUE(parsed) << parsed.error().describe();
+    EXPECT_DOUBLE_EQ(std::get<double>(parsed.value().specialization_constants[0].default_value), 12.5);
+}
