@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-10-11
+
 ## [0.1.48] - 2026-10-11
 
 ## [0.1.47] - 2026-10-11
@@ -323,7 +325,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.48...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.49...HEAD
+[0.1.49]: https://github.com/varunkarthic/kora/compare/v0.1.48...v0.1.49
 [0.1.48]: https://github.com/varunkarthic/kora/compare/v0.1.47...v0.1.48
 [0.1.47]: https://github.com/varunkarthic/kora/compare/v0.1.46...v0.1.47
 [0.1.46]: https://github.com/varunkarthic/kora/compare/v0.1.45...v0.1.46
