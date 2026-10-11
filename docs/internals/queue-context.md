@@ -5,6 +5,9 @@ enqueue an owned submission record; one service thread dequeues and calls `vkQue
 second worker waits on a private timeline semaphore and delivers completion callbacks after the GPU
 has completed each successful submission.
 
+See {doc}`completion` for the processor's bounded wait/poll behavior, resource-lifetime rules, and
+shutdown validation.
+
 ## Rationale and invariants
 
 Vulkan queue submission requires external synchronization. Producers never call `vkQueueSubmit`

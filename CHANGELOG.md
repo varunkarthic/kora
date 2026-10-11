@@ -16,6 +16,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add asynchronous Vulkan buffer upload, download, copy, and fill tasks with queue-ordered completion
   events, topology-selected staging/direct paths, and non-coherent memory maintenance.
 - Extend `Event` with completion callbacks, status continuations, and aggregate `when_all` waits.
+- Bound completion-worker timeline waits with polling intervals while retaining submitted resource
+  lifetimes until completion; cover repeated real-Vulkan context create/submit/shutdown cycles.
 - Add persistent, bounded upload/readback staging rings with timeline-tagged reservations, safe
   reclamation, growth/wait exhaustion handling, and topology-aware transfer-path selection.
 

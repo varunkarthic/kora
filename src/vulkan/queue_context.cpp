@@ -9,6 +9,7 @@ namespace kora::vk {
 namespace {
 
 thread_local const QueueContext* active_queue_context = nullptr;
+constexpr std::uint64_t kCompletionPollIntervalNs = 250'000'000;
 
 Status vk_error(const char* operation, VkResult result) {
     return Error(ErrorCode::TransferFailed, operation).with_vk(result);
@@ -286,14 +287,30 @@ void QueueContext::completion_loop() {
             completions_.pop_front();
         }
         if (completion.timeline_value != 0) {
-            VkSemaphoreWaitInfo wait_info{};
-            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-            wait_info.semaphoreCount = 1;
-            wait_info.pSemaphores = &timeline_;
-            wait_info.pValues = &completion.timeline_value;
-            const VkResult result = api_.wait_semaphores(device_, &wait_info, UINT64_MAX);
-            if (result != VK_SUCCESS)
-                completion.status = vk_error("Waiting for queue completion failed", result);
+            for (;;) {
+                VkSemaphoreWaitInfo wait_info{};
+                wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+                wait_info.semaphoreCount = 1;
+                wait_info.pSemaphores = &timeline_;
+                wait_info.pValues = &completion.timeline_value;
+                const VkResult result = api_.wait_semaphores(device_, &wait_info, kCompletionPollIntervalNs);
+                if (result == VK_SUCCESS) break;
+                if (result != VK_TIMEOUT) {
+                    completion.status = vk_error("Waiting for queue completion failed", result);
+                    break;
+                }
+
+                // A timeout is only a poll boundary: do not deliver completion or release
+                // referenced resources until the timeline confirms the submitted work finished.
+                uint64_t completed = 0;
+                const VkResult query_result =
+                    api_.get_semaphore_counter_value(device_, timeline_, &completed);
+                if (query_result != VK_SUCCESS) {
+                    completion.status = vk_error("Polling queue completion timeline failed", query_result);
+                    break;
+                }
+                if (completed >= completion.timeline_value) break;
+            }
         }
         if (completion.callback) {
             try {
