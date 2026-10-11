@@ -11,6 +11,7 @@ kora_add_test(kora_unit_tests unit
     test_device_selection.cpp
     test_options.cpp
     test_calibration.cpp
+    test_performance_db.cpp
     test_log.cpp
     test_suballocator.cpp
     test_memory_manager.cpp

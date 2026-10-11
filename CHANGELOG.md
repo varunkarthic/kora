@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Added a thread-safe scheduler performance database with EWMA/variance, robust bounded-window
+  quantiles, MAD outlier rejection, aging, and schema-versioned atomic persistence.
+
 - Added keyed native CPU fallback registration and asynchronous `Runtime::run_cpu_fallback()` with
   access-checked host mappings and GPU readback/upload visibility across mixed dispatch chains.
 

@@ -22,6 +22,7 @@
 #include "core/calibration.hpp"
 #include "core/device_caps.hpp"
 #include "core/event_state.hpp"
+#include "core/performance_db.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
@@ -291,6 +292,7 @@ struct Runtime::Impl {
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
     bool calibrate_on_start = true;
+    detail::PerformanceDatabase performance_database;
     std::mutex cpu_mutex;
     std::unordered_map<std::string, CpuFallbackFunction> cpu_fallbacks;
     std::shared_ptr<CpuExecutor> cpu_executor;
@@ -859,6 +861,14 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     impl->calibration_directory = resolved.cache_dir;
     impl->calibration_budget_ms = resolved.calibration_budget_ms;
     impl->calibrate_on_start = resolved.enable_startup_calibration;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    if (now_ms >= 0) {
+        (void)impl->performance_database.load(
+            std::filesystem::path(resolved.cache_dir) / "performance-db.json",
+            static_cast<std::uint64_t>(now_ms));
+    }
     for (const auto& id : selected.value()) {
         if (id.index >= physical_devices.value().size()) {
             return Error(ErrorCode::InternalInvariantViolation,
