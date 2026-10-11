@@ -49,6 +49,10 @@ struct DeviceState {
     PFN_vkDestroyBuffer destroy_buffer = nullptr;
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
     PFN_vkBindBufferMemory bind_buffer_memory = nullptr;
+    PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdCopyBuffer cmd_copy_buffer = nullptr;
+    PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
+    PFN_vkResetCommandBuffer reset_command_buffer = nullptr;
     PFN_vkAllocateMemory allocate_memory = nullptr;
     PFN_vkFreeMemory free_memory = nullptr;
     PFN_vkMapMemory map_memory = nullptr;
@@ -88,6 +92,34 @@ VkResult VKAPI_PTR bind_buffer_memory(void* context, VkDevice device, VkBuffer b
                                       VkDeviceSize offset) noexcept {
     const auto function = static_cast<DeviceState*>(context)->bind_buffer_memory;
     return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, buffer, memory, offset);
+}
+void VKAPI_PTR cmd_pipeline_barrier(void* context, VkCommandBuffer command_buffer,
+                                    VkPipelineStageFlags source_stage, VkPipelineStageFlags destination_stage,
+                                    VkDependencyFlags dependency_flags, uint32_t memory_barrier_count,
+                                    const VkMemoryBarrier* memory_barriers, uint32_t buffer_barrier_count,
+                                    const VkBufferMemoryBarrier* buffer_barriers,
+                                    uint32_t image_barrier_count,
+                                    const VkImageMemoryBarrier* image_barriers) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->cmd_pipeline_barrier;
+    if (function != nullptr)
+        function(command_buffer, source_stage, destination_stage, dependency_flags, memory_barrier_count,
+                 memory_barriers, buffer_barrier_count, buffer_barriers, image_barrier_count, image_barriers);
+}
+void VKAPI_PTR cmd_copy_buffer(void* context, VkCommandBuffer command_buffer, VkBuffer source,
+                               VkBuffer destination, uint32_t region_count,
+                               const VkBufferCopy* regions) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->cmd_copy_buffer;
+    if (function != nullptr) function(command_buffer, source, destination, region_count, regions);
+}
+void VKAPI_PTR cmd_fill_buffer(void* context, VkCommandBuffer command_buffer, VkBuffer destination,
+                               VkDeviceSize offset, VkDeviceSize size, uint32_t data) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->cmd_fill_buffer;
+    if (function != nullptr) function(command_buffer, destination, offset, size, data);
+}
+VkResult VKAPI_PTR reset_command_buffer(void* context, VkCommandBuffer command_buffer,
+                                        VkCommandBufferResetFlags flags) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->reset_command_buffer;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(command_buffer, flags);
 }
 
 VkResult VKAPI_PTR allocate_memory(void* context, VkDevice device, const VkMemoryAllocateInfo* info,
@@ -1073,6 +1105,14 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         get_device_proc, device_state->device, "vkGetBufferMemoryRequirements");
     api_state->bind_buffer_memory = load_device_function<PFN_vkBindBufferMemory>(
         get_device_proc, device_state->device, "vkBindBufferMemory");
+    api_state->cmd_pipeline_barrier = load_device_function<PFN_vkCmdPipelineBarrier>(
+        get_device_proc, device_state->device, "vkCmdPipelineBarrier");
+    api_state->cmd_copy_buffer =
+        load_device_function<PFN_vkCmdCopyBuffer>(get_device_proc, device_state->device, "vkCmdCopyBuffer");
+    api_state->cmd_fill_buffer =
+        load_device_function<PFN_vkCmdFillBuffer>(get_device_proc, device_state->device, "vkCmdFillBuffer");
+    api_state->reset_command_buffer = load_device_function<PFN_vkResetCommandBuffer>(
+        get_device_proc, device_state->device, "vkResetCommandBuffer");
     api_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device_state->device, "vkAllocateMemory");
     api_state->free_memory =
@@ -1126,6 +1166,10 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.destroy_buffer = {api_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
     api.bind_buffer_memory = {api_state.get(), bind_buffer_memory};
+    api.cmd_pipeline_barrier = {api_state.get(), cmd_pipeline_barrier};
+    api.cmd_copy_buffer = {api_state.get(), cmd_copy_buffer};
+    api.cmd_fill_buffer = {api_state.get(), cmd_fill_buffer};
+    api.reset_command_buffer = {api_state.get(), reset_command_buffer};
     api.allocate_memory = {api_state.get(), allocate_memory};
     api.free_memory = {api_state.get(), free_memory};
     api.map_memory = {api_state.get(), map_memory};
@@ -1200,6 +1244,14 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         get_device_proc, device, "vkGetBufferMemoryRequirements");
     device_state->bind_buffer_memory =
         load_device_function<PFN_vkBindBufferMemory>(get_device_proc, device, "vkBindBufferMemory");
+    device_state->cmd_pipeline_barrier =
+        load_device_function<PFN_vkCmdPipelineBarrier>(get_device_proc, device, "vkCmdPipelineBarrier");
+    device_state->cmd_copy_buffer =
+        load_device_function<PFN_vkCmdCopyBuffer>(get_device_proc, device, "vkCmdCopyBuffer");
+    device_state->cmd_fill_buffer =
+        load_device_function<PFN_vkCmdFillBuffer>(get_device_proc, device, "vkCmdFillBuffer");
+    device_state->reset_command_buffer =
+        load_device_function<PFN_vkResetCommandBuffer>(get_device_proc, device, "vkResetCommandBuffer");
     device_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device, "vkAllocateMemory");
     device_state->free_memory =
@@ -1254,6 +1306,10 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.destroy_buffer = {device_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
     api.bind_buffer_memory = {device_state.get(), bind_buffer_memory};
+    api.cmd_pipeline_barrier = {device_state.get(), cmd_pipeline_barrier};
+    api.cmd_copy_buffer = {device_state.get(), cmd_copy_buffer};
+    api.cmd_fill_buffer = {device_state.get(), cmd_fill_buffer};
+    api.reset_command_buffer = {device_state.get(), reset_command_buffer};
     api.allocate_memory = {device_state.get(), allocate_memory};
     api.free_memory = {device_state.get(), free_memory};
     api.map_memory = {device_state.get(), map_memory};

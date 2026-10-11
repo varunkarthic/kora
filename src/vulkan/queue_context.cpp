@@ -18,7 +18,8 @@ Status vk_error(const char* operation, VkResult result) {
 
 Result<std::unique_ptr<QueueContext>> QueueContext::create(Api api, VkDevice device, VkQueue queue) {
     if (device == VK_NULL_HANDLE || queue == VK_NULL_HANDLE || !api.create_semaphore ||
-        !api.destroy_semaphore || !api.wait_semaphores || !api.queue_submit) {
+        !api.destroy_semaphore || !api.wait_semaphores || !api.get_semaphore_counter_value ||
+        !api.queue_submit) {
         return Error(ErrorCode::InvalidArgument,
                      "QueueContext requires a device, queue, and Vulkan submission dispatch");
     }
@@ -96,6 +97,27 @@ Result<uint64_t> QueueContext::submit(Submission submission) {
     return id;
 }
 
+Result<uint64_t> QueueContext::completed_value() const {
+    uint64_t value = 0;
+    const auto result = api_.get_semaphore_counter_value(device_, timeline_, &value);
+    if (result != VK_SUCCESS)
+        return std::move(vk_error("Reading queue completion timeline failed", result)).error();
+    return value;
+}
+
+Status QueueContext::wait_for_value(uint64_t value, uint64_t timeout_ns) const {
+    if (value == 0) return ok_status();
+    VkSemaphoreWaitInfo wait_info{};
+    wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+    wait_info.semaphoreCount = 1;
+    wait_info.pSemaphores = &timeline_;
+    wait_info.pValues = &value;
+    const auto result = api_.wait_semaphores(device_, &wait_info, timeout_ns);
+    if (result == VK_TIMEOUT) return Error(ErrorCode::Timeout, "Queue completion wait timed out");
+    if (result != VK_SUCCESS) return vk_error("Waiting for queue completion timeline failed", result);
+    return ok_status();
+}
+
 Status QueueContext::shutdown(ShutdownMode mode) {
     if (active_queue_context == this) {
         return Error(ErrorCode::InvalidArgument,
@@ -156,6 +178,38 @@ void QueueContext::submission_loop() {
 
         const uint64_t timeline_value = next_timeline_value_++;
         auto& submission = queued.submission;
+        if (submission.record_commands) {
+            Status record_status;
+            try {
+                record_status = submission.record_commands(timeline_value, submission.command_buffers);
+            } catch (...) {
+                record_status = Error(ErrorCode::InternalInvariantViolation,
+                                      "QueueContext command-recording callback threw an exception");
+            }
+            if (!record_status) {
+                if (submission.on_submitted) {
+                    try {
+                        submission.on_submitted(timeline_value, record_status);
+                    } catch (...) {
+                    }
+                }
+                enqueue_completion(
+                    Completion{queued.id, 0, std::move(record_status), std::move(submission.on_complete)});
+                continue;
+            }
+        }
+        if (submission.command_buffers.size() > std::numeric_limits<uint32_t>::max()) {
+            const auto error =
+                Error(ErrorCode::Overflow, "Recorded command buffer count exceeds Vulkan limit");
+            if (submission.on_submitted) {
+                try {
+                    submission.on_submitted(timeline_value, error);
+                } catch (...) {
+                }
+            }
+            enqueue_completion(Completion{queued.id, 0, error, std::move(submission.on_complete)});
+            continue;
+        }
         std::vector<uint64_t> wait_values = submission.wait_values;
         if (wait_values.empty()) wait_values.resize(submission.wait_semaphores.size(), 0);
         std::vector<uint64_t> signal_values = submission.signal_values;
@@ -193,6 +247,14 @@ void QueueContext::submission_loop() {
         }
         const VkResult result = api_.queue_submit(queue_, 1, &submit_info, submission.fence);
         queue_submit_active_.clear(std::memory_order_release);
+        const Status submit_status =
+            result == VK_SUCCESS ? ok_status() : Status(vk_error("vkQueueSubmit failed", result));
+        if (submission.on_submitted) {
+            try {
+                submission.on_submitted(timeline_value, submit_status);
+            } catch (...) {
+            }
+        }
         if (result == VK_SUCCESS) {
             enqueue_completion(
                 Completion{queued.id, timeline_value, ok_status(), std::move(submission.on_complete)});

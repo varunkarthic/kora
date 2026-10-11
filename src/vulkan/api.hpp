@@ -50,6 +50,14 @@ struct Api {
     DispatchFunction<void(VkDevice, VkBuffer, const VkAllocationCallbacks*)> destroy_buffer;
     DispatchFunction<void(VkDevice, VkBuffer, VkMemoryRequirements*)> get_buffer_memory_requirements;
     DispatchFunction<VkResult(VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize)> bind_buffer_memory;
+    DispatchFunction<void(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags,
+                          uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t,
+                          const VkImageMemoryBarrier*)>
+        cmd_pipeline_barrier;
+    DispatchFunction<void(VkCommandBuffer, VkBuffer, VkBuffer, uint32_t, const VkBufferCopy*)>
+        cmd_copy_buffer;
+    DispatchFunction<void(VkCommandBuffer, VkBuffer, VkDeviceSize, VkDeviceSize, uint32_t)> cmd_fill_buffer;
+    DispatchFunction<VkResult(VkCommandBuffer, VkCommandBufferResetFlags)> reset_command_buffer;
     DispatchFunction<VkResult(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*,
                               VkDeviceMemory*)>
         allocate_memory;

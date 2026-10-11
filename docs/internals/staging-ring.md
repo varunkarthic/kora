@@ -21,10 +21,11 @@ for upload or transfer-destination buffer for readback, persistently mapped thro
 allocation. Additional buffer usage flags are opt-in.
 
 `StagingSlice::mapped_data` addresses the CPU mapping at the returned buffer-relative offset. For
-non-coherent pool memory, callers must flush upload writes before queue consumption and invalidate
-readback ranges after GPU completion, using the dirty-range helpers. The ring does not submit copies
-or infer timeline values; callers retire each submitted slice with the release value of the queue
-that accesses its buffer. A slice may instead be cancelled only before submission.
+non-coherent pool memory, call `flush(slice)` after upload writes and before queue consumption, then
+call `invalidate(slice)` for readback data after GPU completion. The ring pads reservations to the
+non-coherent atom size and requires the matching atom size in its options. The ring does not submit
+copies or infer timeline values; callers retire each submitted slice with the release value of the
+queue that accesses its buffer. A slice may instead be cancelled only before submission.
 
 ## Allocation lifecycle and exhaustion
 
@@ -43,6 +44,7 @@ provided, allocation fails rather than waiting on work that cannot complete or o
 | `reserve(size, alignment, completed, wait_for)` | Reclaims completed ranges and returns a mapped slice, growing or waiting for the oldest submitted range as needed. |
 | `retire(slice, release_value)` | Tags a live reservation with the queue timeline value after which it may be reused. |
 | `cancel(slice)` | Releases a reservation that has not been submitted; submitted slices cannot be cancelled. |
+| `flush(slice)` / `invalidate(slice)` | Performs the required mapped-memory cache operation for non-coherent pool memory; coherent memory is a validated no-op. |
 | `should_use_staging(topology, measured_benefit)` | Returns the vendor-neutral topology/measurement policy used by `create()`. |
 
 ## Validation

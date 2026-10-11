@@ -26,6 +26,8 @@ public:
         std::vector<VkSemaphore> signal_semaphores;
         std::vector<uint64_t> signal_values;
         VkFence fence = VK_NULL_HANDLE;
+        std::function<Status(uint64_t, std::vector<VkCommandBuffer>&)> record_commands;
+        std::function<void(uint64_t, Status)> on_submitted;
         std::function<void(uint64_t, Status)> on_complete;
     };
 
@@ -40,6 +42,9 @@ public:
 
     /// Enqueue one owned submission record. The returned ID is stable for this context's lifetime.
     Result<uint64_t> submit(Submission submission);
+    /// Samples or waits on this context's private monotonically increasing queue timeline.
+    Result<uint64_t> completed_value() const;
+    Status wait_for_value(uint64_t value, uint64_t timeout_ns = UINT64_MAX) const;
     /// Stop accepting work, then drain or cancel work that has not reached vkQueueSubmit.
     Status shutdown(ShutdownMode mode = ShutdownMode::Graceful);
 

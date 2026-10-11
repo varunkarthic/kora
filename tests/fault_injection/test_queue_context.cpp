@@ -18,6 +18,7 @@ struct Mock {
     std::atomic<uint64_t> submit_calls{0};
     std::atomic<uint64_t> wait_calls{0};
     std::atomic<uint64_t> destroy_calls{0};
+    std::atomic<uint64_t> completed_timeline{0};
     std::atomic<uint32_t> active_submit_calls{0};
     std::atomic<uint32_t> maximum_active{0};
     std::atomic<uint32_t> malformed_submit_infos{0};
@@ -45,6 +46,10 @@ VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice, const VkSemaphoreWai
     ++static_cast<Mock*>(context)->wait_calls;
     return VK_SUCCESS;
 }
+VkResult VKAPI_PTR get_semaphore_counter_value(void*, VkDevice, VkSemaphore, uint64_t* value) noexcept {
+    *value = 0;
+    return VK_SUCCESS;
+}
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const VkSubmitInfo* submits,
                                 VkFence) noexcept {
     auto& mock = *static_cast<Mock*>(context);
@@ -61,6 +66,8 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const Vk
         if (timeline == nullptr || timeline->signalSemaphoreValueCount != 1 ||
             timeline->pSignalSemaphoreValues == nullptr || timeline->pSignalSemaphoreValues[0] == 0) {
             ++mock.malformed_submit_infos;
+        } else {
+            mock.completed_timeline.store(timeline->pSignalSemaphoreValues[0]);
         }
     }
     ++mock.submit_calls;
@@ -83,6 +90,7 @@ Api api_for(Mock& mock) {
     api.create_semaphore = {&mock, create_semaphore};
     api.destroy_semaphore = {&mock, destroy_semaphore};
     api.wait_semaphores = {&mock, wait_semaphores};
+    api.get_semaphore_counter_value = {&mock, get_semaphore_counter_value};
     api.queue_submit = {&mock, queue_submit};
     return api;
 }
@@ -232,6 +240,61 @@ TEST(QueueContext, ConcurrentShutdownCallersJoinWorkersSafely) {
     second.join();
     EXPECT_EQ(shutdown_errors.load(), 0u);
     EXPECT_EQ(callbacks.load(), 8u);
+}
+
+TEST(QueueContext, RecordsOnSubmissionThreadAndReportsTimelineAcrossCallbacks) {
+    Mock mock;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+    std::atomic<uint64_t> recorded_value{0};
+    std::atomic<uint64_t> submitted_value{0};
+    std::atomic<uint64_t> completed_id{0};
+    std::atomic<bool> submit_succeeded{false};
+    QueueContext::Submission submission;
+    submission.record_commands = [&](uint64_t value, std::vector<VkCommandBuffer>& commands) {
+        recorded_value.store(value);
+        commands.push_back(reinterpret_cast<VkCommandBuffer>(uintptr_t{88}));
+        return ok_status();
+    };
+    submission.on_submitted = [&](uint64_t value, Status status) {
+        submitted_value.store(value);
+        submit_succeeded.store(status.ok());
+    };
+    submission.on_complete = [&](uint64_t id, Status status) {
+        completed_id.store(id);
+        EXPECT_TRUE(status);
+    };
+    auto id = context->submit(std::move(submission));
+    ASSERT_TRUE(id);
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_EQ(recorded_value.load(), 1U);
+    EXPECT_EQ(submitted_value.load(), 1U);
+    EXPECT_TRUE(submit_succeeded.load());
+    EXPECT_EQ(completed_id.load(), id.value());
+    EXPECT_EQ(mock.submit_calls.load(), 1U);
+}
+
+TEST(QueueContext, RecordFailureSkipsQueueSubmitAndReportsSubmissionFailure) {
+    Mock mock;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+    std::atomic<bool> submitted_failure{false};
+    std::atomic<bool> completion_failure{false};
+    QueueContext::Submission submission;
+    submission.record_commands = [](uint64_t, std::vector<VkCommandBuffer>&) {
+        return Status(Error(ErrorCode::TransferFailed, "mock recording failed"));
+    };
+    submission.on_submitted = [&](uint64_t, Status status) { submitted_failure.store(!status); };
+    submission.on_complete = [&](uint64_t, Status status) { completion_failure.store(!status); };
+    ASSERT_TRUE(context->submit(std::move(submission)));
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_TRUE(submitted_failure.load());
+    EXPECT_TRUE(completion_failure.load());
+    EXPECT_EQ(mock.submit_calls.load(), 0U);
 }
 
 }  // namespace
