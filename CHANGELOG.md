@@ -10,6 +10,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add per-buffer RAW/WAR/WAW hazard planning with precise host/transfer/compute barrier scopes and
   replace broad transfer barriers with tracker-generated plans.
 
+## [0.1.33] - 2026-10-11
+
 - Add reusable-fence completion fallback for devices without timeline semaphores and wire the
   force-legacy validation option through device creation and Runtime submissions.
 
@@ -205,7 +207,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.32...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.33...HEAD
+[0.1.33]: https://github.com/varunkarthic/kora/compare/v0.1.32...v0.1.33
 [0.1.32]: https://github.com/varunkarthic/kora/compare/v0.1.31...v0.1.32
 [0.1.30]: https://github.com/varunkarthic/kora/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/varunkarthic/kora/compare/v0.1.28...v0.1.29
