@@ -32,11 +32,14 @@ memory between the snapshot and allocation.
 ## Buffers, kernels, and dispatch
 
 `Runtime::create_buffer<T>(count)` creates typed host-shadow storage. `Buffer<T>::write(span)` copies
-exactly `count` trivially-copyable values into that shadow; `read()` returns a copy. The first runtime
-execution path creates a Vulkan storage buffer lazily, uploads read/read-write shadows, submits one
-compute dispatch, then downloads write/read-write outputs before the returned `Event` completes.
-This conservative path is correct but synchronizes input uploads and performs output readback; it does
-not yet provide cross-dispatch device residency or graph-level transfer elision.
+exactly `count` trivially-copyable values into that shadow; `read()` returns a copy. The runtime creates
+Vulkan storage lazily, uploads a read/read-write shadow when its host content version is not already
+resident on the selected device, and reuses current device copies across dispatches. By default,
+write/read-write outputs are downloaded before the returned `Event` completes, preserving the original
+host-readable behavior. `DispatchBuilder::defer_readback()` opts out for a chain intermediate;
+`Runtime::readback(buffer)` explicitly schedules a download when host access is later needed. Wait for
+the producing dispatch event before requesting an explicit readback. `transfer_stats()` reports upload
+and download operation counts issued by the Runtime.
 
 `load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module.
 The metadata is checked against reflected descriptor bindings, push-constant size, local size, and
@@ -46,7 +49,9 @@ binding in vector order. `global(x[, y, z])` specifies invocation extents (not w
 the runtime rounds each dimension up by the reflected local size. A bounds check in the shader remains
 the caller's responsibility for non-multiple extents. `.push(value)` copies a trivially-copyable
 value's bytes; its total size must exactly match metadata and fit the selected device's push-constant
-limit. `submit()` returns an `Event` whose `wait()` covers compute completion and output readback.
+limit. `submit()` returns an `Event` whose `wait()` covers compute completion and, unless deferred,
+output readback. Host writes and writable mappings advance the buffer's host content version and
+invalidate the device-copy cache on its next use.
 
 This first dispatch version supports storage-buffer descriptors only. Other descriptor kinds return
 `UnsupportedFeature`. Invalid dimensions, binding counts/access modes, push-constant sizes, and device
@@ -78,6 +83,9 @@ for (const auto& device : runtime.value().devices()) {
   not produce a UUID and therefore cannot match `ByUuid` selection.
 - `DevicePolicy::AllEligible` initializes queue and transfer services for every selected device;
   callers should account for the associated driver resources and staging allocations.
+- `BufferHandle::read()` reads the host shadow only. After a deferred dispatch output, call and wait for
+  `Runtime::readback()` before reading that buffer on the host. Device-resident copies are currently
+  cached per Runtime-selected device and are discarded with that Runtime.
 - Startup calibration currently stores only a bounded host-side overhead probe. Tiny GPU dispatch,
   H2D/D2H, device-copy, streaming-kernel, and ALU measurements are recorded as unavailable and do not
   influence device selection. See [Startup calibration](../calibration.md).

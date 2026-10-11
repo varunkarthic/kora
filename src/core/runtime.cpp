@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -72,6 +73,10 @@ struct DispatchContext {
     std::mutex submit_mutex;
     std::unique_ptr<vk::CommandPoolSet> command_pool;
     std::unordered_map<BufferId, detail::TransferBuffer, BufferIdHash> buffers;
+    std::unordered_map<BufferId, std::uint64_t, BufferIdHash> resident_host_versions;
+    std::unordered_set<BufferId, BufferIdHash> device_newer_buffers;
+    std::atomic<std::uint64_t> upload_count{0};
+    std::atomic<std::uint64_t> download_count{0};
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
     std::unordered_map<BufferId, detail::MemoryPool*, BufferIdHash> allocation_pools;
     void release_buffers() noexcept {
@@ -353,17 +358,49 @@ Result<Event> DispatchBuilder::submit() {
         vk_buffers.push_back(buffer.value());
     }
 
-    // Host shadows are authoritative at submission time. Upload inputs before the
-    // compute submission; readbacks are chained after it and before the public Event.
+    // Reuse an existing current device copy. Host writes advance host_version(), so a changed
+    // host shadow automatically forces the next consumer to upload again.
     std::uint64_t transfer_wait_value = 0;
+    std::vector<std::uint64_t> bound_host_versions(buffers_.size(), 0);
     for (std::size_t i = 0; i < buffers_.size(); ++i) {
-        if (accesses_[i] == KernelAccess::Write) continue;
-        auto contents = buffers_[i].read_bytes();
+        auto version = buffers_[i].host_version();
+        if (!version) return std::move(version).error();
+        bound_host_versions[i] = version.value();
+        bool device_copy_current = false;
+        {
+            std::lock_guard lock(context_->submit_mutex);
+            const auto found = context_->resident_host_versions.find(buffers_[i].id());
+            device_copy_current =
+                found != context_->resident_host_versions.end() && found->second == version.value();
+        }
+        if (accesses_[i] == KernelAccess::Write || device_copy_current) continue;
+
+        Result<std::vector<std::byte>> contents =
+            Error(ErrorCode::InternalInvariantViolation, "host snapshot was not captured");
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            version = buffers_[i].host_version();
+            if (!version) return std::move(version).error();
+            contents = buffers_[i].read_bytes();
+            if (!contents) return std::move(contents).error();
+            const auto after = buffers_[i].host_version();
+            if (!after) return std::move(after).error();
+            if (after.value() == version.value()) {
+                bound_host_versions[i] = version.value();
+                break;
+            }
+            contents = Error(ErrorCode::StaleHandle, "host buffer changed while preparing an upload");
+        }
         if (!contents) return std::move(contents).error();
         auto uploaded = context_->transfers->upload(vk_buffers[i], 0, contents.value());
         if (!uploaded) return std::move(uploaded).error();
         auto upload_status = uploaded.value().wait();
         if (!upload_status) return std::move(upload_status).error();
+        context_->upload_count.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard lock(context_->submit_mutex);
+            context_->resident_host_versions[buffers_[i].id()] = bound_host_versions[i];
+            context_->device_newer_buffers.erase(buffers_[i].id());
+        }
         if (context_->transfer_queue != context_->queue && vk_buffers[i].queue_use) {
             transfer_wait_value = std::max(
                 transfer_wait_value, vk_buffers[i].queue_use->transfer_value.load(std::memory_order_acquire));
@@ -375,6 +412,10 @@ Result<Event> DispatchBuilder::submit() {
     auto pipeline_ref = pipeline.value();
     auto bound_buffers = std::make_shared<std::vector<detail::TransferBuffer>>(std::move(vk_buffers));
     auto bound_handles = buffers_;
+    std::vector<BufferId> written_buffers;
+    for (std::size_t index = 0; index < accesses_.size(); ++index) {
+        if (accesses_[index] != KernelAccess::Read) written_buffers.push_back(buffers_[index].id());
+    }
     auto push_constants = push_constants_;
     auto groups_copy = groups;
     auto promise = std::make_shared<detail::EventPromise>();
@@ -448,8 +489,8 @@ Result<Event> DispatchBuilder::submit() {
         commands.push_back(command.value());
         return Status{};
     };
-    submission.on_submitted = [ctx, work, bound_handles = std::move(bound_handles)](std::uint64_t timeline,
-                                                                                    Status status) {
+    submission.on_submitted = [ctx, work, bound_handles = std::move(bound_handles), written_buffers](
+                                  std::uint64_t timeline, Status status) {
         std::lock_guard lock(ctx->submit_mutex);
         if (status) {
             work->second = timeline;
@@ -458,14 +499,21 @@ Result<Event> DispatchBuilder::submit() {
         } else if (work->first != VK_NULL_HANDLE && ctx->command_pool) {
             (void)ctx->command_pool->discard(work->first);
         }
+        if (!status) {
+            for (const auto id : written_buffers) {
+                ctx->resident_host_versions.erase(id);
+                ctx->device_newer_buffers.erase(id);
+            }
+        }
     };
     submission.on_complete = [promise, ctx, pipeline_ref, allocated_descriptors, bound_buffers,
-                              bound_handles = buffers_,
-                              accesses = accesses_](std::uint64_t compute_value, Status status) {
+                              bound_handles = buffers_, accesses = accesses_, written_buffers,
+                              bound_host_versions,
+                              defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
         (void)pipeline_ref;
         for (const auto descriptor : *allocated_descriptors)
             (void)ctx->pipelines->free_descriptor_set(descriptor);
-        if (status) {
+        if (status && !defer_readback) {
             auto readback_contents = std::make_shared<std::vector<std::vector<std::byte>>>(accesses.size());
             std::vector<Event> readbacks;
             std::vector<std::size_t> output_indices;
@@ -484,6 +532,7 @@ Result<Event> DispatchBuilder::submit() {
                     status = Status(std::move(downloaded).error());
                     break;
                 }
+                ctx->download_count.fetch_add(1, std::memory_order_relaxed);
                 readbacks.push_back(std::move(downloaded).value());
                 output_indices.push_back(index);
             }
@@ -494,11 +543,25 @@ Result<Event> DispatchBuilder::submit() {
                     return;
                 }
                 (void)aggregate.value().on_complete([promise, readback_contents, bound_handles,
-                                                     output_indices](Status readback_status) {
+                                                     output_indices, bound_host_versions,
+                                                     ctx](Status readback_status) {
                     if (readback_status) {
                         for (const auto index : output_indices) {
-                            readback_status = bound_handles[index].write_bytes((*readback_contents)[index]);
-                            if (!readback_status) break;
+                            const auto copied = bound_handles[index].write_bytes_if_version(
+                                (*readback_contents)[index], bound_host_versions[index]);
+                            if (!copied) {
+                                readback_status = Status(std::move(copied).error());
+                                break;
+                            }
+                            if (!copied.value().written) {
+                                std::lock_guard lock(ctx->submit_mutex);
+                                ctx->device_newer_buffers.erase(bound_handles[index].id());
+                                continue;
+                            }
+                            std::lock_guard lock(ctx->submit_mutex);
+                            ctx->resident_host_versions[bound_handles[index].id()] =
+                                copied.value().host_version;
+                            ctx->device_newer_buffers.erase(bound_handles[index].id());
                         }
                     }
                     promise->complete(std::move(readback_status));
@@ -507,10 +570,31 @@ Result<Event> DispatchBuilder::submit() {
                 return;
             }
         }
+        if (!status) {
+            std::lock_guard lock(ctx->submit_mutex);
+            for (const auto id : written_buffers) {
+                ctx->resident_host_versions.erase(id);
+                ctx->device_newer_buffers.erase(id);
+            }
+        }
         promise->complete(std::move(status));
     };
+    {
+        std::lock_guard lock(context_->submit_mutex);
+        for (std::size_t index = 0; index < accesses_.size(); ++index) {
+            if (accesses_[index] == KernelAccess::Read) continue;
+            const auto id = buffers_[index].id();
+            context_->resident_host_versions[id] = bound_host_versions[index];
+            context_->device_newer_buffers.insert(id);
+        }
+    }
     auto submitted = queue->submit(std::move(submission));
     if (!submitted) {
+        std::lock_guard lock(context_->submit_mutex);
+        for (const auto id : written_buffers) {
+            context_->resident_host_versions.erase(id);
+            context_->device_newer_buffers.erase(id);
+        }
         if (!*record_status) return std::move(*record_status).error();
         return std::move(submitted).error();
     }
@@ -651,6 +735,11 @@ DispatchBuilder& DispatchBuilder::write(const BufferHandle& buffer) {
 DispatchBuilder& DispatchBuilder::read_write(const BufferHandle& buffer) {
     buffers_.push_back(buffer);
     accesses_.push_back(KernelAccess::ReadWrite);
+    return *this;
+}
+
+DispatchBuilder& DispatchBuilder::defer_readback() {
+    defer_readback_ = true;
     return *this;
 }
 
@@ -824,6 +913,67 @@ Result<MemoryStats> Runtime::memory_stats(const DeviceId& id) const {
                                                           value.queried});
     }
     return std::move(aggregate).value();
+}
+
+Result<RuntimeTransferStats> Runtime::transfer_stats() const {
+    if (!impl_ || impl_->devices.empty())
+        return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto& context = impl_->devices.front()->dispatch;
+    return RuntimeTransferStats{context->upload_count.load(std::memory_order_relaxed),
+                                context->download_count.load(std::memory_order_relaxed)};
+}
+
+Result<Event> Runtime::readback(const BufferHandle& buffer) const {
+    if (!impl_ || impl_->devices.empty() || !buffer)
+        return Error(ErrorCode::InvalidArgument, "runtime or buffer handle is invalid");
+    const auto context = impl_->devices.front()->dispatch;
+    const auto host_version = buffer.host_version();
+    if (!host_version) return std::move(host_version).error();
+    {
+        std::lock_guard lock(context->submit_mutex);
+        const auto resident = context->resident_host_versions.find(buffer.id());
+        if (!context->device_newer_buffers.contains(buffer.id()) ||
+            resident == context->resident_host_versions.end() || resident->second != host_version.value()) {
+            context->device_newer_buffers.erase(buffer.id());
+            return Event::when_all(std::span<const Event>{});
+        }
+    }
+    auto device_buffer = ensure_transfer_buffer(context, buffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (!device_buffer) return std::move(device_buffer).error();
+    auto info = buffer.info();
+    if (!info) return std::move(info).error();
+    auto contents =
+        std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(info.value().size_bytes));
+    detail::QueueWait dependency;
+    if (context->transfer_queue != context->queue) {
+        dependency.semaphore = context->queue->completion_semaphore();
+        dependency.value = info.value().last_use_timeline_value;
+        dependency.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    auto downloaded = context->transfers->download(device_buffer.value(), 0, *contents, dependency);
+    if (!downloaded) return std::move(downloaded).error();
+    context->download_count.fetch_add(1, std::memory_order_relaxed);
+    auto promise = std::make_shared<detail::EventPromise>();
+    const auto event = promise->event();
+    const auto completion = downloaded.value().on_complete(
+        [context, buffer, contents, promise, expected_host_version = host_version.value()](Status status) {
+            Result<ConditionalBufferWrite> copied = ConditionalBufferWrite{};
+            if (status) copied = buffer.write_bytes_if_version(*contents, expected_host_version);
+            if (!copied) {
+                if (status) status = Status(std::move(copied).error());
+            } else if (status && copied.value().written) {
+                std::lock_guard lock(context->submit_mutex);
+                context->resident_host_versions[buffer.id()] = copied.value().host_version;
+                context->device_newer_buffers.erase(buffer.id());
+            } else if (status) {
+                std::lock_guard lock(context->submit_mutex);
+                context->device_newer_buffers.erase(buffer.id());
+            }
+            promise->complete(std::move(status));
+            return ok_status();
+        });
+    if (!completion) promise->complete(Status(std::move(completion).error()));
+    return event;
 }
 
 }  // namespace kora

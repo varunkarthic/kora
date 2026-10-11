@@ -48,6 +48,11 @@ struct BufferInfo {
     bool pending_free = false;
 };
 
+struct ConditionalBufferWrite {
+    bool written = false;
+    std::uint64_t host_version = 0;
+};
+
 class MappedBytes final {
 public:
     MappedBytes() = default;
@@ -89,8 +94,13 @@ public:
     explicit operator bool() const noexcept { return state_ != nullptr; }
     Result<BufferInfo> info() const;
     std::uint64_t size_bytes() const noexcept;
+    /// Monotonic host-shadow content version; changes on writes and writable mappings.
+    Result<std::uint64_t> host_version() const;
     Result<std::vector<std::byte>> read_bytes() const;
     Status write_bytes(std::span<const std::byte> bytes) const;
+    /// Write downloaded bytes only if the host shadow still has the captured version.
+    Result<ConditionalBufferWrite> write_bytes_if_version(std::span<const std::byte> bytes,
+                                                          std::uint64_t expected_version) const;
     Result<MappedBytes> map(MapAccess access = MapAccess::ReadWrite, std::uint64_t offset = 0,
                             std::uint64_t size = std::numeric_limits<std::uint64_t>::max()) const;
     Status mark_used(std::uint64_t timeline_value) const;

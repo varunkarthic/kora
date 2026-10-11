@@ -134,6 +134,34 @@ TEST(BufferManager, EnforcesMonotonicTimelineAndValidMapRanges) {
     EXPECT_EQ(manager.advance_completion(4).error().code, ErrorCode::InvalidArgument);
 }
 
+TEST(BufferManager, HostContentVersionAdvancesForWritesAndWritableMappings) {
+    BufferManager manager;
+    auto handle = std::move(manager.create(16)).value();
+    ASSERT_EQ(handle.host_version().value(), 1U);
+    const std::array<std::byte, 16> bytes{};
+    ASSERT_TRUE(handle.write_bytes(bytes));
+    EXPECT_EQ(handle.host_version().value(), 2U);
+    const std::array<std::byte, 16> stale_bytes{std::byte{0x55}};
+    const auto stale_write = handle.write_bytes_if_version(stale_bytes, 1);
+    ASSERT_TRUE(stale_write);
+    EXPECT_FALSE(stale_write.value().written);
+    EXPECT_EQ(handle.host_version().value(), 2U);
+    const auto current_write = handle.write_bytes_if_version(stale_bytes, 2);
+    ASSERT_TRUE(current_write);
+    ASSERT_TRUE(current_write.value().written);
+    EXPECT_EQ(current_write.value().host_version, 3U);
+    {
+        auto mapping = handle.map(MapAccess::Write, 4, 4);
+        ASSERT_TRUE(mapping);
+        EXPECT_EQ(handle.host_version().value(), 4U);
+    }
+    {
+        auto mapping = handle.map(MapAccess::Read, 0, 1);
+        ASSERT_TRUE(mapping);
+        EXPECT_EQ(handle.host_version().value(), 4U);
+    }
+}
+
 TEST(BufferManager, ConcurrentAllocateMapReleaseCyclesRemainConsistent) {
     BufferManager manager;
     constexpr std::size_t kThreads = 8;

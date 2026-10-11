@@ -48,6 +48,9 @@ public:
     DispatchBuilder& read(const BufferHandle& buffer);
     DispatchBuilder& write(const BufferHandle& buffer);
     DispatchBuilder& read_write(const BufferHandle& buffer);
+    /// Keep device-written outputs resident instead of copying them to the host on completion.
+    /// Use Runtime::readback() when host access is subsequently required.
+    DispatchBuilder& defer_readback();
     template <class T>
     DispatchBuilder& read(const Buffer<T>& buffer) {
         return read(buffer.handle());
@@ -78,7 +81,13 @@ private:
     std::vector<BufferHandle> buffers_;
     std::vector<KernelAccess> accesses_;
     std::vector<std::byte> push_constants_;
+    bool defer_readback_ = false;
     friend class Runtime;
+};
+
+struct RuntimeTransferStats {
+    std::uint64_t uploads = 0;
+    std::uint64_t downloads = 0;
 };
 
 /// Owns the Vulkan loader, instance, selected logical devices, and their memory managers.
@@ -98,6 +107,8 @@ public:
     Result<DeviceInfo> device_info(const DeviceId& device) const;
     /// Returns pool totals and per-heap budget data; an unused device has zero pool counters.
     Result<MemoryStats> memory_stats(const DeviceId& device) const;
+    /// Transfer operations issued by this Runtime since creation.
+    Result<RuntimeTransferStats> transfer_stats() const;
     Result<BufferHandle> create_buffer(std::uint64_t size_bytes, BufferUsage usage = BufferUsage::Storage);
     template <class T>
     Result<Buffer<T>> create_buffer(std::uint64_t count, BufferUsage usage = BufferUsage::Storage) {
@@ -109,6 +120,12 @@ public:
     Result<Kernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
                                KernelMetadata metadata);
     DispatchBuilder dispatch(const Kernel& kernel) const;
+    /// Schedule a host readback for a device-resident buffer and complete when host bytes are fresh.
+    Result<Event> readback(const BufferHandle& buffer) const;
+    template <class T>
+    Result<Event> readback(const Buffer<T>& buffer) const {
+        return readback(buffer.handle());
+    }
 
 private:
     struct Impl;
