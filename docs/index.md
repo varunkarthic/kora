@@ -17,6 +17,7 @@ building
 testing
 calibration
 profiling
+benchmarking
 autotuning
 python-api
 configuration
