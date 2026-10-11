@@ -16,8 +16,8 @@ marks each writable buffer from that in-flight dispatch as lost; `BufferHandle::
 read-only or partial mappings then return `ErrorCode::DataLoss` rather than exposing a potentially
 stale shadow. A complete `BufferHandle::write_bytes()` replaces the entire host shadow and restores
 host readability. A host shadow that remained authoritative for work that was never submitted is
-left readable. Errors include the raw `VkResult` and state that device recreation is unavailable;
-applications may call `Runtime::recover()` after a loss is observed. Recovery creates a replacement
+left readable. Errors include the raw `VkResult`; recovery is explicit, and applications may call
+`Runtime::recover()` after a loss is observed. Recovery creates a replacement
 set of logical devices with the original resolved options, retains existing host-backed buffer
 handles, and restores ordinary authoritative contents lazily through normal uploads. Device-lost
 outputs remain marked `DataLoss`; recovery does not invent their values. Existing `Kernel` objects are
