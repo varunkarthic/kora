@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Document the per-queue timeline completion contract, resource-lifetime integrations, and add a real
+  Vulkan test for dependent timeline submissions and value-based waits.
+
 - Add versioned, device-identity-bound startup calibration records with bounded best-effort probing,
   corruption-safe cache loading, and explicit configuration. Transfer and compute measurements remain
   marked unavailable until safe scratch-buffer probes are implemented.
