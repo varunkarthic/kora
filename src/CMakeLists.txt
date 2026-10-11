@@ -24,6 +24,7 @@ add_library(kora
   memory/transfer_engine.cpp
   memory/memory_manager.cpp
   memory/eviction.cpp
+  memory/recovery.cpp
   memory/dirty_ranges.cpp
   memory/residency.cpp
   kernel/metadata.cpp

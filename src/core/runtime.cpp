@@ -201,6 +201,11 @@ struct Runtime::Impl {
                     std::lock_guard lock(budget_mutex);
                     return memory_manager.record_allocation_failure(heap);
                 };
+                config.refresh_budget = [this]() -> Result<bool> {
+                    auto refreshed = refresh_budget_if_due(true);
+                    if (!refreshed) return std::move(refreshed).error();
+                    return true;
+                };
                 auto pool = detail::MemoryPool::create(device, config);
                 if (!pool) return Status(std::move(pool).error());
                 if (selected_type.host_visible && !host_pool_index) host_pool_index = index;

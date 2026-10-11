@@ -18,6 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   accounting, and failure-adaptive admission limits.
 - Add generation-aware LRU-2 buffer eviction planning with KeepValue scoring, protected-allocation
   filtering, and explicit dirty-copy writeback decisions.
+- Add memory admission estimates and finite OOM recovery stages with one retry, smaller-block fallback,
+  task-level chunking/CPU fallback hooks, and structured exhaustion diagnostics.
 
 ## [0.1.44] - 2026-10-11
 
