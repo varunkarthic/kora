@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-10-11
+
 - Add asynchronous Vulkan buffer upload, download, copy, and fill tasks with queue-ordered completion
   events, topology-selected staging/direct paths, and non-coherent memory maintenance.
 - Add persistent, bounded upload/readback staging rings with timeline-tagged reservations, safe
@@ -161,7 +163,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.22...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.23...HEAD
+[0.1.23]: https://github.com/varunkarthic/kora/compare/v0.1.22...v0.1.23
 [0.1.22]: https://github.com/varunkarthic/kora/compare/v0.1.21...v0.1.22
 [0.1.21]: https://github.com/varunkarthic/kora/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/varunkarthic/kora/compare/v0.1.19...v0.1.20
