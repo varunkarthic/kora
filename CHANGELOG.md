@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-10-11
+
 ### Added
 
 - Add debug safety diagnostics with Release opt-in, Debug host-shadow canaries, Vulkan validation
@@ -309,7 +311,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.44...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.45...HEAD
+[0.1.45]: https://github.com/varunkarthic/kora/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/varunkarthic/kora/compare/v0.1.43...v0.1.44
 [0.1.42]: https://github.com/varunkarthic/kora/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/varunkarthic/kora/compare/v0.1.40...v0.1.41
