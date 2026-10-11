@@ -16,6 +16,8 @@ KernelMetadata expected_metadata() {
     metadata.local_size = {8, 2, 1};
     metadata.bindings.push_back(
         {0, 0, "data_buffer", KernelBindingKind::StorageBuffer, KernelAccess::ReadWrite});
+    metadata.bindings.push_back(
+        {0, 1, "second_buffer", KernelBindingKind::StorageBuffer, KernelAccess::ReadWrite});
     metadata.push_constant_size = 4;
     metadata.push_constants.push_back({"count", "u32", 0, 4});
     metadata.specialization_constants.push_back({7, "SCALE", "u32", std::uint64_t{2}});
@@ -60,10 +62,12 @@ TEST(SpirvReflection, ReflectsAndChecksComputeInterfaceAgainstMetadata) {
     ASSERT_TRUE(reflection) << reflection.error().message;
     EXPECT_EQ(reflection.value().entry_point, "main");
     EXPECT_EQ(reflection.value().local_size, (std::array<std::uint32_t, 3>{8, 2, 1}));
-    ASSERT_EQ(reflection.value().bindings.size(), 1U);
+    ASSERT_EQ(reflection.value().bindings.size(), 2U);
     EXPECT_EQ(reflection.value().bindings[0].set, 0U);
     EXPECT_EQ(reflection.value().bindings[0].binding, 0U);
     EXPECT_EQ(reflection.value().bindings[0].kind, KernelBindingKind::StorageBuffer);
+    EXPECT_EQ(reflection.value().bindings[1].binding, 1U);
+    EXPECT_EQ(reflection.value().bindings[1].kind, KernelBindingKind::StorageBuffer);
     EXPECT_EQ(reflection.value().push_constant_size, 4U);
     ASSERT_EQ(reflection.value().specialization_constants.size(), 1U);
     EXPECT_EQ(reflection.value().specialization_constants[0].id, 7U);

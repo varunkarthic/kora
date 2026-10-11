@@ -6,6 +6,10 @@ layout(set = 0, binding = 0, std430) buffer Data {
     uint values[];
 } data_buffer;
 
+layout(set = 0, binding = 1, std430) buffer SecondData {
+    uint values[];
+} second_buffer;
+
 layout(push_constant) uniform Parameters {
     uint count;
 } parameters;
@@ -16,5 +20,6 @@ void main() {
     uint index = gl_GlobalInvocationID.x;
     if (index < parameters.count) {
         data_buffer.values[index] *= SCALE;
+        second_buffer.values[index] += SCALE;
     }
 }

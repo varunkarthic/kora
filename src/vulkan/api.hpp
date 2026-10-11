@@ -45,6 +45,25 @@ private:
 
 /// Device-level Vulkan entry points used by the initial backend and fault-injection seam.
 struct Api {
+    // Pipeline and descriptor entry points are raw Vulkan PFNs. The owning Api still retains the
+    // DeviceState through lifetime_, and each consumer checks these optional feature-layer calls.
+    PFN_vkCreateShaderModule create_shader_module = nullptr;
+    PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
+    PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+    PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+    PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
+    PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+    PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
+    PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+    PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
+    PFN_vkFreeDescriptorSets free_descriptor_sets = nullptr;
+    PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
+    PFN_vkCreateComputePipelines create_compute_pipelines = nullptr;
+    PFN_vkDestroyPipeline destroy_pipeline = nullptr;
+    PFN_vkCreatePipelineCache create_pipeline_cache = nullptr;
+    PFN_vkDestroyPipelineCache destroy_pipeline_cache = nullptr;
+    PFN_vkGetPipelineCacheData get_pipeline_cache_data = nullptr;
+
     DispatchFunction<VkResult(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer*)>
         create_buffer;
     DispatchFunction<void(VkDevice, VkBuffer, const VkAllocationCallbacks*)> destroy_buffer;
