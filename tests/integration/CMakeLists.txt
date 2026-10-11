@@ -3,6 +3,7 @@ kora_add_test(kora_integration_tests integration
   SOURCES
     test_physical_device.cpp
     test_runtime.cpp
+    test_pipeline_manager.cpp
     test_command_pool_set.cpp
     test_queue_context.cpp
     test_staging_ring.cpp
@@ -11,6 +12,12 @@ kora_add_test(kora_integration_tests integration
     test_vulkan_skip.cpp
 )
 target_link_libraries(kora_integration_tests PRIVATE ${KORA_VULKAN_HEADERS})
+target_include_directories(kora_integration_tests PRIVATE ${KORA_SPIRV_HEADERS_INCLUDE_DIR})
+if(KORA_GLSLANG_VALIDATOR)
+  add_dependencies(kora_integration_tests kora_spirv_fixture)
+  target_compile_definitions(kora_integration_tests PRIVATE
+    KORA_SPIRV_FIXTURE_PATH="${KORA_SPIRV_FIXTURE}")
+endif()
 
 if(TARGET kora-info)
   find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)

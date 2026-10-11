@@ -45,6 +45,22 @@ struct LoaderState {
 
 struct DeviceState {
     std::shared_ptr<LoaderState> loader;
+    PFN_vkCreateShaderModule create_shader_module = nullptr;
+    PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
+    PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+    PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+    PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
+    PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+    PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
+    PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+    PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
+    PFN_vkFreeDescriptorSets free_descriptor_sets = nullptr;
+    PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
+    PFN_vkCreateComputePipelines create_compute_pipelines = nullptr;
+    PFN_vkDestroyPipeline destroy_pipeline = nullptr;
+    PFN_vkCreatePipelineCache create_pipeline_cache = nullptr;
+    PFN_vkDestroyPipelineCache destroy_pipeline_cache = nullptr;
+    PFN_vkGetPipelineCacheData get_pipeline_cache_data = nullptr;
     PFN_vkCreateBuffer create_buffer = nullptr;
     PFN_vkDestroyBuffer destroy_buffer = nullptr;
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
@@ -1097,6 +1113,38 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
 
     auto api_state = std::make_shared<DeviceState>();
     api_state->loader = state_->loader;
+    api_state->create_shader_module = load_device_function<PFN_vkCreateShaderModule>(
+        get_device_proc, device_state->device, "vkCreateShaderModule");
+    api_state->destroy_shader_module = load_device_function<PFN_vkDestroyShaderModule>(
+        get_device_proc, device_state->device, "vkDestroyShaderModule");
+    api_state->create_descriptor_set_layout = load_device_function<PFN_vkCreateDescriptorSetLayout>(
+        get_device_proc, device_state->device, "vkCreateDescriptorSetLayout");
+    api_state->destroy_descriptor_set_layout = load_device_function<PFN_vkDestroyDescriptorSetLayout>(
+        get_device_proc, device_state->device, "vkDestroyDescriptorSetLayout");
+    api_state->create_pipeline_layout = load_device_function<PFN_vkCreatePipelineLayout>(
+        get_device_proc, device_state->device, "vkCreatePipelineLayout");
+    api_state->destroy_pipeline_layout = load_device_function<PFN_vkDestroyPipelineLayout>(
+        get_device_proc, device_state->device, "vkDestroyPipelineLayout");
+    api_state->create_descriptor_pool = load_device_function<PFN_vkCreateDescriptorPool>(
+        get_device_proc, device_state->device, "vkCreateDescriptorPool");
+    api_state->destroy_descriptor_pool = load_device_function<PFN_vkDestroyDescriptorPool>(
+        get_device_proc, device_state->device, "vkDestroyDescriptorPool");
+    api_state->allocate_descriptor_sets = load_device_function<PFN_vkAllocateDescriptorSets>(
+        get_device_proc, device_state->device, "vkAllocateDescriptorSets");
+    api_state->free_descriptor_sets = load_device_function<PFN_vkFreeDescriptorSets>(
+        get_device_proc, device_state->device, "vkFreeDescriptorSets");
+    api_state->update_descriptor_sets = load_device_function<PFN_vkUpdateDescriptorSets>(
+        get_device_proc, device_state->device, "vkUpdateDescriptorSets");
+    api_state->create_compute_pipelines = load_device_function<PFN_vkCreateComputePipelines>(
+        get_device_proc, device_state->device, "vkCreateComputePipelines");
+    api_state->destroy_pipeline = load_device_function<PFN_vkDestroyPipeline>(
+        get_device_proc, device_state->device, "vkDestroyPipeline");
+    api_state->create_pipeline_cache = load_device_function<PFN_vkCreatePipelineCache>(
+        get_device_proc, device_state->device, "vkCreatePipelineCache");
+    api_state->destroy_pipeline_cache = load_device_function<PFN_vkDestroyPipelineCache>(
+        get_device_proc, device_state->device, "vkDestroyPipelineCache");
+    api_state->get_pipeline_cache_data = load_device_function<PFN_vkGetPipelineCacheData>(
+        get_device_proc, device_state->device, "vkGetPipelineCacheData");
     api_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device_state->device, "vkCreateBuffer");
     api_state->destroy_buffer =
@@ -1162,6 +1210,22 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device is missing required backend entry points");
     }
     Api api;
+    api.create_shader_module = api_state->create_shader_module;
+    api.destroy_shader_module = api_state->destroy_shader_module;
+    api.create_descriptor_set_layout = api_state->create_descriptor_set_layout;
+    api.destroy_descriptor_set_layout = api_state->destroy_descriptor_set_layout;
+    api.create_pipeline_layout = api_state->create_pipeline_layout;
+    api.destroy_pipeline_layout = api_state->destroy_pipeline_layout;
+    api.create_descriptor_pool = api_state->create_descriptor_pool;
+    api.destroy_descriptor_pool = api_state->destroy_descriptor_pool;
+    api.allocate_descriptor_sets = api_state->allocate_descriptor_sets;
+    api.free_descriptor_sets = api_state->free_descriptor_sets;
+    api.update_descriptor_sets = api_state->update_descriptor_sets;
+    api.create_compute_pipelines = api_state->create_compute_pipelines;
+    api.destroy_pipeline = api_state->destroy_pipeline;
+    api.create_pipeline_cache = api_state->create_pipeline_cache;
+    api.destroy_pipeline_cache = api_state->destroy_pipeline_cache;
+    api.get_pipeline_cache_data = api_state->get_pipeline_cache_data;
     api.create_buffer = {api_state.get(), create_buffer};
     api.destroy_buffer = {api_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
@@ -1236,6 +1300,38 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     }
     auto device_state = std::make_shared<DeviceState>();
     device_state->loader = loader;
+    device_state->create_shader_module =
+        load_device_function<PFN_vkCreateShaderModule>(get_device_proc, device, "vkCreateShaderModule");
+    device_state->destroy_shader_module =
+        load_device_function<PFN_vkDestroyShaderModule>(get_device_proc, device, "vkDestroyShaderModule");
+    device_state->create_descriptor_set_layout = load_device_function<PFN_vkCreateDescriptorSetLayout>(
+        get_device_proc, device, "vkCreateDescriptorSetLayout");
+    device_state->destroy_descriptor_set_layout = load_device_function<PFN_vkDestroyDescriptorSetLayout>(
+        get_device_proc, device, "vkDestroyDescriptorSetLayout");
+    device_state->create_pipeline_layout =
+        load_device_function<PFN_vkCreatePipelineLayout>(get_device_proc, device, "vkCreatePipelineLayout");
+    device_state->destroy_pipeline_layout =
+        load_device_function<PFN_vkDestroyPipelineLayout>(get_device_proc, device, "vkDestroyPipelineLayout");
+    device_state->create_descriptor_pool =
+        load_device_function<PFN_vkCreateDescriptorPool>(get_device_proc, device, "vkCreateDescriptorPool");
+    device_state->destroy_descriptor_pool =
+        load_device_function<PFN_vkDestroyDescriptorPool>(get_device_proc, device, "vkDestroyDescriptorPool");
+    device_state->allocate_descriptor_sets = load_device_function<PFN_vkAllocateDescriptorSets>(
+        get_device_proc, device, "vkAllocateDescriptorSets");
+    device_state->free_descriptor_sets =
+        load_device_function<PFN_vkFreeDescriptorSets>(get_device_proc, device, "vkFreeDescriptorSets");
+    device_state->update_descriptor_sets =
+        load_device_function<PFN_vkUpdateDescriptorSets>(get_device_proc, device, "vkUpdateDescriptorSets");
+    device_state->create_compute_pipelines = load_device_function<PFN_vkCreateComputePipelines>(
+        get_device_proc, device, "vkCreateComputePipelines");
+    device_state->destroy_pipeline =
+        load_device_function<PFN_vkDestroyPipeline>(get_device_proc, device, "vkDestroyPipeline");
+    device_state->create_pipeline_cache =
+        load_device_function<PFN_vkCreatePipelineCache>(get_device_proc, device, "vkCreatePipelineCache");
+    device_state->destroy_pipeline_cache =
+        load_device_function<PFN_vkDestroyPipelineCache>(get_device_proc, device, "vkDestroyPipelineCache");
+    device_state->get_pipeline_cache_data =
+        load_device_function<PFN_vkGetPipelineCacheData>(get_device_proc, device, "vkGetPipelineCacheData");
     device_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device, "vkCreateBuffer");
     device_state->destroy_buffer =
@@ -1302,6 +1398,22 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide vkQueueSubmit");
 
     Api api;
+    api.create_shader_module = device_state->create_shader_module;
+    api.destroy_shader_module = device_state->destroy_shader_module;
+    api.create_descriptor_set_layout = device_state->create_descriptor_set_layout;
+    api.destroy_descriptor_set_layout = device_state->destroy_descriptor_set_layout;
+    api.create_pipeline_layout = device_state->create_pipeline_layout;
+    api.destroy_pipeline_layout = device_state->destroy_pipeline_layout;
+    api.create_descriptor_pool = device_state->create_descriptor_pool;
+    api.destroy_descriptor_pool = device_state->destroy_descriptor_pool;
+    api.allocate_descriptor_sets = device_state->allocate_descriptor_sets;
+    api.free_descriptor_sets = device_state->free_descriptor_sets;
+    api.update_descriptor_sets = device_state->update_descriptor_sets;
+    api.create_compute_pipelines = device_state->create_compute_pipelines;
+    api.destroy_pipeline = device_state->destroy_pipeline;
+    api.create_pipeline_cache = device_state->create_pipeline_cache;
+    api.destroy_pipeline_cache = device_state->destroy_pipeline_cache;
+    api.get_pipeline_cache_data = device_state->get_pipeline_cache_data;
     api.create_buffer = {device_state.get(), create_buffer};
     api.destroy_buffer = {device_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};

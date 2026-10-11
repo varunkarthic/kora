@@ -17,6 +17,7 @@ add_library(kora
   memory/dirty_ranges.cpp
   memory/residency.cpp
   kernel/metadata.cpp
+  kernel/pipeline_manager.cpp
   kernel/spirv.cpp
   vulkan/loader.cpp
   vulkan/command_pool_set.cpp

@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "core/device_caps.hpp"
+#include "kernel/pipeline_manager.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
 #include "vulkan/api.hpp"
@@ -57,16 +59,19 @@ struct Runtime::Impl {
 
     struct DeviceEntry {
         DeviceEntry(DeviceId device_id, DeviceInfo device_info, detail::MemoryManager manager,
-                    vk::Device logical_device)
+                    vk::Device logical_device,
+                    std::unique_ptr<detail::kernel::PipelineManager> pipeline_manager)
             : id(std::move(device_id)),
               info(std::move(device_info)),
               memory_manager(std::move(manager)),
-              device(std::move(logical_device)) {}
+              device(std::move(logical_device)),
+              pipelines(std::move(pipeline_manager)) {}
 
         DeviceId id;
         DeviceInfo info;
         detail::MemoryManager memory_manager;
         vk::Device device;
+        std::unique_ptr<detail::kernel::PipelineManager> pipelines;
         mutable std::mutex pools_mutex;
         // The buffer/transfer layers register their pools here as those allocation paths are connected.
         std::vector<std::unique_ptr<detail::MemoryPool>> pools;
@@ -135,8 +140,26 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
         auto memory_manager = detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
         if (!memory_manager) return std::move(memory_manager).error();
+        detail::kernel::PipelineCacheIdentity pipeline_identity;
+        pipeline_identity.vendor_id = physical.properties.vendorID;
+        pipeline_identity.device_id = physical.properties.deviceID;
+        pipeline_identity.driver_version = physical.properties.driverVersion;
+        std::copy(std::begin(physical.id_properties.deviceUUID), std::end(physical.id_properties.deviceUUID),
+                  pipeline_identity.device_uuid.begin());
+        std::copy(std::begin(physical.id_properties.driverUUID), std::end(physical.id_properties.driverUUID),
+                  pipeline_identity.driver_uuid.begin());
+        const auto cache_key = id.uuid.empty() ? std::to_string(pipeline_identity.vendor_id) + "-" +
+                                                     std::to_string(pipeline_identity.device_id) + "-" +
+                                                     std::to_string(pipeline_identity.driver_version)
+                                               : id.uuid;
+        auto pipeline_manager = detail::kernel::PipelineManager::create(
+            logical_device.value().api(), logical_device.value().handle(),
+            detail::spirv::capabilities_from(info), pipeline_identity,
+            std::filesystem::path(resolved.cache_dir) / "pipelines" / (cache_key + ".bin"));
+        if (!pipeline_manager) return std::move(pipeline_manager).error();
         impl->devices.push_back(std::make_unique<Impl::DeviceEntry>(
-            id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value()));
+            id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
+            std::move(pipeline_manager).value()));
     }
     return Runtime(std::move(impl));
 }

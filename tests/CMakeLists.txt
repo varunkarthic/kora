@@ -39,6 +39,19 @@ function(kora_add_test exe label)
   gtest_discover_tests(${exe} PROPERTIES ${_properties} DISCOVERY_TIMEOUT 60)
 endfunction()
 
+find_program(KORA_GLSLANG_VALIDATOR NAMES glslangValidator)
+if(KORA_GLSLANG_VALIDATOR)
+  set(KORA_SPIRV_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/spirv_reflection.comp.spv)
+  add_custom_command(
+    OUTPUT ${KORA_SPIRV_FIXTURE}
+    COMMAND ${KORA_GLSLANG_VALIDATOR} -V --target-env vulkan1.0
+            -o ${KORA_SPIRV_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/unit/spirv_reflection.comp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/unit/spirv_reflection.comp
+    VERBATIM)
+  add_custom_target(kora_spirv_fixture DEPENDS ${KORA_SPIRV_FIXTURE})
+endif()
+
 add_subdirectory(unit)
 add_subdirectory(integration)
 add_subdirectory(stress)

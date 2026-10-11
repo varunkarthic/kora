@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   range, type, UTF-8, and device-independent local-size validation.
 - Add structural SPIR-V validation and compute-interface reflection for entry points, descriptors,
   push constants, specialization constants, and metadata consistency checks.
+- Add per-device compute pipeline and descriptor-layout caches, bounded LRU eviction, recycled
+  descriptor sets, specialization-data mapping, and identity-validated persistent Vulkan pipeline caches.
 
 ## [0.1.26] - 2026-10-11
 
