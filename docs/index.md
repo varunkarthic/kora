@@ -12,6 +12,7 @@ architecture. Interfaces described as planned are not yet available in the curre
 :caption: Start here
 
 overview
+platform-support
 getting-started
 building
 testing

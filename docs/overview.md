@@ -3,20 +3,23 @@
 ## What KORA provides
 
 Raw Vulkan exposes devices, queues, memory types, command buffers, pipelines, and synchronization.
-KORA is intended to add the runtime services normally needed by compute applications:
+KORA provides a C++20 runtime and an optional thin Python binding for compute applications. The
+implemented services include:
 
 - logical buffers with host and device residency;
 - validated SPIR-V kernel packages and pipeline caching;
-- asynchronous events and dependency-aware task graphs;
-- hazard tracking and portable synchronization lowering;
+- asynchronous events and dependency-aware task-graph primitives;
+- buffer hazard tracking and supported Vulkan barrier lowering;
 - pooled allocation, staging, eviction, and memory-budget handling;
-- measured CPU/GPU scheduling and multi-device placement;
+- CPU task execution and explicit multi-device operations, with scheduler/partitioning primitives;
 - profiling, traces, recovery, and diagnostic tools;
-- equivalent C++ and thin Python interfaces.
+- a C++ API and an optional Python binding for its documented subset.
 
-The current repository implements the build/package foundation, structured errors, checked
-arithmetic, configuration resolution, structured logging, and categorized tests. Later subsystems
-remain tracked as GitHub issues and must not be assumed available yet.
+Automatic graph execution and scheduler-driven device placement are not implied by those interfaces:
+task graphs currently build dependency plans for caller callbacks, and kernels are bound to a device
+when created. Consult [Architecture](architecture.md) and [Multiple devices](multi-gpu.md) for those
+boundaries. This documentation distinguishes available runtime behavior from optional capabilities
+and unimplemented integration work.
 
 ## Portability model
 
@@ -27,6 +30,8 @@ correctness requirements.
 Linux and Windows use the installed Vulkan loader and driver. macOS uses MoltenVK over Metal, so its
 capability set may be a portability subset. A machine without a usable Vulkan compute implementation
 can still build KORA and use non-GPU components; GPU initialization reports a structured error.
+See [Platform and feature support](platform-support.md) for the capability tiers, portability limits,
+and numerical reproducibility expectations.
 
 ## Non-goals
 
