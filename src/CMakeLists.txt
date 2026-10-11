@@ -9,6 +9,7 @@ add_library(kora
   core/json.cpp
   core/options.cpp
   core/runtime.cpp
+  core/task_graph.cpp
   core/version.cpp
   memory/suballocator.cpp
   memory/memory_pool.cpp

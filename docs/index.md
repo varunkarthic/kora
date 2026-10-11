@@ -73,6 +73,7 @@ api/checked
 api/buffer
 api/event
 api/kernel
+task-graph
 ```
 
 ## Documentation guarantees
