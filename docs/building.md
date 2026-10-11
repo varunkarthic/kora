@@ -15,9 +15,11 @@ allows the library and CPU functionality to work on machines without a Vulkan im
 Vulkan headers are still required to compile the GPU backend. CMake first looks for installed
 headers and otherwise downloads the pinned Khronos Vulkan-Headers release.
 
-GoogleTest is required only when `KORA_BUILD_TESTS` is enabled. CMake uses an installed package
-when available and otherwise downloads the pinned release. SPIRV-Tools is optional; when found,
-it supplements KORA's built-in structural SPIR-V checks.
+SPIRV-Headers are required for the parser's Khronos instruction and enum definitions; CMake uses an
+installed package or downloads the pinned Vulkan-SDK-aligned release. SPIRV-Tools is optional; when
+found, it supplements KORA's built-in structural SPIR-V checks. GoogleTest is required only when
+`KORA_BUILD_TESTS` is enabled. CMake uses an installed package when available and otherwise
+downloads the pinned release.
 
 ## Quick start
 

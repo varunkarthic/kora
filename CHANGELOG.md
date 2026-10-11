@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add strict, bounded `.kora.json` parsing and a programmatic kernel metadata model with duplicate,
   range, type, UTF-8, and device-independent local-size validation.
+- Add structural SPIR-V validation and compute-interface reflection for entry points, descriptors,
+  push constants, specialization constants, and metadata consistency checks.
 
 ## [0.1.26] - 2026-10-11
 

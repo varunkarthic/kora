@@ -40,6 +40,7 @@ internals/completion
 internals/staging-ring
 internals/transfers
 internals/dirty-ranges
+internals/spirv
 device-selection
 memory-model
 ci-cd

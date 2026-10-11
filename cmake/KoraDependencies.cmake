@@ -26,6 +26,19 @@ else()
 endif()
 
 # SPIRV-Tools (optional): full SPIR-V validation. Built-in structural checks always run.
+# The parser uses Khronos' generated SPIR-V enums even when SPIRV-Tools itself is disabled.
+find_package(SPIRV-Headers CONFIG QUIET)
+if(TARGET SPIRV-Headers::SPIRV-Headers)
+  get_target_property(KORA_SPIRV_HEADERS_INCLUDE_DIR
+    SPIRV-Headers::SPIRV-Headers INTERFACE_INCLUDE_DIRECTORIES)
+else()
+  message(STATUS "KORA: fetching SPIRV-Headers")
+  FetchContent_Declare(spirv_headers
+    URL https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.3.296.0.tar.gz)
+  FetchContent_MakeAvailable(spirv_headers)
+  set(KORA_SPIRV_HEADERS_INCLUDE_DIR "${spirv_headers_SOURCE_DIR}/include")
+endif()
+
 set(KORA_HAVE_SPIRV_TOOLS OFF)
 if(KORA_ENABLE_SPIRV_TOOLS)
   find_package(SPIRV-Tools CONFIG QUIET)
