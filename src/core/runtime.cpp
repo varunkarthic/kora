@@ -24,6 +24,7 @@
 #include "core/device_caps.hpp"
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
+#include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "memory/eviction.hpp"
 #include "memory/memory_manager.hpp"
@@ -60,6 +61,9 @@ struct KernelState {
     std::vector<std::uint32_t> words;
     std::uint64_t runtime_id = 0;
     std::uint64_t device_index = 0;
+    std::array<std::uint32_t, 3> local_size_spec_ids{};
+    std::shared_ptr<detail::kernel::WorkgroupAutotuner> autotuner;
+    std::vector<std::string> autotune_keys;
 };
 
 struct DispatchContext {
@@ -84,6 +88,15 @@ struct DispatchContext {
     std::atomic<std::uint64_t> upload_count{0};
     std::atomic<std::uint64_t> download_count{0};
     std::unique_ptr<detail::TimestampRing> timestamps;
+    bool autotuning_enabled = false;
+    struct PendingAutotune {
+        std::shared_ptr<detail::kernel::WorkgroupAutotuner> tuner;
+        detail::kernel::WorkgroupAutotuner::Trial trial;
+        std::string key;
+    };
+    std::unordered_map<std::uint64_t, PendingAutotune> pending_autotune;
+    std::shared_ptr<detail::PerformanceDatabase> performance_database;
+    std::filesystem::path performance_database_path;
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
     std::unordered_map<BufferId, detail::MemoryPool*, BufferIdHash> allocation_pools;
     void release_buffers() noexcept {
@@ -102,6 +115,35 @@ struct DispatchContext {
     }
     ~DispatchContext() { release_buffers(); }
 };
+
+void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
+                              const std::vector<GpuTimestampSample>& samples,
+                              const std::shared_ptr<PerformanceDatabase>& database,
+                              const std::filesystem::path& database_path) {
+    if (!dispatch || !database) return;
+    bool changed = false;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    for (const auto& sample : samples) {
+        DispatchContext::PendingAutotune pending;
+        {
+            std::lock_guard lock(dispatch->submit_mutex);
+            const auto found = dispatch->pending_autotune.find(sample.submission_id);
+            if (found == dispatch->pending_autotune.end()) continue;
+            pending = std::move(found->second);
+            dispatch->pending_autotune.erase(found);
+        }
+        const auto duration = static_cast<double>(sample.duration_nanoseconds);
+        if (!pending.tuner->observe(pending.trial, duration)) continue;
+        if (now_ms >= 0 && !pending.trial.warmup) {
+            changed = static_cast<bool>(
+                          database->observe(pending.key, duration, static_cast<std::uint64_t>(now_ms))) ||
+                      changed;
+        }
+    }
+    if (changed) (void)database->save(database_path);
+}
 
 }  // namespace detail
 
@@ -360,7 +402,9 @@ struct Runtime::Impl {
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
     bool calibrate_on_start = true;
-    detail::PerformanceDatabase performance_database;
+    std::shared_ptr<detail::PerformanceDatabase> performance_database =
+        std::make_shared<detail::PerformanceDatabase>();
+    std::filesystem::path performance_database_path;
     std::mutex cpu_mutex;
     std::unordered_map<std::string, CpuFallbackFunction> cpu_fallbacks;
     std::shared_ptr<CpuExecutor> cpu_executor;
@@ -391,11 +435,32 @@ Result<Event> DispatchBuilder::submit() {
         return Error(ErrorCode::InvalidArgument, "push-constant block exceeds the selected device limit");
 
     const auto& limits = context_->info->limits();
+    auto local_size = kernel_->metadata.local_size;
+    detail::kernel::WorkgroupAutotuner::Trial autotune_trial;
+    const bool autotune = context_->autotuning_enabled && context_->timestamps && kernel_->autotuner;
+    if (autotune) {
+        autotune_trial = kernel_->autotuner->reserve();
+        if (autotune_trial.tracked)
+            local_size = kernel_->autotuner->candidates()[autotune_trial.candidate_index].local_size;
+        else
+            local_size = kernel_->autotuner->selected_local_size();
+    }
+    auto cancel_autotune_trial = [&] {
+        if (autotune_trial.tracked) kernel_->autotuner->cancel(autotune_trial);
+        autotune_trial.tracked = false;
+    };
+    struct AutotuneTrialGuard {
+        std::function<void()> cancel;
+        bool active = true;
+        ~AutotuneTrialGuard() {
+            if (active) cancel();
+        }
+    } trial_guard{cancel_autotune_trial};
     std::array<std::uint32_t, 3> groups{};
     for (std::size_t dimension = 0; dimension < 3; ++dimension) {
         if (global_size_[dimension] == 0)
             return Error(ErrorCode::InvalidDispatch, "global dispatch dimensions must all be nonzero");
-        const auto local = kernel_->metadata.local_size[dimension];
+        const auto local = local_size[dimension];
         const auto group_count = 1U + ((global_size_[dimension] - 1U) / local);
         if (group_count > UINT32_MAX || group_count > limits.max_compute_work_group_count[dimension])
             return Error(ErrorCode::InvalidDispatch, "dispatch group count exceeds a selected-device limit");
@@ -405,7 +470,7 @@ Result<Event> DispatchBuilder::submit() {
                          "kernel local size exceeds a selected-device dimension limit");
     }
     std::uint64_t invocations = 1;
-    for (const auto dimension : kernel_->metadata.local_size) {
+    for (const auto dimension : local_size) {
         if (dimension > UINT32_MAX / invocations)
             return Error(ErrorCode::InvalidDispatch, "kernel local-size invocation product overflows uint32");
         invocations *= dimension;
@@ -435,12 +500,31 @@ Result<Event> DispatchBuilder::submit() {
         }
     }
     auto specialization = kernel_->metadata.specialization_constants;
+    if (autotune && autotune_trial.tracked) {
+        for (std::size_t dimension = 0; dimension < local_size.size(); ++dimension) {
+            const auto found = std::find_if(
+                specialization.begin(), specialization.end(),
+                [&](const auto& value) { return value.id == kernel_->local_size_spec_ids[dimension]; });
+            if (found == specialization.end()) {
+                cancel_autotune_trial();
+                return Error(ErrorCode::InternalInvariantViolation,
+                             "reflected LocalSizeId specialization is missing from kernel metadata");
+            }
+            found->default_value = static_cast<std::uint64_t>(local_size[dimension]);
+        }
+    }
     auto pipeline = context_->pipelines->get_or_create(kernel_->words, kernel_->metadata, specialization,
                                                        kernel_->entry_point);
-    if (!pipeline) return std::move(pipeline).error();
+    if (!pipeline) {
+        cancel_autotune_trial();
+        return std::move(pipeline).error();
+    }
     for (std::size_t i = 0; i < buffers_.size(); ++i) {
         auto buffer = ensure_transfer_buffer(context_, buffers_[i], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        if (!buffer) return std::move(buffer).error();
+        if (!buffer) {
+            cancel_autotune_trial();
+            return std::move(buffer).error();
+        }
         vk_buffers.push_back(buffer.value());
     }
 
@@ -511,8 +595,10 @@ Result<Event> DispatchBuilder::submit() {
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         std::uint64_t submission_id = 0;
         bool timestamp_recorded = false;
+        detail::kernel::WorkgroupAutotuner::Trial autotune_trial;
     };
     auto work = std::make_shared<DispatchWork>();
+    work->autotune_trial = autotune_trial;
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
     submission.coalescible = true;
@@ -595,32 +681,46 @@ Result<Event> DispatchBuilder::submit() {
         commands.push_back(command.value());
         return Status{};
     };
-    submission.on_submitted = [ctx, work, bound_handles = std::move(bound_handles), written_buffers](
-                                  std::uint64_t timeline, Status status) {
-        std::lock_guard lock(ctx->submit_mutex);
-        if (status) {
-            if (work->command_buffer != VK_NULL_HANDLE)
-                (void)ctx->command_pool->submitted(work->command_buffer, timeline);
-            if (ctx->timestamps && work->timestamp_recorded)
-                ctx->timestamps->submitted(work->submission_id, timeline);
-            for (const auto& buffer : bound_handles) (void)buffer.mark_used(timeline);
-        } else if (work->command_buffer != VK_NULL_HANDLE && ctx->command_pool) {
-            (void)ctx->command_pool->discard(work->command_buffer);
-        }
-        if (!status && ctx->timestamps && work->timestamp_recorded)
-            ctx->timestamps->cancel(work->submission_id);
-        if (!status) {
-            for (const auto id : written_buffers) {
-                ctx->resident_host_versions.erase(id);
-                ctx->device_newer_buffers.erase(id);
+    submission.on_submitted =
+        [ctx, work, bound_handles = std::move(bound_handles), written_buffers, tuner = kernel_->autotuner,
+         key = autotune_trial.tracked ? kernel_->autotune_keys[autotune_trial.candidate_index]
+                                      : std::string{}](std::uint64_t timeline, Status status) {
+            std::lock_guard lock(ctx->submit_mutex);
+            if (status) {
+                if (work->command_buffer != VK_NULL_HANDLE)
+                    (void)ctx->command_pool->submitted(work->command_buffer, timeline);
+                if (ctx->timestamps && work->timestamp_recorded)
+                    ctx->timestamps->submitted(work->submission_id, timeline);
+                if (tuner && work->autotune_trial.tracked && work->timestamp_recorded && ctx->timestamps)
+                    ctx->pending_autotune.insert_or_assign(
+                        work->submission_id,
+                        detail::DispatchContext::PendingAutotune{tuner, work->autotune_trial, key});
+                for (const auto& buffer : bound_handles) (void)buffer.mark_used(timeline);
+            } else if (work->command_buffer != VK_NULL_HANDLE && ctx->command_pool) {
+                (void)ctx->command_pool->discard(work->command_buffer);
             }
-        }
-    };
+            if (!status && ctx->timestamps && work->timestamp_recorded)
+                ctx->timestamps->cancel(work->submission_id);
+            if ((!status || !work->timestamp_recorded) && tuner && work->autotune_trial.tracked)
+                tuner->cancel(work->autotune_trial);
+            if (!status) {
+                for (const auto id : written_buffers) {
+                    ctx->resident_host_versions.erase(id);
+                    ctx->device_newer_buffers.erase(id);
+                }
+            }
+        };
     submission.on_complete = [promise, ctx, pipeline_ref, allocated_descriptors, bound_buffers,
                               bound_handles = buffers_, accesses = accesses_, written_buffers,
                               bound_host_versions,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
         (void)pipeline_ref;
+        if (ctx->timestamps) {
+            auto samples = ctx->timestamps->collect(compute_value);
+            if (samples)
+                detail::observe_autotune_samples(ctx, samples.value(), ctx->performance_database,
+                                                 ctx->performance_database_path);
+        }
         for (const auto descriptor : *allocated_descriptors)
             (void)ctx->pipelines->free_descriptor_set(descriptor);
         if (status && !defer_readback) {
@@ -698,8 +798,10 @@ Result<Event> DispatchBuilder::submit() {
             context_->device_newer_buffers.insert(id);
         }
     }
+    trial_guard.active = false;  // Submission callbacks now own cancellation/observation.
     auto submitted = queue->submit(std::move(submission));
     if (!submitted) {
+        cancel_autotune_trial();
         std::lock_guard lock(context_->submit_mutex);
         for (const auto id : written_buffers) {
             context_->resident_host_versions.erase(id);
@@ -913,12 +1015,52 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     if (!input) return Error(ErrorCode::IoError, "failed to read complete SPIR-V module");
     auto structure = detail::spirv::validate_module_structure(words);
     if (!structure) return std::move(structure).error();
+    auto& device = *impl_->devices.front();
+    auto reflection = detail::spirv::validate_and_reflect(
+        words, metadata, detail::spirv::capabilities_from(device.info), entry_point);
+    if (!reflection) return std::move(reflection).error();
     auto state = std::make_shared<detail::KernelState>();
     state->entry_point = std::move(entry_point);
     state->metadata = std::move(metadata);
     state->words = std::move(words);
     state->runtime_id = impl_->runtime_id;
     state->device_index = impl_->devices.front()->id.index;
+    if (reflection.value().local_size_id_based) {
+        state->local_size_spec_ids = reflection.value().local_size_spec_ids;
+        auto candidates = detail::kernel::generate_workgroup_candidates(
+            reflection.value().local_size, true, device.info.limits(), device.info.subgroup());
+        if (!candidates) return std::move(candidates).error();
+        const bool x_dimension_is_independent =
+            reflection.value().local_size_spec_ids[0] != reflection.value().local_size_spec_ids[1] &&
+            reflection.value().local_size_spec_ids[0] != reflection.value().local_size_spec_ids[2];
+        if (candidates.value().size() > 1 && x_dimension_is_independent) {
+            std::size_t base_index = 0;
+            for (std::size_t index = 0; index < candidates.value().size(); ++index) {
+                if (candidates.value()[index].local_size == reflection.value().local_size) base_index = index;
+            }
+            state->autotuner = std::make_shared<detail::kernel::WorkgroupAutotuner>(
+                std::move(candidates).value(), base_index);
+            const auto device_key = device.id.uuid.empty()
+                                        ? device.info.name() + "/" + std::to_string(device.id.index)
+                                        : device.id.uuid;
+            std::uint64_t module_hash = 1469598103934665603ULL;
+            for (const auto word : state->words) {
+                module_hash ^= word;
+                module_hash *= 1099511628211ULL;
+            }
+            const auto tuning_kernel_id = state->metadata.kernel_id + "/" + std::to_string(module_hash);
+            for (const auto& candidate : state->autotuner->candidates()) {
+                auto key = detail::kernel::workgroup_performance_key(
+                    device_key, device.driver_version, tuning_kernel_id, state->entry_point, candidate);
+                auto saved = impl_->performance_database->query(key);
+                if (saved) {
+                    auto restored = state->autotuner->restore(state->autotune_keys.size(), saved.value());
+                    if (!restored) return std::move(restored).error();
+                }
+                state->autotune_keys.push_back(std::move(key));
+            }
+        }
+    }
     return Kernel(std::move(state));
 }
 
@@ -971,13 +1113,13 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     impl->calibration_directory = resolved.cache_dir;
     impl->calibration_budget_ms = resolved.calibration_budget_ms;
     impl->calibrate_on_start = resolved.enable_startup_calibration;
+    impl->performance_database_path = std::filesystem::path(resolved.cache_dir) / "performance-db.json";
     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
     if (now_ms >= 0) {
-        (void)impl->performance_database.load(
-            std::filesystem::path(resolved.cache_dir) / "performance-db.json",
-            static_cast<std::uint64_t>(now_ms));
+        (void)impl->performance_database->load(impl->performance_database_path,
+                                               static_cast<std::uint64_t>(now_ms));
     }
     for (const auto& id : selected.value()) {
         if (id.index >= physical_devices.value().size()) {
@@ -1025,6 +1167,9 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         if (!initialized) return std::move(initialized).error();
         if (impl->calibrate_on_start)
             entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
+        entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
+        entry->dispatch->performance_database = impl->performance_database;
+        entry->dispatch->performance_database_path = impl->performance_database_path;
         impl->devices.push_back(std::move(entry));
     }
     return Runtime(std::move(impl));
@@ -1095,6 +1240,8 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
     if (!completed) return std::move(completed).error();
     auto collected = dispatch->timestamps->collect(completed.value());
     if (!collected) return std::move(collected).error();
+    detail::observe_autotune_samples(dispatch, collected.value(), impl_->performance_database,
+                                     impl_->performance_database_path);
     const auto latest = dispatch->timestamps->latest_sample();
     return RuntimeProfilingStats{dispatch->timestamps->samples_collected(),
                                  dispatch->timestamps->dropped_samples(),

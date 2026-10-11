@@ -2,8 +2,9 @@
 
 `kora::detail::PerformanceDatabase` is an internal, thread-safe store for scheduler measurements
 keyed by semantic operation strings. A sample is a finite, nonnegative scalar in the caller's chosen
-unit; the database does not infer units or combine unlike measurements. The component is not yet
-connected to automatic scheduler decisions.
+unit; the database does not infer units or combine unlike measurements. The bounded online workgroup
+autotuner also uses it to persist GPU dispatch durations for `LocalSizeId` variants; the scheduler
+does not yet use these records for automatic placement decisions.
 
 ## Statistics and robustness
 
@@ -33,6 +34,10 @@ uses atomic rename and best-effort directory synchronization. The bounded reader
 oversized, duplicate-key, incompatible-schema, non-finite, or invalid sample data. A failed `load()`
 returns `IoError` and leaves the current in-memory database unchanged. Startup code treats the file as
 an optional cache and must ignore a failed load rather than fail Runtime creation.
+
+Workgroup autotuning keys include device identity, driver version, kernel ID plus a module fingerprint,
+entry point, and all three local dimensions. This prevents stale measurements from crossing a driver
+update or a changed SPIR-V module that reused a kernel ID.
 
 ## Function reference
 

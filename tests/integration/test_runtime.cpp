@@ -111,6 +111,72 @@ TEST(Runtime, CorruptPerformanceDatabaseNeverBlocksStartup) {
     std::filesystem::remove_all(directory, ignored);
 }
 
+TEST(Runtime, TunesLocalSizeIdDispatchesWithQueriedDeviceLimits) {
+#ifndef KORA_AUTOTUNE_FIXTURE_PATH
+    GTEST_SKIP() << "Install SPIRV-Tools to assemble the LocalSizeId fixture";
+#else
+    const auto directory = std::filesystem::temp_directory_path() / "kora-autotune-runtime-test";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    kora::RuntimeOptions options;
+    options.cache_dir = directory.string();
+    options.enable_startup_calibration = false;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        std::filesystem::remove_all(directory, ignored);
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+
+    kora::KernelMetadata metadata;
+    metadata.kernel_id = "integration.autotune_increment";
+    metadata.local_size = {1, 1, 1};
+    metadata.push_constant_size = sizeof(std::uint32_t);
+    metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+    metadata.bindings = {{.set = 0,
+                          .binding = 0,
+                          .name = "data_buffer",
+                          .kind = kora::KernelBindingKind::StorageBuffer,
+                          .access = kora::KernelAccess::ReadWrite}};
+    metadata.specialization_constants = {{7, "local_size_x", "u32", std::uint64_t{1}},
+                                         {8, "local_size_y", "u32", std::uint64_t{1}},
+                                         {9, "local_size_z", "u32", std::uint64_t{1}}};
+    auto kernel = runtime.value().load_kernel(KORA_AUTOTUNE_FIXTURE_PATH, "main", std::move(metadata));
+    if (!kernel && kernel.error().code == kora::ErrorCode::UnsupportedFeature) {
+        std::filesystem::remove_all(directory, ignored);
+        GTEST_SKIP() << "Selected Vulkan device does not validate LocalSizeId: " << kernel.error().describe();
+    }
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    constexpr std::uint32_t count = 257;
+    auto values = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(values) << values.error().describe();
+    std::vector<std::uint32_t> initial(count, 0);
+    ASSERT_TRUE(values.value().write(initial));
+    for (std::uint32_t iteration = 0; iteration < 16; ++iteration) {
+        auto event = runtime.value()
+                         .dispatch(kernel.value())
+                         .global(count)
+                         .read_write(values.value())
+                         .push(count)
+                         .submit();
+        ASSERT_TRUE(event) << event.error().describe();
+        const auto completed = event.value().wait();
+        ASSERT_TRUE(completed) << completed.error().describe();
+        const auto profiling = runtime.value().profiling_stats(runtime.value().devices().front());
+        if (!profiling && profiling.error().code == kora::ErrorCode::UnsupportedFeature) {
+            std::filesystem::remove_all(directory, ignored);
+            GTEST_SKIP() << "Selected Vulkan queue does not support timestamp profiling";
+        }
+        ASSERT_TRUE(profiling) << profiling.error().describe();
+    }
+    auto result = values.value().read();
+    ASSERT_TRUE(result) << result.error().describe();
+    for (const auto value : result.value()) EXPECT_EQ(value, 16U);
+    std::filesystem::remove_all(directory, ignored);
+#endif
+}
+
 TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
 #ifndef KORA_VECTOR_ADD_FIXTURE_PATH
     GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";

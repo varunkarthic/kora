@@ -37,6 +37,21 @@ if(KORA_GLSLANG_VALIDATOR)
     KORA_SAXPY_FIXTURE_PATH="${KORA_SAXPY_FIXTURE}")
 endif()
 
+find_program(KORA_SPIRV_ASSEMBLER NAMES spirv-as)
+if(KORA_SPIRV_ASSEMBLER)
+  set(KORA_AUTOTUNE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/autotune.spv)
+  add_custom_command(
+    OUTPUT ${KORA_AUTOTUNE_FIXTURE}
+    COMMAND ${KORA_SPIRV_ASSEMBLER} --target-env vulkan1.2 -o ${KORA_AUTOTUNE_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/autotune.spvasm
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/autotune.spvasm
+    VERBATIM)
+  add_custom_target(kora_autotune_fixture DEPENDS ${KORA_AUTOTUNE_FIXTURE})
+  add_dependencies(kora_integration_tests kora_autotune_fixture)
+  target_compile_definitions(kora_integration_tests PRIVATE
+    KORA_AUTOTUNE_FIXTURE_PATH="${KORA_AUTOTUNE_FIXTURE}")
+endif()
+
 if(TARGET kora-info)
   find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
   add_test(NAME KoraInfo.ListsDevices COMMAND $<TARGET_FILE:kora-info>)

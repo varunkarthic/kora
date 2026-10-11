@@ -18,6 +18,12 @@ Header: `include/kora/options.hpp`
 : Enable/disable best-effort per-device startup calibration and configure its budget (1–60,000 ms,
   default 250 ms). Corresponding environment variables are documented in `configuration.md`.
 
+`disable_autotune`
+: Disable runtime workgroup tuning. When unset, `KORA_DISABLE_AUTOTUNE` controls this setting and
+  defaults to tuning enabled where supported. Tuning applies only to SPIR-V kernels that declare
+  `LocalSizeId` and only when GPU timestamp profiling is available. See
+  [workgroup autotuning](../autotuning.md).
+
 `RuntimeOptions`
 : User-facing optional overrides. An unset field permits environment/default resolution.
 
