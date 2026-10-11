@@ -101,6 +101,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a Python callback-replay benchmark compared with a reusable-plan C++ callback.
 - Add debug safety diagnostics with Release opt-in, Debug host-shadow canaries, Vulkan validation
   requests, and detailed synchronization logs.
+- Add bounded Chrome Trace Event JSON export for completed GPU timestamp samples at Trace telemetry
+  level, including device/submission correlation and calibrated host clock metadata when available.
 
 - Add one-second Vulkan memory-budget refresh, 80% configurable heap soft limits, backing-allocation
   accounting, and failure-adaptive admission limits.

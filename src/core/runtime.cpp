@@ -14,6 +14,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,6 +26,7 @@
 #include "core/device_caps.hpp"
 #include "core/device_initialization.hpp"
 #include "core/event_state.hpp"
+#include "core/json.hpp"
 #include "core/performance_db.hpp"
 #include "core/runtime_test_access.hpp"
 #include "core/scheduler_placement.hpp"
@@ -2340,6 +2342,52 @@ void Runtime::calibrate_compute_probes() noexcept {
             // Compute calibration is diagnostic and cannot make Runtime creation fail.
         }
     }
+}
+
+Result<std::string> Runtime::export_trace_json() const {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    if (options_.telemetry.value_or(TelemetryLevel::Basic) != TelemetryLevel::Trace)
+        return Error(ErrorCode::InvalidArgument, "trace export requires TelemetryLevel::Trace");
+    for (const auto& entry : impl_->devices) {
+        const auto& dispatch = entry->dispatch;
+        if (!dispatch || !dispatch->timestamps) continue;
+        const auto completed = dispatch->queue->completed_value();
+        if (!completed) return std::move(completed).error();
+        auto samples = dispatch->timestamps->collect(completed.value());
+        if (!samples) return std::move(samples).error();
+        detail::observe_autotune_samples(dispatch, samples.value(), impl_->performance_database,
+                                         impl_->performance_database_path);
+    }
+    std::ostringstream json;
+    json << "{\"traceEvents\":[";
+    bool first = true;
+    for (const auto& entry : impl_->devices) {
+        const auto& dispatch = entry->dispatch;
+        if (!dispatch || !dispatch->timestamps) continue;
+        for (const auto& sample : dispatch->timestamps->history()) {
+            if (!first) json << ',';
+            first = false;
+            const auto start_us = sample.host_timestamp_nanoseconds / 1000;
+            const auto duration_us = sample.duration_nanoseconds / 1000;
+            json << "{\"name\":\"gpu_dispatch\",\"cat\":\"kora.gpu\",\"ph\":\"X\","
+                    "\"ts\":"
+                 << start_us << ",\"dur\":" << duration_us << ",\"pid\":1,\"tid\":" << entry->id.index
+                 << ",\"args\":{\"submission_id\":" << sample.submission_id
+                 << ",\"queue_value\":" << sample.queue_value
+                 << ",\"host_clock_calibrated\":" << (sample.host_timestamp_nanoseconds ? "true" : "false")
+                 << ",\"calibration_deviation_ns\":" << sample.calibration_deviation_nanoseconds << "}}";
+        }
+    }
+    json << "],\"displayTimeUnit\":\"us\",\"metadata\":{\"format\":\"Chrome Trace Event\","
+            "\"time_origin\":\"calibrated_monotonic_host_timestamp_when_available\"}}";
+    const auto document = json.str();
+    auto validated = detail::json::parse(document, {.maximum_bytes = 128U * 1024U * 1024U,
+                                                    .maximum_depth = 16,
+                                                    .maximum_string_bytes = 1024,
+                                                    .maximum_values = 1'000'000});
+    if (!validated)
+        return Error(ErrorCode::InternalInvariantViolation, "trace exporter generated invalid JSON");
+    return document;
 }
 
 Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {

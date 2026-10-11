@@ -1,4 +1,41 @@
-# GPU timestamp profiling
+# Telemetry and GPU timestamp profiling
+
+`RuntimeOptions::telemetry` and `KORA_PROFILE` select `Off`, `Basic`, `Profile`, or `Trace` in
+increasing detail. The default is `Basic`; `KORA_TRACE=true` is a compatibility shorthand for
+`Trace`. `Runtime::profiling_stats()` provides completed timestamp counters and the latest sample.
+Trace export is explicitly opt-in: create the runtime with `TelemetryLevel::Trace`, then call
+`Runtime::export_trace_json()` after dispatch work. The returned document uses Chrome Trace Event
+JSON (`traceEvents`, complete `X` events) and can be opened directly in Perfetto. It includes GPU
+dispatch duration, submission ID, queue timeline value, device index, and calibrated monotonic host
+timestamp/deviation when supported. When timestamp calibration is unavailable, timestamps are zero
+and `host_clock_calibrated` is false; GPU duration remains useful but cannot be accurately placed on
+the host timeline.
+
+```cpp
+kora::RuntimeOptions options;
+options.telemetry = kora::TelemetryLevel::Trace;
+auto runtime = kora::Runtime::create(options);
+// Submit and wait for work, then:
+auto trace = runtime.value().export_trace_json();
+if (trace) {
+    std::ofstream("kora-trace.json") << trace.value();
+}
+```
+
+`export_trace_json()` polls only completed queue work and never waits for pending GPU submissions.
+The retained history is bounded to the newest 4096 completed samples per device. Exported traces
+contain operational timing metadata only; KORA does not persist them. Current Runtime dispatches do
+not consume `ScoreBreakdown` for device selection, so this trace stream does not fabricate scheduler
+score components. The standalone scheduler cost API remains documented in `scheduler.md`.
+
+## Per-function reference
+
+| API | Behavior |
+| --- | --- |
+| `resolve(options, env)` | Applies API-over-environment-over-default precedence for telemetry level. |
+| `Runtime::profiling_stats(device)` | Polls and returns cumulative counts and latest completed GPU timestamp data; no waiting. |
+| `Runtime::export_trace_json()` | At Trace level, polls all owned devices and returns bounded Chrome Trace Event JSON. |
+| `TelemetryLevel::Off/Basic/Profile/Trace` | Selects requested telemetry detail; trace-file export requires `Trace`. |
 
 KORA records optional compute-dispatch durations with Vulkan timestamp queries. Profiling is
 best-effort: devices or queue families without timestamp support continue to execute normally, and

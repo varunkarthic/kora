@@ -44,6 +44,8 @@ public:
     std::uint64_t dropped_samples() const noexcept;
     std::uint64_t samples_collected() const noexcept;
     GpuTimestampSample latest_sample() const noexcept;
+    /// Bounded history of completed samples for trace export.
+    std::vector<GpuTimestampSample> history() const;
 
 private:
     struct Slot {
@@ -69,6 +71,7 @@ private:
     std::uint64_t dropped_samples_ = 0;
     std::uint64_t samples_collected_ = 0;
     GpuTimestampSample latest_sample_{};
+    std::deque<GpuTimestampSample> history_;
 };
 
 }  // namespace kora::detail
