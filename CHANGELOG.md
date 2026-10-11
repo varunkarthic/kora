@@ -20,6 +20,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   filtering, and explicit dirty-copy writeback decisions.
 - Add memory admission estimates and finite OOM recovery stages with one retry, smaller-block fallback,
   task-level chunking/CPU fallback hooks, and structured exhaustion diagnostics.
+- Add nonblocking GPU dispatch timestamp profiling with valid-bit wrap handling, bounded query rings,
+  calibrated host correlation when supported, and runtime profiling statistics.
 
 ## [0.1.44] - 2026-10-11
 

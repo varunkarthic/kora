@@ -10,6 +10,7 @@ namespace {
 struct FakeVulkan {
     int allocate_calls = 0;
     int submit_calls = 0;
+    int query_calls = 0;
     VkResult allocate_result = VK_SUCCESS;
     VkResult submit_result = VK_SUCCESS;
 };
@@ -36,10 +37,16 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t, const VkSubmit
     return fake.submit_result;
 }
 
+VkResult VKAPI_PTR get_query_pool_results(void*, VkDevice, VkQueryPool, uint32_t, uint32_t, size_t, void*,
+                                          VkDeviceSize, VkQueryResultFlags) noexcept {
+    return VK_SUCCESS;
+}
+
 kora::vk::Api fake_api(FakeVulkan& fake) {
     kora::vk::Api api;
     api.allocate_memory = {&fake, allocate_memory};
     api.queue_submit = {&fake, queue_submit};
+    api.get_query_pool_results = {nullptr, get_query_pool_results};
     return api;
 }
 
@@ -77,6 +84,18 @@ TEST(VulkanFaultInjection, RejectsInvalidFailureConfiguration) {
 
     EXPECT_FALSE(injector.fail_on_nth(kora::vk::Function::QueueSubmit, 0, VK_ERROR_DEVICE_LOST));
     EXPECT_FALSE(injector.fail_on_nth(kora::vk::Function::QueueSubmit, 1, VK_SUCCESS));
+    EXPECT_FALSE(injector.fail_on_nth(kora::vk::Function::GetQueryPoolResults, 1, VK_SUCCESS));
+}
+
+TEST(VulkanFaultInjection, CanFailTimestampReadbackWithoutForwarding) {
+    FakeVulkan fake;
+    kora::vk::FaultInjector injector(fake_api(fake));
+    ASSERT_TRUE(
+        injector.fail_on_nth(kora::vk::Function::GetQueryPoolResults, 1, VK_ERROR_OUT_OF_HOST_MEMORY));
+    const auto api = injector.api();
+    EXPECT_EQ(api.get_query_pool_results(VK_NULL_HANDLE, VK_NULL_HANDLE, 0, 1, sizeof(uint64_t), nullptr,
+                                         sizeof(uint64_t), VK_QUERY_RESULT_64_BIT),
+              VK_ERROR_OUT_OF_HOST_MEMORY);
 }
 
 TEST(VulkanFaultInjection, ReturnedTableKeepsDecoratorStateAlive) {

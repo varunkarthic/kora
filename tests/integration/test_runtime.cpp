@@ -195,6 +195,13 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
             ASSERT_TRUE(event) << event.error().describe();
             auto completed = event.value().wait();
             ASSERT_TRUE(completed) << completed.error().describe();
+            auto profiling = runtime.value().profiling_stats(device);
+            if (profiling) {
+                EXPECT_GT(profiling.value().samples_collected, 0U);
+                EXPECT_GT(profiling.value().last_duration_nanoseconds, 0U);
+            } else {
+                EXPECT_EQ(profiling.error().code, kora::ErrorCode::UnsupportedFeature);
+            }
             auto values = output.value().read();
             ASSERT_TRUE(values) << values.error().describe();
             for (std::uint32_t index = 0; index < count; ++index)

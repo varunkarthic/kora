@@ -68,6 +68,14 @@ struct Api {
     PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
+    PFN_vkCmdWriteTimestamp cmd_write_timestamp = nullptr;
+    PFN_vkCmdResetQueryPool cmd_reset_query_pool = nullptr;
+    PFN_vkCreateQueryPool create_query_pool = nullptr;
+    PFN_vkDestroyQueryPool destroy_query_pool = nullptr;
+    DispatchFunction<VkResult(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t, void*, VkDeviceSize,
+                              VkQueryResultFlags)>
+        get_query_pool_results;
+    PFN_vkGetCalibratedTimestampsKHR get_calibrated_timestamps = nullptr;
 
     DispatchFunction<VkResult(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer*)>
         create_buffer;
@@ -265,7 +273,7 @@ private:
     std::shared_ptr<void> state_;
 };
 
-enum class Function : uint8_t { AllocateMemory, QueueSubmit };
+enum class Function : uint8_t { AllocateMemory, QueueSubmit, GetQueryPoolResults };
 
 /// Decorates an Api with deterministic, per-function Nth-call failures.
 class FaultInjector {

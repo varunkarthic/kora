@@ -118,6 +118,16 @@ struct RuntimeTransferStats {
     std::uint64_t downloads = 0;
 };
 
+/// Nonblocking GPU dispatch timing collected from completed queue submissions.
+struct RuntimeProfilingStats {
+    std::uint64_t samples_collected = 0;
+    std::uint64_t dropped_samples = 0;
+    std::uint64_t last_submission_id = 0;
+    std::uint64_t last_duration_nanoseconds = 0;
+    std::uint64_t last_host_timestamp_nanoseconds = 0;
+    std::uint64_t last_calibration_deviation_nanoseconds = 0;
+};
+
 /// Owns the Vulkan loader, instance, selected logical devices, and their memory managers.
 class Runtime final {
 public:
@@ -137,6 +147,8 @@ public:
     Result<MemoryStats> memory_stats(const DeviceId& device) const;
     /// Transfer operations issued by this Runtime since creation.
     Result<RuntimeTransferStats> transfer_stats() const;
+    /// Returns completed GPU timestamp samples observed so far; does not wait for pending work.
+    Result<RuntimeProfilingStats> profiling_stats(const DeviceId& device) const;
     Result<BufferHandle> create_buffer(std::uint64_t size_bytes, BufferUsage usage = BufferUsage::Storage);
     template <class T>
     Result<Buffer<T>> create_buffer(std::uint64_t count, BufferUsage usage = BufferUsage::Storage) {

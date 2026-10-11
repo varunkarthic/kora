@@ -40,6 +40,10 @@ host-readable behavior. `DispatchBuilder::defer_readback()` opts out for a chain
 `Runtime::readback(buffer)` explicitly schedules a download when host access is later needed. Wait for
 the producing dispatch event before requesting an explicit readback. `transfer_stats()` reports upload
 and download operation counts issued by the Runtime.
+`profiling_stats(device)` nonblockingly polls dispatch timestamp results already past the queue's
+completion timeline. It reports cumulative collected/dropped counts and the most recently collected
+duration; calibrated host time and deviation are available only when supported. Profiling is optional:
+unsupported queues report `UnsupportedFeature` without preventing runtime creation or dispatch.
 
 `load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module.
 The metadata is checked against reflected descriptor bindings, push-constant size, local size, and
