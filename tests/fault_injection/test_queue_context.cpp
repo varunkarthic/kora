@@ -303,33 +303,60 @@ TEST(QueueContext, FenceFallbackReusesBoundedPoolAndEmulatesCompletionValues) {
     EXPECT_EQ(mock.destroyed_fences.load(), 8U);
 }
 
-TEST(QueueContext, ReportsQueueSubmitFailureWithoutBlockingLaterTimelineCompletions) {
+TEST(QueueContext, DeviceLostFailsQueuedSubmissionsAndPreventsFurtherQueueUse) {
     Mock mock;
     mock.fail_first_submit = true;
+    mock.block_first_submit = true;
+    auto fault_state = std::make_shared<DeviceFaultState>();
     auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
-                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}), false, fault_state);
     ASSERT_TRUE(result);
     auto context = std::move(result).value();
+    auto sibling_result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                               reinterpret_cast<VkQueue>(uintptr_t{23}), false, fault_state);
+    ASSERT_TRUE(sibling_result);
+    auto sibling = std::move(sibling_result).value();
     std::atomic<uint64_t> callbacks{0};
     std::atomic<int32_t> first_vk_error{VK_SUCCESS};
-    std::atomic<uint32_t> second_success{0};
+    std::atomic<ErrorCode> first_error{ErrorCode::Ok};
+    std::atomic<ErrorCode> second_error{ErrorCode::Ok};
     QueueContext::Submission failed;
     failed.on_complete = [&](uint64_t, Status status) {
-        if (!status) first_vk_error = status.error().vk_result;
+        if (!status) {
+            first_vk_error = status.error().vk_result;
+            first_error = status.error().code;
+        }
         ++callbacks;
     };
-    QueueContext::Submission succeeded;
-    succeeded.on_complete = [&](uint64_t, Status status) {
-        if (status) ++second_success;
+    QueueContext::Submission queued;
+    queued.on_complete = [&](uint64_t, Status status) {
+        if (!status) second_error = status.error().code;
         ++callbacks;
     };
     ASSERT_TRUE(context->submit(std::move(failed)));
-    ASSERT_TRUE(context->submit(std::move(succeeded)));
+    {
+        std::unique_lock lock(mock.gate_mutex);
+        ASSERT_TRUE(mock.gate_changed.wait_for(lock, std::chrono::seconds(5),
+                                               [&] { return mock.first_submit_entered; }));
+    }
+    ASSERT_TRUE(context->submit(std::move(queued)));
+    {
+        std::lock_guard lock(mock.gate_mutex);
+        mock.release_first_submit = true;
+    }
+    mock.gate_changed.notify_all();
     ASSERT_TRUE(context->shutdown());
     EXPECT_EQ(callbacks.load(), 2u);
     EXPECT_EQ(first_vk_error.load(), VK_ERROR_DEVICE_LOST);
-    EXPECT_EQ(second_success.load(), 1u);
-    EXPECT_EQ(mock.wait_calls.load(), 1u);
+    EXPECT_EQ(first_error.load(), ErrorCode::DeviceLost);
+    EXPECT_EQ(second_error.load(), ErrorCode::DeviceLost);
+    EXPECT_FALSE(fault_state->healthy());
+    EXPECT_EQ(fault_state->last_result(), VK_ERROR_DEVICE_LOST);
+    EXPECT_EQ(sibling->submit({}).error().code, ErrorCode::DeviceLost);
+    EXPECT_EQ(context->submit({}).error().code, ErrorCode::Cancelled);
+    EXPECT_EQ(mock.submit_calls.load(), 1u);
+    EXPECT_EQ(mock.wait_calls.load(), 0u);
+    EXPECT_TRUE(sibling->shutdown());
 }
 
 TEST(QueueContext, ConcurrentShutdownCallersJoinWorkersSafely) {

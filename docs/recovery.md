@@ -1,5 +1,40 @@
 # Admission and out-of-memory recovery
 
+## Device-loss handling
+
+Each Runtime-owned logical device shares a `DeviceFaultState` across its compute and dedicated transfer
+queues. A `VK_ERROR_DEVICE_LOST` returned by queue submission or a completion wait atomically marks
+that state unhealthy and retains the Vulkan result. The first failing submission receives
+`ErrorCode::DeviceLost`; submissions already queued but not submitted are completed with the same
+error, and later submissions to any queue sharing that device state are rejected before a Vulkan
+queue call. Device loss is never treated as a transient timeout or retried on the same logical device.
+
+An operation that was already submitted when loss is observed has undefined device-side outputs. KORA
+does not publish those outputs as valid host data. A host shadow that was authoritative before the
+submission remains the caller's recovery source; a buffer whose newest contents existed only on the
+lost device is unrecoverable and must be treated as data loss. Errors include the raw `VkResult` and
+state that device recreation is unavailable; applications must discard the failed Runtime and create
+a new one. Runtime-scoped queues, pipelines, descriptors, synchronization objects, and device
+replicas are not recreated in place, and automatic task rescheduling is not attempted because the
+runtime cannot prove arbitrary tasks are idempotent or their outputs complete.
+
+The current fault state retains the result code but does not yet query `VK_EXT_device_fault` records or
+emit vendor-specific fault addresses. The extension is optional and those diagnostics must remain
+best-effort; they cannot be used as a correctness dependency. Timeouts remain poll boundaries and do
+not mark a device unhealthy. A future recovery layer may add explicit Runtime recreation and
+authoritative-host-buffer restoration without changing this fail-closed behavior.
+
+| API/internal state | Contract |
+| --- | --- |
+| `DeviceFaultState::healthy()` | False after the first observed `VK_ERROR_DEVICE_LOST`; state is shared across a Runtime device's queues. |
+| `DeviceFaultState::last_result()` | Returns the Vulkan result associated with the recorded loss. |
+| `QueueContext::submit()` | Rejects work on a lost device before submission; already queued work completes with `DeviceLost`. |
+| Device-loss `Error` | Preserves `vk_result` and directs callers to create a new Runtime; no same-device retry is claimed. |
+
+Fault-injection coverage blocks the first submit, injects device loss, queues later work, and verifies
+deterministic failure without a completion-thread wait or deadlock. A sibling queue sharing the same
+device state is also rejected.
+
 KORA exposes memory admission as an estimate and performs allocator recovery through a finite
 sequence. The estimate is advisory: external allocations, heap-budget refreshes, fragmentation, and
 concurrent work can change the result before allocation. The allocator remains authoritative and

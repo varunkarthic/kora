@@ -209,14 +209,15 @@ struct Runtime::Impl {
         Status initialize() {
             vk::QueueContext::CoalescingOptions coalescing;
             coalescing.enabled = true;
-            auto queue_result = vk::QueueContext::create(
-                device.api(), device.handle(), device.compute_queue(), force_legacy_sync, coalescing);
+            auto queue_result =
+                vk::QueueContext::create(device.api(), device.handle(), device.compute_queue(),
+                                         force_legacy_sync, coalescing, fault_state);
             if (!queue_result) return Status(std::move(queue_result).error());
             queue = std::move(queue_result).value();
             transfer_queue = queue.get();
             if (queue_family_policy.compute_family != queue_family_policy.transfer_family) {
-                auto transfer_result = vk::QueueContext::create(device.api(), device.handle(),
-                                                                device.transfer_queue(), force_legacy_sync);
+                auto transfer_result = vk::QueueContext::create(
+                    device.api(), device.handle(), device.transfer_queue(), force_legacy_sync, fault_state);
                 if (!transfer_result) return Status(std::move(transfer_result).error());
                 dedicated_transfer_queue = std::move(transfer_result).value();
                 transfer_queue = dedicated_transfer_queue.get();
@@ -391,6 +392,7 @@ struct Runtime::Impl {
         std::unique_ptr<vk::QueueContext> dedicated_transfer_queue;
         vk::QueueContext* transfer_queue = nullptr;
         std::uint64_t runtime_id = 0;
+        std::shared_ptr<vk::DeviceFaultState> fault_state = std::make_shared<vk::DeviceFaultState>();
         bool force_legacy_sync = false;
         std::vector<VkTimeDomainKHR> calibrated_time_domains;
         std::uint32_t driver_version = 0;
