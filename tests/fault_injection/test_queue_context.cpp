@@ -17,6 +17,7 @@ namespace {
 struct Mock {
     std::atomic<uint64_t> submit_calls{0};
     std::atomic<uint64_t> wait_calls{0};
+    std::atomic<bool> timeout_next_wait{false};
     std::atomic<uint64_t> destroy_calls{0};
     std::atomic<uint64_t> completed_timeline{0};
     std::atomic<uint32_t> active_submit_calls{0};
@@ -43,11 +44,14 @@ void VKAPI_PTR destroy_semaphore(void* context, VkDevice, VkSemaphore,
     ++static_cast<Mock*>(context)->destroy_calls;
 }
 VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice, const VkSemaphoreWaitInfo*, uint64_t) noexcept {
-    ++static_cast<Mock*>(context)->wait_calls;
+    auto& mock = *static_cast<Mock*>(context);
+    ++mock.wait_calls;
+    if (mock.timeout_next_wait.exchange(false)) return VK_TIMEOUT;
     return VK_SUCCESS;
 }
-VkResult VKAPI_PTR get_semaphore_counter_value(void*, VkDevice, VkSemaphore, uint64_t* value) noexcept {
-    *value = 0;
+VkResult VKAPI_PTR get_semaphore_counter_value(void* context, VkDevice, VkSemaphore,
+                                               uint64_t* value) noexcept {
+    *value = static_cast<Mock*>(context)->completed_timeline.load();
     return VK_SUCCESS;
 }
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const VkSubmitInfo* submits,
@@ -295,6 +299,22 @@ TEST(QueueContext, RecordFailureSkipsQueueSubmitAndReportsSubmissionFailure) {
     EXPECT_TRUE(submitted_failure.load());
     EXPECT_TRUE(completion_failure.load());
     EXPECT_EQ(mock.submit_calls.load(), 0U);
+}
+
+TEST(QueueContext, CompletionTimeoutPollsCounterBeforeDeliveringCallback) {
+    Mock mock;
+    mock.timeout_next_wait = true;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+    ASSERT_TRUE(result);
+    auto context = std::move(result).value();
+    std::atomic<bool> callback_success{false};
+    QueueContext::Submission submission;
+    submission.on_complete = [&](uint64_t, Status status) { callback_success.store(status.ok()); };
+    ASSERT_TRUE(context->submit(std::move(submission)));
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_TRUE(callback_success.load());
+    EXPECT_EQ(mock.wait_calls.load(), 1u);
 }
 
 }  // namespace

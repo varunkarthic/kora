@@ -36,6 +36,7 @@ internals/suballocator
 internals/memory-pool
 internals/command-pools
 internals/queue-context
+internals/completion
 internals/staging-ring
 internals/transfers
 internals/dirty-ranges
