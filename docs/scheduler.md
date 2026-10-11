@@ -72,3 +72,30 @@ Unit tests use hand-computed EFT examples to validate the additive breakdown, th
 infeasibility, invalid-input rejection, pending-work accounting, and completion correction. Candidate
 evaluation remains independent of Runtime placement until the future scheduler combines measured
 transfer, execution, queue, and memory observations.
+
+## Candidate selection policy
+
+`select_scheduler_candidate()` applies eligibility constraints before ranking or exploration. A
+candidate must be supported, healthy, within memory budget, allowed by user policy, and match task
+affinity; exploration can never bypass these checks. If none qualify, selection returns
+`NoEligibleDevice`.
+
+Candidates with observations use their supplied cost estimate; unobserved candidates use their
+coarse estimate when present, otherwise `cold_start_estimate_ns`. Equal unobserved estimates prefer a
+caller-marked known-safe candidate, followed by ascending candidate ID. This establishes a predictable
+cold-start fallback without encoding device vendor/type preferences.
+
+Exploration is caller-randomized through a draw in `[0,1)`: probability decays linearly from 5% to 1%
+as the least-observed eligible candidate reaches the configured stable-observation threshold. Exploration
+is limited to candidates within both the configured relative and absolute plausibility window of the
+current best score. Determinism mode sets probability to zero and always uses stable score/ID order.
+
+Hysteresis retains the current feasible candidate unless an alternative improves its score by at least
+both the absolute and relative margins. Priority aging discounts cost with wait duration and priority
+weight, capped by `maximum_aging_discount_ns`; it changes ranking hints only and makes no hard
+real-time guarantee. Unsupported or unhealthy candidates remain excluded regardless of priority.
+
+The policy accepts candidate estimates rather than invoking Runtime, executing work, or generating
+random values internally. This makes the decision boundary replayable and testable; the future runtime
+scheduler is responsible for constructing candidates, sampling measurements, and supplying a random
+draw only when nondeterministic mode is enabled.

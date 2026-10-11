@@ -17,6 +17,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add logarithmic size buckets and measured latency/bandwidth models for five transfer paths.
 - Add an inspectable scheduler cost breakdown, memory-pressure penalty, capped locality benefit, and
   queue-availability correction from real completion samples.
+- Add constraint-filtered scheduler candidate selection with confidence-decaying exploration,
+  hysteresis, priority aging, and deterministic tie-breaking.
 
 ## [0.1.42] - 2026-10-11
 
