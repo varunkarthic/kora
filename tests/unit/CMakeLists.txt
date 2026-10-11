@@ -13,6 +13,7 @@ kora_add_test(kora_unit_tests unit
     test_calibration.cpp
     test_performance_db.cpp
     test_transfer_model.cpp
+    test_scheduler_cost.cpp
     test_log.cpp
     test_suballocator.cpp
     test_memory_manager.cpp

@@ -45,3 +45,30 @@ Unit tests cover all bucket boundaries, separate per-path models, fitting, monot
 `UINT64_MAX`, EWMA aggregation, direct penalty behavior, and invalid inputs. The model is not yet wired
 to `PerformanceDatabase` persistence or scheduler decisions; those integrations remain explicit future
 work.
+
+## Candidate cost and score breakdown
+
+`evaluate_scheduler_cost(input)` implements the estimated-finish-time model used to compare feasible
+candidate backends. `dependency_ready_ns` and `backend_available_ns` are absolute times relative to one
+common scheduler clock; their maximum is represented additively as `ready_delay_ns + queue_delay_ns`.
+Remaining terms are input transfer, execution, required-now output transfer, and synchronization.
+Outputs that stay resident for a downstream device consumer should not be charged as immediate
+readback.
+
+Memory penalty is zero through 70% of effective budget, then grows quadratically toward the budget:
+`scale * ((usage_ratio - 0.70) / 0.30)^2`. A candidate at or above 100% is infeasible and returns an
+error so callers can first apply an explicit eviction/admission plan. Uncertainty adds
+`lambda * sigma`; locality subtracts estimated avoided transfer cost, capped by `locality_cap_ns`.
+All inputs are finite and nonnegative, and a locality benefit that would make predicted finish
+negative is rejected. `ScoreBreakdown` exposes each term, including the final predicted finish; the
+terms sum exactly to that value.
+
+`QueueAvailability` accumulates estimated pending work per queue. On real completion, the caller passes
+the estimated and observed duration; a configurable EWMA correction learns the estimate error while
+subtracting the completed estimated work. This is a scheduling primitive, not an executor or a source
+of wall-clock timestamps; the owner supplies durations from a consistent measurement domain.
+
+Unit tests use hand-computed EFT examples to validate the additive breakdown, the 70% memory knee,
+infeasibility, invalid-input rejection, pending-work accounting, and completion correction. Candidate
+evaluation remains independent of Runtime placement until the future scheduler combines measured
+transfer, execution, queue, and memory observations.
