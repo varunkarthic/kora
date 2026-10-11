@@ -29,6 +29,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Expose Python Runtime, Buffer, Kernel, DispatchBuilder, and awaitable Event wrappers with mapped
   memoryviews, structured `KoraError` codes, GIL release around blocking/native operations, and
   retained owners for in-flight work.
+- Expose Python TaskGraph metadata construction, deterministic finalization, and reusable
+  ExecutionPlan replay through a thin callback adapter.
 
 ## [0.1.44] - 2026-10-11
 

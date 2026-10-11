@@ -92,6 +92,25 @@ blocked while native work completes. Awaiting propagates failures as `KoraError`
 error code. Keep the event alive while awaiting it; its dispatch resources are retained for the
 event's lifetime.
 
+### Task graphs and reusable plans
+
+`TaskGraph` is a metadata-only builder; it does not schedule devices or execute GPU work. A
+`TaskMetadata` describes a `TaskType`, optional kernel/CPU-function identifiers and scheduler hints,
+plus zero or more `BufferAccess` entries. `BufferId(slot, generation)` supplies the same logical
+generation identity used by the C++ graph API. `AccessMode` drives automatic RAW/WAR/WAW dependency
+inference. `graph.add_task(metadata)` returns its `TaskId`; `graph.add_dependency(prerequisite,
+dependent)` adds an explicit order. `graph.finalize()` returns immutable task nodes and a deterministic
+topological order, or raises `KoraError` (including `ErrorCode.GRAPH_CYCLE` for a cycle).
+
+`ExecutionPlan.create(graph)` snapshots the finalized metadata and dependency order. Calling
+`plan.replay(executor)` invokes the Python callback once per `TaskNode` in that order. The callback
+may return `None` or `True` to continue, or `False` to stop with `KoraError`/`PYTHON_BINDING_ERROR`;
+exceptions raised by the callback are translated into that same KORA error category. Since Python
+callbacks require the GIL, replay retains it while invoking the callback. Native-only callback
+replay remains available in C++ for allocation-free/GIL-free hot paths. The plan is reusable after a
+successful replay and contains no hidden backend work; callers provide any actual task execution in
+the executor.
+
 ### Minimal example
 
 ```python
@@ -106,6 +125,17 @@ async def main():
     await runtime.readback(buffer)
 
 asyncio.run(main())
+```
+
+For a metadata-only graph and replay:
+
+```python
+graph = kora.TaskGraph()
+task_id = graph.add_task(kora.TaskMetadata())
+plan = kora.ExecutionPlan.create(graph)
+visited = []
+plan.replay(lambda node: visited.append(node.id))
+assert visited == [task_id]
 ```
 
 The package version in `pyproject.toml` must be kept in step with the repository's release version

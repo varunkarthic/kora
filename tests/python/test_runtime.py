@@ -96,3 +96,32 @@ def test_python_vector_add_and_awaitable_event(tmp_path):
     result = struct.unpack(f"<{count}I", output.read())
     assert list(result) == [left + right for left, right in zip(values_a, values_b)]
 
+
+def test_python_task_graph_finalize_and_replay():
+    graph = kora.TaskGraph()
+    first = kora.TaskMetadata()
+    first.type = kora.TaskType.HOST_CALLBACK
+    first.priority = 2
+    first_id = graph.add_task(first)
+    second = kora.TaskMetadata()
+    second.type = kora.TaskType.CPU_TASK
+    second.cpu_function_id = "python.graph.second"
+    second_id = graph.add_task(second)
+    graph.add_dependency(first_id, second_id)
+
+    finalized = graph.finalize()
+    assert finalized.topological_order == [first_id, second_id]
+    plan = kora.ExecutionPlan.create(graph)
+    replayed = []
+    plan.replay(lambda task: replayed.append(task.id))
+    assert replayed == [first_id, second_id]
+
+
+def test_python_task_graph_executor_failure_preserves_task_id():
+    graph = kora.TaskGraph()
+    graph.add_task(kora.TaskMetadata())
+    plan = kora.ExecutionPlan.create(graph)
+    with pytest.raises(kora.KoraError) as captured:
+        plan.replay(lambda _task: False)
+    assert captured.value.code == kora.ErrorCode.PYTHON_BINDING_ERROR
+
