@@ -15,6 +15,7 @@ kora_add_test(kora_unit_tests unit
     test_suballocator.cpp
     test_memory_manager.cpp
     test_buffer_manager.cpp
+    test_cpu_executor.cpp
     test_dirty_ranges.cpp
     test_residency.cpp
     test_hazard_tracker.cpp
