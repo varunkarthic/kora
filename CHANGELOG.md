@@ -24,6 +24,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   calibrated host correlation when supported, and runtime profiling statistics.
 - Add capability-filtered LocalSizeId workgroup tuning with bounded warmup/measurement trials,
   timestamp-driven selection, driver-version-scoped persistence, and an opt-out control.
+- Add an opt-in pybind11 extension and scikit-build-core Python package exposing linked runtime
+  version and persistence schema identity.
 
 ## [0.1.44] - 2026-10-11
 

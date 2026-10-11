@@ -59,6 +59,11 @@ tools/ci/check_install.sh
 `check_install.sh` additionally installs the Release build into a temporary prefix, configures a
 standalone consumer through `find_package(kora CONFIG)`, links it, and runs it.
 
+For the optional Python extension, configure and build the `python` preset. For a source-installed
+Python package, use `python -m pip install .` from the repository root; this uses PEP 517 build
+isolation and does not change the default native build. See [Python package](python-api.md) for the
+required tools and import smoke test.
+
 ## Build options
 
 | Option | Default | Meaning |

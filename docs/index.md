@@ -18,6 +18,7 @@ testing
 calibration
 profiling
 autotuning
+python-api
 configuration
 ```
 

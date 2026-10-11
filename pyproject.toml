@@ -1,0 +1,34 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "kora-runtime"
+version = "0.1.0"
+description = "Python bindings for the KORA C++ compute runtime"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+wheel.packages = ["python/kora"]
+sdist.include = ["bindings/python/**", "python/kora/**", "tests/python/**"]
+
+[tool.scikit-build.cmake.define]
+KORA_BUILD_PYTHON = "ON"
+KORA_BUILD_TESTS = "OFF"
+KORA_BUILD_TOOLS = "OFF"
+KORA_ENABLE_SPIRV_TOOLS = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
