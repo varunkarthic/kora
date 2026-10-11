@@ -21,6 +21,7 @@ kora_add_test(kora_unit_tests unit
     test_queue_family_transfer.cpp
     test_task_graph.cpp
     test_execution_plan.cpp
+    test_temporary_buffer_aliasing.cpp
 )
 target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})
 
