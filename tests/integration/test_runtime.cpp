@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -323,5 +324,119 @@ TEST(Runtime, ReusesDeviceResidentIntermediateAcrossDispatchChain) {
     ASSERT_TRUE(final_readback);
     ASSERT_TRUE(final_readback.value().wait());
     EXPECT_EQ(host_updated_output.value().read().value(), host_override);
+#endif
+}
+
+TEST(Runtime, RunsCpuFallbackBetweenGpuDispatches) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    auto runtime = kora::Runtime::create();
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+
+    constexpr std::uint32_t count = 257;
+    const std::vector<std::uint32_t> input(count, 2U), zeros(count, 0U);
+    kora::KernelMetadata metadata;
+    metadata.kernel_id = "integration.vector_add.mixed_cpu_gpu";
+    metadata.local_size = {64, 1, 1};
+    metadata.push_constant_size = sizeof(count);
+    metadata.push_constants = {{"count", "u32", 0, sizeof(count)}};
+    metadata.bindings = {
+        {.set = 0,
+         .binding = 0,
+         .name = "input_a",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 1,
+         .name = "input_b",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Read},
+        {.set = 0,
+         .binding = 2,
+         .name = "output_data",
+         .kind = kora::KernelBindingKind::StorageBuffer,
+         .access = kora::KernelAccess::Write},
+    };
+    auto kernel = runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", metadata);
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    auto input_buffer = runtime.value().create_buffer<std::uint32_t>(count);
+    auto zero_buffer = runtime.value().create_buffer<std::uint32_t>(count);
+    auto intermediate = runtime.value().create_buffer<std::uint32_t>(count);
+    auto output = runtime.value().create_buffer<std::uint32_t>(count);
+    auto final = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_buffer);
+    ASSERT_TRUE(zero_buffer);
+    ASSERT_TRUE(intermediate);
+    ASSERT_TRUE(output);
+    ASSERT_TRUE(final);
+    ASSERT_TRUE(input_buffer.value().write(input));
+    ASSERT_TRUE(zero_buffer.value().write(zeros));
+
+    auto first = runtime.value()
+                     .dispatch(kernel.value())
+                     .global(count)
+                     .read(input_buffer.value())
+                     .read(zero_buffer.value())
+                     .write(intermediate.value())
+                     .push(count)
+                     .defer_readback()
+                     .submit();
+    ASSERT_TRUE(first) << first.error().describe();
+    ASSERT_TRUE(first.value().wait());
+
+    ASSERT_TRUE(runtime.value().register_cpu_fallback(
+        "integration.vector_add.bump", [](kora::CpuTaskContext& task) -> kora::Status {
+            auto values = task.read_write(0);
+            if (!values) return std::move(values).error();
+            if (values.value().size() % sizeof(std::uint32_t) != 0)
+                return kora::Error(kora::ErrorCode::InvalidArgument, "CPU vector has a partial element");
+            auto* elements = reinterpret_cast<std::uint32_t*>(values.value().data());
+            for (std::size_t index = 0; index < values.value().size() / sizeof(std::uint32_t); ++index)
+                elements[index] += 5U;
+            return {};
+        }));
+    const std::array buffers{intermediate.value().handle()};
+    const std::array accesses{kora::KernelAccess::ReadWrite};
+    auto cpu = runtime.value().run_cpu_fallback("integration.vector_add.bump", buffers, accesses);
+    ASSERT_TRUE(cpu) << cpu.error().describe();
+    ASSERT_TRUE(cpu.value().wait()) << cpu.value().status().error().describe();
+
+    auto second = runtime.value()
+                      .dispatch(kernel.value())
+                      .global(count)
+                      .read(intermediate.value())
+                      .read(zero_buffer.value())
+                      .write(output.value())
+                      .push(count)
+                      .defer_readback()
+                      .submit();
+    ASSERT_TRUE(second) << second.error().describe();
+    ASSERT_TRUE(second.value().wait());
+    auto third = runtime.value()
+                     .dispatch(kernel.value())
+                     .global(count)
+                     .read(output.value())
+                     .read(zero_buffer.value())
+                     .write(final.value())
+                     .push(count)
+                     .defer_readback()
+                     .submit();
+    ASSERT_TRUE(third) << third.error().describe();
+    ASSERT_TRUE(third.value().wait());
+    auto readback = runtime.value().readback(final.value());
+    ASSERT_TRUE(readback) << readback.error().describe();
+    ASSERT_TRUE(readback.value().wait());
+    std::vector<std::uint32_t> expected(count, 7U);
+    EXPECT_EQ(final.value().read().value(), expected);
+
+    auto stats = runtime.value().transfer_stats();
+    ASSERT_TRUE(stats);
+    EXPECT_EQ(stats.value().uploads, 3U);    // Two initial inputs plus CPU-updated intermediate.
+    EXPECT_EQ(stats.value().downloads, 2U);  // CPU visibility plus explicit final readback.
 #endif
 }

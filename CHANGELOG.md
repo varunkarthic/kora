@@ -5,12 +5,17 @@ All notable changes to KORA are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.1.41] - 2026-10-11
 
 - Add a fixed-size CPU executor with priority lanes, work stealing, graceful draining, and
   exception-aware Events.
+
+## [Unreleased]
+
+### Added
+
+- Added keyed native CPU fallback registration and asynchronous `Runtime::run_cpu_fallback()` with
+  access-checked host mappings and GPU readback/upload visibility across mixed dispatch chains.
 
 ## [0.1.40] - 2026-10-11
 

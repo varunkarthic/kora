@@ -2,8 +2,10 @@
 
 `kora::CpuExecutor` is a fixed-size C++ task pool for CPU-native work. It returns the same `Event`
 abstraction used by other asynchronous operations, so task failures and exceptions can be observed
-through `wait()` without escaping worker threads. This issue establishes the executor primitive;
-kernel fallback registration and CPU/GPU graph scheduling are separate follow-up work.
+through `wait()` without escaping worker threads. `Runtime::register_cpu_fallback()` associates a
+stable semantic key with a native implementation. `Runtime::run_cpu_fallback()` dispatches that
+implementation through the same `Event` completion model as GPU work. This is explicit fallback
+dispatch; automatic scheduler selection and `TaskGraph` execution remain separate work.
 
 ## Scheduling and worker count
 
@@ -41,7 +43,23 @@ would deadlock.
 | `CpuExecutor::wait(event)` | Waits for an event, helping execute queued tasks when called by a worker of this pool. |
 | `CpuExecutor::shutdown()` | Stops external admission, drains outstanding callbacks, and joins workers; repeated calls are safe. |
 | `CpuExecutor::worker_count()` | Returns the configured fixed worker count. |
+| `Runtime::register_cpu_fallback(key, fn)` | Registers or replaces a non-empty semantic key and callable for this Runtime. |
+| `Runtime::run_cpu_fallback(key, buffers, accesses, push)` | Makes read inputs host-visible, maps declared buffers, invokes the callback on the CPU pool, and returns an `Event` for completion/failure. |
+| `CpuTaskContext::read(index)` | Returns a read-only byte span only for `Read` or `ReadWrite` declarations. |
+| `CpuTaskContext::write(index)` | Returns a writable byte span only for `Write` or `ReadWrite` declarations. |
+| `CpuTaskContext::read_write(index)` | Returns a writable byte span only for `ReadWrite` declarations. |
+| `CpuTaskContext::push_constants()` | Returns the push-constant bytes supplied to the fallback invocation. |
 
-Unit tests cover priority ordering, exception conversion, single-worker recursive submit-and-wait,
-shutdown draining, and one million tiny tasks with work stealing. The executor currently runs explicit
-native callbacks only; it does not yet register kernel fallbacks or schedule `TaskGraph` nodes.
+The fallback bridge calls `Runtime::readback()` for read and read-write inputs before mapping them, so
+device-newer contents are downloaded and invalidated non-coherent ranges are handled by the transfer
+engine. Writable mappings are released before the returned Event completes; their host versions then
+force the next GPU consumer to upload the updated shadow. The callback owns no mapping beyond its call,
+and spans must not escape it. Its successful or failed `Status` becomes the fallback Event status;
+exceptions are caught and reported as `InternalInvariantViolation`. Runtime shutdown drains the CPU pool.
+
+Integration coverage runs a vector-add GPU dispatch, a registered CPU mutation, and two more GPU
+dispatches, verifying final contents and transfer counts. This verifies the common completion path and
+host/device visibility for that chain. Registration is per Runtime, not serialized, and callers declare
+CPU access modes explicitly; the implementation does not infer them from kernel metadata. The callback
+registry currently provides explicit keyed dispatch only, not automatic scheduler selection or
+`TaskGraph` execution.
