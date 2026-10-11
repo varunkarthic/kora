@@ -17,11 +17,14 @@ Result<ScoreBreakdown> evaluate_scheduler_cost(const SchedulerCostInput& input) 
                              input.predicted_usage_bytes,   input.effective_budget_bytes,
                              input.memory_penalty_scale_ns, input.uncertainty_sigma_ns,
                              input.uncertainty_lambda,      input.locality_saved_ns,
-                             input.locality_cap_ns};
+                             input.locality_cap_ns,         input.estimated_downstream_movement_ns,
+                             input.lookahead_beta};
     for (const auto value : values)
         if (!finite_nonnegative(value))
             return Error(ErrorCode::InvalidArgument,
                          "scheduler costs and policy inputs must be finite and nonnegative");
+    if (input.lookahead_beta > 1.0)
+        return Error(ErrorCode::InvalidArgument, "scheduler look-ahead beta must be in [0, 1]");
     if (input.effective_budget_bytes == 0 && input.predicted_usage_bytes > 0)
         return Error(ErrorCode::InvalidArgument,
                      "positive predicted usage requires an effective memory budget");
@@ -43,13 +46,14 @@ Result<ScoreBreakdown> evaluate_scheduler_cost(const SchedulerCostInput& input) 
     }
     score.uncertainty_penalty_ns = input.uncertainty_lambda * input.uncertainty_sigma_ns;
     score.locality_bonus_ns = std::min(input.locality_saved_ns, input.locality_cap_ns);
+    score.downstream_movement_penalty_ns = input.lookahead_beta * input.estimated_downstream_movement_ns;
     score.predicted_finish_ns = score.ready_delay_ns + score.queue_delay_ns + score.input_transfer_ns +
                                 score.execute_ns + score.required_output_ns + score.synchronization_ns +
                                 score.memory_penalty_ns + score.uncertainty_penalty_ns -
-                                score.locality_bonus_ns;
+                                score.locality_bonus_ns + score.downstream_movement_penalty_ns;
     if (!std::isfinite(score.predicted_finish_ns) || score.predicted_finish_ns < 0)
         return Error(ErrorCode::InvalidArgument,
-                     "locality benefit exceeds the candidate's total predicted cost");
+                     "scheduler look-ahead produces a non-finite or negative predicted finish");
     return score;
 }
 
