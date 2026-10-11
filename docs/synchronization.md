@@ -28,6 +28,21 @@ completed ranges or waits for the oldest in-flight value rather than overwriting
 reuses command buffers only after their associated completion values are reached. These paths use the
 same helper API instead of allocating one fence per dispatch.
 
+## Fence fallback
+
+When timeline semaphores are unavailable, or `RuntimeOptions::force_legacy_sync` is enabled for
+validation, QueueContext uses a bounded pool of eight reusable fences. The submission worker acquires
+a fence before queue submission; the completion worker waits for that fence, advances a software
+monotonic completion value, resets the fence, and returns it to the pool. Backpressure waits for a
+pooled fence rather than allocating a fence for every request. `completed_value()` and
+`wait_for_value()` retain the same threshold semantics in both modes.
+
+Fallback submissions use binary semaphore waits/signals only. Omitted or all-zero semaphore value
+arrays are accepted; a nonzero timeline value is rejected with `UnsupportedFeature`. The force-fallback
+option disables timeline semaphore and synchronization2 feature enablement during logical-device
+creation so this path is exercised even on capable Vulkan implementations. It does not change the
+queried physical-device capability snapshot.
+
 ## Invariants
 
 - Queue handles are externally synchronized by one QueueContext; do not submit directly while it owns
@@ -36,8 +51,8 @@ same helper API instead of allocating one fence per dispatch.
 - A timeout is not completion and never permits early callback delivery or resource reuse.
 - Completion callbacks are ordered and run on a separate worker. They may enqueue work but must not
   destroy or shut down their own QueueContext.
-- Timeline support is enabled only when queried device capabilities permit it. Devices without support
-  require the separate fallback path described in the synchronization issue sequence.
+- Timeline and synchronization2 features are enabled only when queried capabilities permit them and
+  the force-fallback option is off. The fence path preserves event and resource-retirement semantics.
 
 See [QueueContext internals](internals/queue-context.md), [completion lifecycle](internals/completion.md),
 and [transfer integration](internals/transfers.md) for implementation details.

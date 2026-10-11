@@ -91,6 +91,10 @@ struct DeviceState {
     PFN_vkDestroySemaphore destroy_semaphore = nullptr;
     PFN_vkGetSemaphoreCounterValue get_semaphore_counter_value = nullptr;
     PFN_vkWaitSemaphores wait_semaphores = nullptr;
+    PFN_vkCreateFence create_fence = nullptr;
+    PFN_vkDestroyFence destroy_fence = nullptr;
+    PFN_vkWaitForFences wait_for_fences = nullptr;
+    PFN_vkResetFences reset_fences = nullptr;
 };
 
 VkResult VKAPI_PTR create_buffer(void* context, VkDevice device, const VkBufferCreateInfo* info,
@@ -238,6 +242,27 @@ VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice device, const VkSemap
                                    uint64_t timeout) noexcept {
     const auto function = static_cast<DeviceState*>(context)->wait_semaphores;
     return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, timeout);
+}
+VkResult VKAPI_PTR create_fence(void* context, VkDevice device, const VkFenceCreateInfo* info,
+                                const VkAllocationCallbacks* allocator, VkFence* fence) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->create_fence;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, info, allocator, fence);
+}
+void VKAPI_PTR destroy_fence(void* context, VkDevice device, VkFence fence,
+                             const VkAllocationCallbacks* allocator) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->destroy_fence;
+    if (function != nullptr) function(device, fence, allocator);
+}
+VkResult VKAPI_PTR wait_for_fences(void* context, VkDevice device, uint32_t count, const VkFence* fences,
+                                   VkBool32 wait_all, uint64_t timeout) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->wait_for_fences;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED
+                               : function(device, count, fences, wait_all, timeout);
+}
+VkResult VKAPI_PTR reset_fences(void* context, VkDevice device, uint32_t count,
+                                const VkFence* fences) noexcept {
+    const auto function = static_cast<DeviceState*>(context)->reset_fences;
+    return function == nullptr ? VK_ERROR_INITIALIZATION_FAILED : function(device, count, fences);
 }
 const char* library_name() {
 #if defined(_WIN32)
@@ -980,8 +1005,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
 
     const bool core12 = physical_device.api_version >= VK_API_VERSION_1_2;
     const bool core13 = physical_device.api_version >= VK_API_VERSION_1_3;
-    const bool timeline = core12 ? physical_device.vulkan12_features.timelineSemaphore == VK_TRUE
-                                 : physical_device.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
+    const bool timeline = options.enable_timeline_semaphore &&
+                          (core12 ? physical_device.vulkan12_features.timelineSemaphore == VK_TRUE
+                                  : physical_device.timeline_semaphore_features.timelineSemaphore == VK_TRUE);
     const bool bda_khr = physical_device.buffer_device_address_features.bufferDeviceAddress == VK_TRUE;
     const bool bda_ext = physical_device.buffer_device_address_features_ext.bufferDeviceAddress == VK_TRUE;
     const bool bda =
@@ -989,8 +1015,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     const bool descriptor_indexing =
         core12 ? physical_device.vulkan12_features.descriptorIndexing == VK_TRUE
                : physical_device.descriptor_indexing_features.runtimeDescriptorArray == VK_TRUE;
-    const bool sync2 = core13 ? physical_device.vulkan13_features.synchronization2 == VK_TRUE
-                              : physical_device.synchronization2_features.synchronization2 == VK_TRUE;
+    const bool sync2 = options.enable_synchronization2 &&
+                       (core13 ? physical_device.vulkan13_features.synchronization2 == VK_TRUE
+                               : physical_device.synchronization2_features.synchronization2 == VK_TRUE);
 
     std::vector<const char*> extensions;
     auto enable_extension = [&](const char* name) {
@@ -1219,6 +1246,14 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     if (api_state->wait_semaphores == nullptr)
         api_state->wait_semaphores = reinterpret_cast<PFN_vkWaitSemaphores>(
             get_device_proc(device_state->device, "vkWaitSemaphoresKHR"));
+    api_state->create_fence =
+        load_device_function<PFN_vkCreateFence>(get_device_proc, device_state->device, "vkCreateFence");
+    api_state->destroy_fence =
+        load_device_function<PFN_vkDestroyFence>(get_device_proc, device_state->device, "vkDestroyFence");
+    api_state->wait_for_fences =
+        load_device_function<PFN_vkWaitForFences>(get_device_proc, device_state->device, "vkWaitForFences");
+    api_state->reset_fences =
+        load_device_function<PFN_vkResetFences>(get_device_proc, device_state->device, "vkResetFences");
     if (api_state->allocate_memory == nullptr || api_state->free_memory == nullptr ||
         api_state->map_memory == nullptr || api_state->unmap_memory == nullptr ||
         api_state->flush_mapped_memory_ranges == nullptr ||
@@ -1272,6 +1307,10 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api.destroy_semaphore = {api_state.get(), destroy_semaphore};
     api.get_semaphore_counter_value = {api_state.get(), get_semaphore_counter_value};
     api.wait_semaphores = {api_state.get(), wait_semaphores};
+    api.create_fence = {api_state.get(), create_fence};
+    api.destroy_fence = {api_state.get(), destroy_fence};
+    api.wait_for_fences = {api_state.get(), wait_for_fences};
+    api.reset_fences = {api_state.get(), reset_fences};
     api.lifetime_ = std::move(api_state);
     return Device(std::move(device_state), std::move(api));
 }
@@ -1421,6 +1460,14 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     if (device_state->wait_semaphores == nullptr)
         device_state->wait_semaphores =
             reinterpret_cast<PFN_vkWaitSemaphores>(get_device_proc(device, "vkWaitSemaphoresKHR"));
+    device_state->create_fence =
+        load_device_function<PFN_vkCreateFence>(get_device_proc, device, "vkCreateFence");
+    device_state->destroy_fence =
+        load_device_function<PFN_vkDestroyFence>(get_device_proc, device, "vkDestroyFence");
+    device_state->wait_for_fences =
+        load_device_function<PFN_vkWaitForFences>(get_device_proc, device, "vkWaitForFences");
+    device_state->reset_fences =
+        load_device_function<PFN_vkResetFences>(get_device_proc, device, "vkResetFences");
     if (device_state->allocate_memory == nullptr || device_state->free_memory == nullptr ||
         device_state->map_memory == nullptr || device_state->unmap_memory == nullptr ||
         device_state->flush_mapped_memory_ranges == nullptr ||
@@ -1476,6 +1523,10 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     api.destroy_semaphore = {device_state.get(), destroy_semaphore};
     api.get_semaphore_counter_value = {device_state.get(), get_semaphore_counter_value};
     api.wait_semaphores = {device_state.get(), wait_semaphores};
+    api.create_fence = {device_state.get(), create_fence};
+    api.destroy_fence = {device_state.get(), destroy_fence};
+    api.wait_for_fences = {device_state.get(), wait_for_fences};
+    api.reset_fences = {device_state.get(), reset_fences};
     api.lifetime_ = std::move(device_state);
     return api;
 }
@@ -1559,6 +1610,10 @@ Api FaultInjector::api() const {
     result.destroy_semaphore = state_->inner.destroy_semaphore;
     result.get_semaphore_counter_value = state_->inner.get_semaphore_counter_value;
     result.wait_semaphores = state_->inner.wait_semaphores;
+    result.create_fence = state_->inner.create_fence;
+    result.destroy_fence = state_->inner.destroy_fence;
+    result.wait_for_fences = state_->inner.wait_for_fences;
+    result.reset_fences = state_->inner.reset_fences;
     result.lifetime_ = state_;
     return result;
 }

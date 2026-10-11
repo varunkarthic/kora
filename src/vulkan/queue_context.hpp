@@ -31,7 +31,8 @@ public:
         std::function<void(uint64_t, Status)> on_complete;
     };
 
-    static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue);
+    static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
+                                                        bool force_fence_fallback = false);
 
     QueueContext() = default;
     ~QueueContext();
@@ -58,19 +59,31 @@ private:
         uint64_t timeline_value = 0;
         Status status;
         std::function<void(uint64_t, Status)> callback;
+        VkFence fence = VK_NULL_HANDLE;
+        bool pooled_fence = false;
     };
 
-    QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline);
+    QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
+                 std::vector<VkFence> fence_pool);
     Status start();
     void submission_loop();
     void completion_loop();
     void enqueue_completion(Completion completion);
     static Status validate(const Submission& submission);
+    Result<VkFence> acquire_fence();
+    void release_fence(VkFence fence, bool reset) noexcept;
 
     Api api_;
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
     VkSemaphore timeline_ = VK_NULL_HANDLE;
+    bool use_timeline_ = true;
+    std::vector<VkFence> fence_pool_;
+    mutable std::mutex fence_mutex_;
+    mutable std::condition_variable fence_changed_;
+    std::deque<VkFence> available_fences_;
+    bool fence_pool_failed_ = false;
+    std::atomic<uint64_t> fallback_completed_value_{0};
 
     std::mutex queue_mutex_;
     std::condition_variable queue_changed_;

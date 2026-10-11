@@ -89,7 +89,7 @@ TEST(Runtime, CorruptCalibrationCacheNeverBlocksStartup) {
     std::filesystem::remove_all(directory, ignored);
 }
 
-TEST(Runtime, DispatchesVectorAddOnEveryEnumeratedDevice) {
+TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
 #ifndef KORA_VECTOR_ADD_FIXTURE_PATH
     GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
 #else
@@ -111,90 +111,95 @@ TEST(Runtime, DispatchesVectorAddOnEveryEnumeratedDevice) {
         b[index] = index + 11U;
     }
     for (const auto& device : devices) {
-        kora::RuntimeOptions options;
-        options.device_policy = kora::DevicePolicy::ByIndex;
-        options.device_index = device.index;
-        options.cache_dir = (std::filesystem::temp_directory_path() / "kora-dispatch-test-cache").string();
-        auto runtime = kora::Runtime::create(options);
-        if (!runtime && runtime.error().code == kora::ErrorCode::UnsupportedFeature)
-            GTEST_SKIP() << "device " << device.index
-                         << " lacks runtime transfer support: " << runtime.error().describe();
-        ASSERT_TRUE(runtime) << "device " << device.index << ": " << runtime.error().describe();
-        kora::KernelMetadata metadata = [] {
-            kora::KernelMetadata metadata;
-            metadata.kernel_id = "integration.vector_add";
-            metadata.local_size = {64, 1, 1};
-            metadata.push_constant_size = sizeof(std::uint32_t);
-            metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
-            metadata.bindings = {
-                {.set = 0,
-                 .binding = 0,
-                 .name = "input_a",
-                 .kind = kora::KernelBindingKind::StorageBuffer,
-                 .access = kora::KernelAccess::Read},
-                {.set = 0,
-                 .binding = 1,
-                 .name = "input_b",
-                 .kind = kora::KernelBindingKind::StorageBuffer,
-                 .access = kora::KernelAccess::Read},
-                {.set = 0,
-                 .binding = 2,
-                 .name = "output_data",
-                 .kind = kora::KernelBindingKind::StorageBuffer,
-                 .access = kora::KernelAccess::Write},
-            };
-            return metadata;
-        }();
-        auto kernel = runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", std::move(metadata));
-        ASSERT_TRUE(kernel) << kernel.error().describe();
-        EXPECT_EQ(kernel.value().entry_point(), "main");
-        EXPECT_EQ(kernel.value().metadata().kernel_id, "integration.vector_add");
-        auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
-        auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
-        auto output = runtime.value().create_buffer<std::uint32_t>(count);
-        ASSERT_TRUE(input_a) << input_a.error().describe();
-        ASSERT_TRUE(input_b) << input_b.error().describe();
-        ASSERT_TRUE(output) << output.error().describe();
-        ASSERT_TRUE(input_a.value().write(a));
-        ASSERT_TRUE(input_b.value().write(b));
-        const auto byte_count = count;
-        auto event = runtime.value()
-                         .dispatch(kernel.value())
-                         .global(count)
-                         .read(input_a.value())
-                         .read(input_b.value())
-                         .write(output.value())
-                         .push(byte_count)
-                         .submit();
-        ASSERT_TRUE(event) << event.error().describe();
-        auto completed = event.value().wait();
-        ASSERT_TRUE(completed) << completed.error().describe();
-        auto values = output.value().read();
-        ASSERT_TRUE(values) << values.error().describe();
-        for (std::uint32_t index = 0; index < count; ++index)
-            EXPECT_EQ(values.value()[index], a[index] + b[index])
-                << "device " << device.index << ", index " << index;
+        for (const bool force_fallback : {false, true}) {
+            kora::RuntimeOptions options;
+            options.device_policy = kora::DevicePolicy::ByIndex;
+            options.device_index = device.index;
+            options.force_legacy_sync = force_fallback;
+            options.cache_dir =
+                (std::filesystem::temp_directory_path() / "kora-dispatch-test-cache").string();
+            auto runtime = kora::Runtime::create(options);
+            if (!runtime && runtime.error().code == kora::ErrorCode::UnsupportedFeature)
+                GTEST_SKIP() << "device " << device.index
+                             << " lacks runtime transfer support: " << runtime.error().describe();
+            ASSERT_TRUE(runtime) << "device " << device.index << ": " << runtime.error().describe();
+            kora::KernelMetadata metadata = [] {
+                kora::KernelMetadata metadata;
+                metadata.kernel_id = "integration.vector_add";
+                metadata.local_size = {64, 1, 1};
+                metadata.push_constant_size = sizeof(std::uint32_t);
+                metadata.push_constants = {{"count", "u32", 0, sizeof(std::uint32_t)}};
+                metadata.bindings = {
+                    {.set = 0,
+                     .binding = 0,
+                     .name = "input_a",
+                     .kind = kora::KernelBindingKind::StorageBuffer,
+                     .access = kora::KernelAccess::Read},
+                    {.set = 0,
+                     .binding = 1,
+                     .name = "input_b",
+                     .kind = kora::KernelBindingKind::StorageBuffer,
+                     .access = kora::KernelAccess::Read},
+                    {.set = 0,
+                     .binding = 2,
+                     .name = "output_data",
+                     .kind = kora::KernelBindingKind::StorageBuffer,
+                     .access = kora::KernelAccess::Write},
+                };
+                return metadata;
+            }();
+            auto kernel =
+                runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", std::move(metadata));
+            ASSERT_TRUE(kernel) << kernel.error().describe();
+            EXPECT_EQ(kernel.value().entry_point(), "main");
+            EXPECT_EQ(kernel.value().metadata().kernel_id, "integration.vector_add");
+            auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
+            auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
+            auto output = runtime.value().create_buffer<std::uint32_t>(count);
+            ASSERT_TRUE(input_a) << input_a.error().describe();
+            ASSERT_TRUE(input_b) << input_b.error().describe();
+            ASSERT_TRUE(output) << output.error().describe();
+            ASSERT_TRUE(input_a.value().write(a));
+            ASSERT_TRUE(input_b.value().write(b));
+            const auto byte_count = count;
+            auto event = runtime.value()
+                             .dispatch(kernel.value())
+                             .global(count)
+                             .read(input_a.value())
+                             .read(input_b.value())
+                             .write(output.value())
+                             .push(byte_count)
+                             .submit();
+            ASSERT_TRUE(event) << event.error().describe();
+            auto completed = event.value().wait();
+            ASSERT_TRUE(completed) << completed.error().describe();
+            auto values = output.value().read();
+            ASSERT_TRUE(values) << values.error().describe();
+            for (std::uint32_t index = 0; index < count; ++index)
+                EXPECT_EQ(values.value()[index], a[index] + b[index])
+                    << "device " << device.index << ", index " << index;
 
-        auto invalid_dimensions = runtime.value()
+            auto invalid_dimensions = runtime.value()
+                                          .dispatch(kernel.value())
+                                          .global(0)
+                                          .read(input_a.value())
+                                          .read(input_b.value())
+                                          .write(output.value())
+                                          .push(byte_count)
+                                          .submit();
+            ASSERT_FALSE(invalid_dimensions);
+            EXPECT_EQ(invalid_dimensions.error().code, kora::ErrorCode::InvalidDispatch);
+            auto invalid_access = runtime.value()
                                       .dispatch(kernel.value())
-                                      .global(0)
-                                      .read(input_a.value())
+                                      .global(count)
+                                      .write(input_a.value())
                                       .read(input_b.value())
                                       .write(output.value())
                                       .push(byte_count)
                                       .submit();
-        ASSERT_FALSE(invalid_dimensions);
-        EXPECT_EQ(invalid_dimensions.error().code, kora::ErrorCode::InvalidDispatch);
-        auto invalid_access = runtime.value()
-                                  .dispatch(kernel.value())
-                                  .global(count)
-                                  .write(input_a.value())
-                                  .read(input_b.value())
-                                  .write(output.value())
-                                  .push(byte_count)
-                                  .submit();
-        ASSERT_FALSE(invalid_access);
-        EXPECT_EQ(invalid_access.error().code, kora::ErrorCode::InvalidKernelBinding);
+            ASSERT_FALSE(invalid_access);
+            EXPECT_EQ(invalid_access.error().code, kora::ErrorCode::InvalidKernelBinding);
+        }
     }
 #endif
 }

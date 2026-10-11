@@ -16,7 +16,9 @@ service serializes requests in its accepted order and appends an internal monoto
 each Vulkan submit. The completion worker waits for each signal in order, so callbacks mean GPU
 completion, not just successful enqueue or `vkQueueSubmit` return.
 
-The context requires timeline semaphore support. Queue handles passed to it must be exclusively owned
+The preferred context mode uses a private timeline semaphore. If timeline semaphores are unavailable or
+the runtime's `force_legacy_sync` validation option is set, it uses a bounded pool of eight reusable
+fences and a software completion counter. Queue handles passed to it must be exclusively owned
 by this context for the context lifetime; callers must not submit directly to that queue or create a
 second service for it. Submission records own their wait semaphores, stage masks, command-buffer
 handles, signal semaphores, timeline values, optional fence handle, and callback. Underlying Vulkan
@@ -25,7 +27,8 @@ objects (especially command buffers and semaphores) must remain valid until thei
 Wait stage count must equal wait semaphore count. Optional timeline value arrays, when supplied, must
 match the corresponding semaphore arrays; omitted arrays mean zero values (appropriate for binary
 semaphores and a zero-valued timeline wait). For a timeline signal semaphore, callers must provide a
-valid increasing value. The service does not merge arbitrary extension `pNext` chains; this keeps the
+valid increasing value. In fence fallback mode, only binary external semaphores (zero values) are
+accepted. The service does not merge arbitrary extension `pNext` chains; this keeps the
 owned submission contract explicit and guarantees it can attach timeline metadata for its own signal.
 
 Callbacks run serially on the completion thread, in queue order. Callback exceptions are contained and
