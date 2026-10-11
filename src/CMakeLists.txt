@@ -7,6 +7,7 @@ add_library(kora
   core/version.cpp
   memory/suballocator.cpp
   memory/memory_pool.cpp
+  memory/memory_manager.cpp
   vulkan/loader.cpp
 )
 add_library(kora::kora ALIAS kora)
