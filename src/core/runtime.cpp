@@ -135,17 +135,18 @@ struct Runtime::Impl {
         DeviceEntry(DeviceId device_id, DeviceInfo device_info, detail::MemoryManager manager,
                     vk::Device logical_device,
                     std::unique_ptr<detail::kernel::PipelineManager> pipeline_manager,
-                    std::uint64_t runtime_identity)
+                    std::uint64_t runtime_identity, bool force_fallback)
             : id(std::move(device_id)),
               info(std::move(device_info)),
               memory_manager(std::move(manager)),
               device(std::move(logical_device)),
               pipelines(std::move(pipeline_manager)),
-              runtime_id(runtime_identity) {}
+              runtime_id(runtime_identity),
+              force_legacy_sync(force_fallback) {}
 
         Status initialize() {
-            auto queue_result =
-                vk::QueueContext::create(device.api(), device.handle(), device.compute_queue());
+            auto queue_result = vk::QueueContext::create(device.api(), device.handle(),
+                                                         device.compute_queue(), force_legacy_sync);
             if (!queue_result) return Status(std::move(queue_result).error());
             queue = std::move(queue_result).value();
 
@@ -253,6 +254,7 @@ struct Runtime::Impl {
         // Queue destruction drains callbacks before their dispatch/transfer/pool dependencies go away.
         std::unique_ptr<vk::QueueContext> queue;
         std::uint64_t runtime_id = 0;
+        bool force_legacy_sync = false;
         std::uint32_t driver_version = 0;
         detail::calibration::Record calibration_record;
     };
@@ -690,7 +692,10 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
                          "device selector returned an index outside the Vulkan enumeration");
         }
         const auto& physical = physical_devices.value()[id.index];
-        auto logical_device = impl->instance.create_device(physical);
+        vk::DeviceOptions device_options;
+        device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
+        device_options.enable_synchronization2 = !resolved.force_legacy_sync;
+        auto logical_device = impl->instance.create_device(physical, device_options);
         if (!logical_device) return std::move(logical_device).error();
         auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
         auto memory_manager = detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
@@ -714,7 +719,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         if (!pipeline_manager) return std::move(pipeline_manager).error();
         auto entry = std::make_unique<Impl::DeviceEntry>(
             id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
-            std::move(pipeline_manager).value(), impl->runtime_id);
+            std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync);
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();

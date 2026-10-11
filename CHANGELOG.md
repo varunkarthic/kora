@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add reusable-fence completion fallback for devices without timeline semaphores and wire the
+  force-legacy validation option through device creation and Runtime submissions.
+
 ## [0.1.32] - 2026-10-11
 
 - Document the per-queue timeline completion contract, resource-lifetime integrations, and add a real

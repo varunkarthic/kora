@@ -108,6 +108,11 @@ struct Api {
     DispatchFunction<void(VkDevice, VkSemaphore, const VkAllocationCallbacks*)> destroy_semaphore;
     DispatchFunction<VkResult(VkDevice, VkSemaphore, uint64_t*)> get_semaphore_counter_value;
     DispatchFunction<VkResult(VkDevice, const VkSemaphoreWaitInfo*, uint64_t)> wait_semaphores;
+    DispatchFunction<VkResult(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence*)>
+        create_fence;
+    DispatchFunction<void(VkDevice, VkFence, const VkAllocationCallbacks*)> destroy_fence;
+    DispatchFunction<VkResult(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t)> wait_for_fences;
+    DispatchFunction<VkResult(VkDevice, uint32_t, const VkFence*)> reset_fences;
 
 private:
     friend class Loader;
@@ -163,6 +168,8 @@ struct PhysicalDeviceInfo {
 
 struct DeviceOptions {
     bool enable_dedicated_transfer_queue = true;
+    bool enable_timeline_semaphore = true;
+    bool enable_synchronization2 = true;
 };
 
 struct BufferMemoryInfo {

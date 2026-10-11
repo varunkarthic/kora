@@ -25,6 +25,11 @@ struct Mock {
     std::atomic<uint32_t> malformed_submit_infos{0};
     std::atomic<uint32_t> non_monotonic_timeline_values{0};
     std::atomic<uint32_t> non_null_fences{0};
+    std::atomic<uint32_t> created_fences{0};
+    std::atomic<uint32_t> destroyed_fences{0};
+    std::atomic<uint32_t> waited_fences{0};
+    std::atomic<uint32_t> reset_fences{0};
+    std::atomic<uint64_t> next_fence{100};
     std::mutex gate_mutex;
     std::condition_variable gate_changed;
     bool block_first_submit = false;
@@ -51,6 +56,29 @@ VkResult VKAPI_PTR wait_semaphores(void* context, VkDevice, const VkSemaphoreWai
     if (mock.timeout_next_wait.exchange(false)) return VK_TIMEOUT;
     return VK_SUCCESS;
 }
+VkResult VKAPI_PTR create_fence(void* context, VkDevice, const VkFenceCreateInfo*,
+                                const VkAllocationCallbacks*, VkFence* fence) noexcept {
+    auto& mock = *static_cast<Mock*>(context);
+    ++mock.created_fences;
+    *fence = reinterpret_cast<VkFence>(mock.next_fence.fetch_add(1));
+    return VK_SUCCESS;
+}
+void VKAPI_PTR destroy_fence(void* context, VkDevice, VkFence, const VkAllocationCallbacks*) noexcept {
+    ++static_cast<Mock*>(context)->destroyed_fences;
+}
+VkResult VKAPI_PTR wait_for_fences(void* context, VkDevice, uint32_t count, const VkFence* fences, VkBool32,
+                                   uint64_t) noexcept {
+    auto& mock = *static_cast<Mock*>(context);
+    if (count != 1 || fences == nullptr) return VK_ERROR_INITIALIZATION_FAILED;
+    ++mock.waited_fences;
+    return VK_SUCCESS;
+}
+VkResult VKAPI_PTR reset_fences(void* context, VkDevice, uint32_t count, const VkFence* fences) noexcept {
+    auto& mock = *static_cast<Mock*>(context);
+    if (count != 1 || fences == nullptr) return VK_ERROR_INITIALIZATION_FAILED;
+    ++mock.reset_fences;
+    return VK_SUCCESS;
+}
 VkResult VKAPI_PTR get_semaphore_counter_value(void* context, VkDevice, VkSemaphore,
                                                uint64_t* value) noexcept {
     *value = static_cast<Mock*>(context)->completed_timeline.load();
@@ -64,9 +92,11 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const Vk
     auto maximum = mock.maximum_active.load();
     while (active > maximum && !mock.maximum_active.compare_exchange_weak(maximum, active)) {
     }
-    if (count != 1 || submits == nullptr || submits[0].signalSemaphoreCount != 1 ||
-        submits[0].pSignalSemaphores == nullptr ||
-        submits[0].pSignalSemaphores[0] != reinterpret_cast<VkSemaphore>(uintptr_t{77})) {
+    if (fence != VK_NULL_HANDLE && submits != nullptr && submits[0].pNext == nullptr) {
+        if (count != 1 || submits[0].signalSemaphoreCount != 0) ++mock.malformed_submit_infos;
+    } else if (count != 1 || submits == nullptr || submits[0].signalSemaphoreCount != 1 ||
+               submits[0].pSignalSemaphores == nullptr ||
+               submits[0].pSignalSemaphores[0] != reinterpret_cast<VkSemaphore>(uintptr_t{77})) {
         ++mock.malformed_submit_infos;
     } else {
         const auto* timeline = static_cast<const VkTimelineSemaphoreSubmitInfo*>(submits[0].pNext);
@@ -99,6 +129,10 @@ Api api_for(Mock& mock) {
     api.create_semaphore = {&mock, create_semaphore};
     api.destroy_semaphore = {&mock, destroy_semaphore};
     api.wait_semaphores = {&mock, wait_semaphores};
+    api.create_fence = {&mock, create_fence};
+    api.destroy_fence = {&mock, destroy_fence};
+    api.wait_for_fences = {&mock, wait_for_fences};
+    api.reset_fences = {&mock, reset_fences};
     api.get_semaphore_counter_value = {&mock, get_semaphore_counter_value};
     api.queue_submit = {&mock, queue_submit};
     return api;
@@ -195,6 +229,39 @@ TEST(QueueContext, RejectsMalformedSubmissionBeforeQueueing) {
     EXPECT_EQ(context->submit(std::move(submission)).error().code, ErrorCode::InvalidArgument);
     EXPECT_TRUE(context->shutdown());
     EXPECT_EQ(mock.submit_calls.load(), 0u);
+}
+
+TEST(QueueContext, FenceFallbackReusesBoundedPoolAndEmulatesCompletionValues) {
+    Mock mock;
+    auto created = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                        reinterpret_cast<VkQueue>(uintptr_t{22}), true);
+    ASSERT_TRUE(created) << created.error().describe();
+    auto context = std::move(created).value();
+    constexpr uint64_t kSubmissionCount = 32;
+    std::atomic<uint64_t> callbacks{0};
+    uint64_t last_id = 0;
+    for (uint64_t index = 0; index < kSubmissionCount; ++index) {
+        QueueContext::Submission submission;
+        submission.on_complete = [&](uint64_t, Status status) {
+            EXPECT_TRUE(status);
+            ++callbacks;
+        };
+        auto submitted = context->submit(std::move(submission));
+        ASSERT_TRUE(submitted) << submitted.error().describe();
+        last_id = submitted.value();
+    }
+    ASSERT_TRUE(context->wait_for_value(last_id, 5'000'000'000));
+    auto completed = context->completed_value();
+    ASSERT_TRUE(completed) << completed.error().describe();
+    EXPECT_EQ(completed.value(), last_id);
+    ASSERT_TRUE(context->shutdown(ShutdownMode::Graceful));
+    EXPECT_EQ(callbacks.load(), kSubmissionCount);
+    EXPECT_EQ(mock.submit_calls.load(), kSubmissionCount);
+    EXPECT_EQ(mock.created_fences.load(), 8U);
+    EXPECT_EQ(mock.waited_fences.load(), kSubmissionCount);
+    EXPECT_EQ(mock.reset_fences.load(), kSubmissionCount);
+    context.reset();
+    EXPECT_EQ(mock.destroyed_fences.load(), 8U);
 }
 
 TEST(QueueContext, ReportsQueueSubmitFailureWithoutBlockingLaterTimelineCompletions) {
