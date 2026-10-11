@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,8 @@
 #include "kora/runtime.hpp"
 #include "kora/task_graph.hpp"
 #include "memory/suballocator.hpp"
+#include "vulkan/api.hpp"
+#include "vulkan/command_pool_set.hpp"
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -473,6 +476,42 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                      [](float value) { return value == 3.0F; }))
         return false;
     results.push_back(run("gpu_stencil_4096_end_to_end", run_stencil, options));
+
+    auto loader = kora::vk::Loader::load();
+    if (!loader) return false;
+    auto instance = loader.value().create_instance();
+    if (!instance) return false;
+    auto physical_devices = instance.value().physical_devices();
+    if (!physical_devices || physical_devices.value().empty()) return false;
+    kora::vk::DeviceOptions device_options;
+    device_options.enable_dedicated_transfer_queue = false;
+    device_options.enable_timeline_semaphore = false;
+    device_options.enable_synchronization2 = false;
+    auto device = instance.value().create_device(physical_devices.value().front(), device_options);
+    if (!device) return false;
+    kora::vk::CommandPoolSet::Options pool_options;
+    pool_options.queue_family = device.value().compute_queue_family();
+    pool_options.ring_size = 16;
+    auto reused_pool = std::make_unique<kora::vk::CommandPoolSet>(device.value().api(),
+                                                                  device.value().handle(), pool_options);
+    if (reused_pool->capacity() != pool_options.ring_size) return false;
+    const auto record_and_discard = [](kora::vk::CommandPoolSet& pool) {
+        auto command = pool.acquire(0);
+        if (!command || !pool.end_recording(command.value()) || !pool.discard(command.value()))
+            throw std::runtime_error("Vulkan command-buffer reuse failed");
+    };
+    results.push_back(
+        run("command_pool_reuse_steady_state", [&] { record_and_discard(*reused_pool); }, options));
+    auto cold_pool_options = pool_options;
+    cold_pool_options.ring_size = 1;
+    results.push_back(run(
+        "command_pool_cold_create_record_destroy",
+        [&] {
+            kora::vk::CommandPoolSet pool(device.value().api(), device.value().handle(), cold_pool_options);
+            if (pool.capacity() != 1) throw std::runtime_error("Vulkan command pool create failed");
+            record_and_discard(pool);
+        },
+        options));
     return true;
 }
 #endif

@@ -62,6 +62,8 @@ skip. The installed executable looks for its shader next to the binary or under
 | `gpu_tiled_scan_4096_end_to_end` | Inclusive scan each 64-value workgroup tile. | Each tile resets its prefix at the workgroup boundary; validates tile results. |
 | `gpu_tiled_matmul_64_end_to_end` | Multiply two 64×64 matrices using 8×8 shared-memory tiles. | Inputs are all ones and every output is checked. |
 | `gpu_stencil_4096_end_to_end` | Apply a three-point 1D stencil to 4096 values. | Checks both boundary and interior outputs. |
+| `command_pool_reuse_steady_state` | Begin, end, and reset a command buffer from a persistent bounded ring. | Host-side Vulkan API overhead; no queue submit or GPU execution. |
+| `command_pool_cold_create_record_destroy` | Create a one-slot pool, record/reset one buffer, and destroy it. | Cold setup comparison for the reuse path; no queue submit or GPU execution. |
 
 ## Report contract
 
@@ -81,3 +83,12 @@ Those require additional workload-specific fixtures and
 hardware/environment qualification; do not infer them from other results. Scheduler results do not
 include end-to-end Runtime device selection because the candidate cost model is not yet wired into
 `Runtime::dispatch()`.
+
+### Local command-pool sample
+
+One local Release run (`--gpu --iterations 1000 --warmup 50`) recorded 1,000 host-side samples per
+command-pool case: persistent-ring reuse had a nearest-rank median of 750 ns and p95 of 875 ns;
+creating and destroying a one-slot pool per operation had a median of 1,541 ns and p95 of 1,584 ns.
+This is a single-machine observation of host API overhead, without queue submission or GPU execution;
+it is not a portable performance claim and does not establish transfer thresholds or other fast-path
+benefits. Re-run the command above on the target system before using these figures for a decision.

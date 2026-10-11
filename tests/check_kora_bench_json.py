@@ -39,6 +39,8 @@ if "--gpu" in arguments:
         "gpu_tiled_scan_4096_end_to_end",
         "gpu_tiled_matmul_64_end_to_end",
         "gpu_stencil_4096_end_to_end",
+        "command_pool_reuse_steady_state",
+        "command_pool_cold_create_record_destroy",
     }
 assert {item["name"] for item in report["results"]} == expected_names
 for result in report["results"]:

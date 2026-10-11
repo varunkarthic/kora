@@ -6,7 +6,7 @@ install(TARGETS kora-info RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 add_executable(kora-bench kora-bench/main.cpp)
 target_include_directories(kora-bench PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(kora-bench PRIVATE kora::kora)
+target_link_libraries(kora-bench PRIVATE kora::kora ${KORA_VULKAN_HEADERS})
 kora_configure_target(kora-bench)
 find_program(KORA_BENCH_GLSLANG_VALIDATOR NAMES glslangValidator)
 if(KORA_BENCH_GLSLANG_VALIDATOR)
