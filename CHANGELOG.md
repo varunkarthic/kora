@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Reuse version-current device buffers across dispatches and support deferred, explicitly requested
+  readback for device-resident chains.
+
 ## [0.1.39] - 2026-10-11
 
 - Add conservative task-DAG temporary-buffer alias planning with compatibility checks and persistent
