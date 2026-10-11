@@ -39,7 +39,8 @@ TEST(TransferModel, FitsLatencyAndBandwidthSeparatelyForEveryDirection) {
         EXPECT_NEAR(model.value().nanoseconds_per_byte, 0.025, 1e-10);
         double prior = 0;
         bool first = true;
-        for (const auto bytes : {0ULL, 1ULL, 512ULL, 4096ULL, 16384ULL, 65536ULL, 1048576ULL, UINT64_MAX}) {
+        constexpr std::array<std::uint64_t, 8> estimates{0, 1, 512, 4096, 16384, 65536, 1048576, UINT64_MAX};
+        for (const auto bytes : estimates) {
             const auto estimate = models.estimate_ns(path, bytes);
             ASSERT_TRUE(estimate);
             if (!first) EXPECT_GE(estimate.value(), prior);
