@@ -1,8 +1,8 @@
 # Transfer engine
 
 `detail::TransferEngine` implements the internal buffer data movement used by later runtime layers.
-It shares one `vk::QueueContext` for serialized queue submission and timeline completion, and records
-one-time command buffers from a thread-owned `vk::CommandPoolSet`. The engine is intentionally
+It shares the selected transfer `vk::QueueContext` for serialized queue submission and timeline
+completion, and records one-time command buffers from a thread-owned `vk::CommandPoolSet`. The engine is intentionally
 internal: public buffer ownership and scheduling are separate layers and are not implied by these
 low-level operations.
 
@@ -32,13 +32,14 @@ after completion. A policy-selected direct path without a usable mapping returns
 
 Each transfer describes its buffer accesses to the internal `vk::HazardTracker`, which produces
 legacy `vkCmdPipelineBarrier` stage/access scopes for RAW, WAR, and WAW dependencies. Upload makes
-host writes visible before transfer reads and publishes destination writes; download orders prior
-device writes before transfer or host reads; copy and fill declare source/destination accesses
-separately. Normal plans use precise host, transfer, and compute stages rather than
-`VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`. Explicit runtime task access declarations, synchronization2
-lowering, and queue-family ownership transfers remain follow-up work.
-Operations submitted through one context are ordered on that queue. Cross-queue use requires external
-semaphores/ownership management and is not provided by this engine.
+host writes visible before transfer reads; compute-to-transfer and transfer-to-compute use is ordered
+through queue timeline semaphores when runtime buffers are concurrently shared across distinct
+families. Download orders prior device writes before transfer or host reads; copy and fill declare
+source/destination accesses separately. Normal plans use precise host, transfer, and compute stages
+rather than `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`. Explicit runtime task access declarations and
+automatic exclusive-buffer ownership management remain separate mechanisms. When Runtime uses
+distinct families, it supplies concurrent buffer sharing and an explicit timeline wait at the
+consuming queue.
 
 ## Operations
 

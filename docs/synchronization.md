@@ -46,6 +46,30 @@ option disables timeline semaphore and synchronization2 feature enablement durin
 creation so this path is exercised even on capable Vulkan implementations. It does not change the
 queried physical-device capability snapshot.
 
+## Queue-family sharing and cross-queue dependencies
+
+Runtime caches the compute/transfer family pair once per logical device. When both roles use the same
+family, it keeps exclusive buffer sharing and one `QueueContext`; no ownership barrier or semaphore
+handoff is needed. When a distinct dedicated transfer family is available together with timeline
+semaphore support, Runtime creates a second `QueueContext` and gives runtime storage buffers concurrent
+sharing across exactly those two families. Upload submissions signal the transfer context's timeline;
+compute submissions wait at the compute-shader stage. Readback submissions wait at the transfer stage
+on the compute context's completion timeline. This supplies execution and memory ordering without
+queue-family ownership barriers for those concurrent buffers.
+
+For resources intentionally created with exclusive sharing, `make_ownership_barrier_pair` returns no
+barriers when the source and destination family are equal. For different families it produces matching
+release and acquire buffer barriers with identical buffer/range/family indices, source access only on
+the release, and destination access only on the acquire. The pair requires a semaphore dependency: the
+release must execute before the source queue signals, and the destination queue must wait before the
+acquire. `QueueContext::Submission` carries external timeline semaphore waits in either legacy or
+synchronization2 submission form. The local devices currently exercise the same-family no-op path;
+simulated-family tests cover paired exclusive barriers and semaphore forwarding.
+
+The dedicated transfer queue is disabled when timeline semaphores are unavailable or forced off, so
+the fence fallback never attempts a cross-queue timeline dependency. Queue contexts are drained compute
+first, then transfer, keeping callbacks and buffer storage alive through scheduled readbacks.
+
 ## Buffer hazard planning
 
 `vk::HazardTracker` stores a buffer's most recent writer and the read scopes since that write. A read
@@ -59,8 +83,7 @@ The transfer engine feeds per-buffer access sequences to this planner for upload
 fill, replacing its former broad all-commands memory barriers. The selected path depends on the
 logical-device synchronization2 feature actually enabled, not only on physical-device support;
 `RuntimeOptions::force_legacy_sync` disables it for deterministic fallback testing. The tracker is
-deliberately internal; the runtime has not yet exposed arbitrary task access declarations, and
-queue-family ownership transfer is handled by a separate follow-up issue.
+deliberately internal; the runtime has not yet exposed arbitrary task access declarations.
 
 ## Invariants
 

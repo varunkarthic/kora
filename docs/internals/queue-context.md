@@ -14,7 +14,9 @@ shutdown validation.
 Vulkan queue submission requires external synchronization. Producers never call `vkQueueSubmit`
 directly through this service: they transfer owned arrays and a callback to the MPSC ready queue. The
 service serializes requests in its accepted order and appends an internal monotonic timeline signal to
-each Vulkan submit. The completion worker waits for each signal in order, so callbacks mean GPU
+each Vulkan submit. Submissions may also wait on external timeline semaphores, allowing independently
+owned queue contexts to establish explicit cross-queue dependencies. The completion worker waits for
+each internal signal in order, so callbacks mean GPU
 completion, not just successful enqueue or `vkQueueSubmit` return.
 
 The preferred context mode uses a private timeline semaphore. If timeline semaphores are unavailable or

@@ -162,7 +162,8 @@ Result<std::unique_ptr<TransferEngine>> TransferEngine::create(const vk::Device&
 
 Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> record,
                                       std::function<Status()> complete, std::optional<StagingSlice> staging,
-                                      StagingRing* ring) {
+                                      StagingRing* ring, QueueWait dependency,
+                                      std::function<void(std::uint64_t)> on_submitted) {
     auto work = std::make_shared<Impl::Work>();
     work->staging = staging;
     work->ring = ring;
@@ -190,6 +191,11 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
     }
 
     vk::QueueContext::Submission submission;
+    if (dependency.semaphore != VK_NULL_HANDLE) {
+        submission.wait_semaphores.push_back(dependency.semaphore);
+        submission.wait_stages.push_back(dependency.stage);
+        submission.wait_values.push_back(dependency.value);
+    }
     submission.record_commands = [impl, work, record = std::move(record)](
                                      uint64_t, std::vector<VkCommandBuffer>& commands) mutable -> Status {
         if (!impl->command_pool) {
@@ -224,7 +230,8 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
         commands.push_back(command.value());
         return ok_status();
     };
-    submission.on_submitted = [impl, work, ring_state](uint64_t timeline_value, Status status) {
+    submission.on_submitted = [impl, work, ring_state, on_submitted = std::move(on_submitted)](
+                                  uint64_t timeline_value, Status status) {
         if (status) {
             if (work->command_buffer != VK_NULL_HANDLE) {
                 auto tracked = impl->command_pool->submitted(work->command_buffer, timeline_value);
@@ -240,6 +247,7 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
                 (void)impl->command_pool->discard(work->command_buffer);
             if (work->staging && work->ring) (void)work->ring->cancel(*work->staging);
         }
+        if (status && on_submitted) on_submitted(timeline_value);
         if (work->staging && ring_state && status) {
             std::lock_guard lock(ring_state->mutex);
             ring_state->last_enqueued = timeline_value;
@@ -323,36 +331,53 @@ Result<Event> TransferEngine::upload(TransferBuffer destination, VkDeviceSize de
     }
 
     auto api = impl_->device->api();
+    const bool cross_queue = impl_->options.cross_queue_concurrent;
     auto record = [api, destination, destination_offset, size = static_cast<VkDeviceSize>(source.size()),
-                   direct, staging](VkCommandBuffer command) {
+                   direct, staging, cross_queue](VkCommandBuffer command) {
         if (direct) {
             vk::HazardTracker hazards;
             (void)hazards.access(vk::AccessKind::HostWrite);
-            record_hazards(api, command, hazards.access(vk::AccessKind::ComputeRead));
-            record_hazards(api, command, hazards.access(vk::AccessKind::ComputeWrite));
+            if (cross_queue) {
+                record_hazards(api, command, hazards.access(vk::AccessKind::TransferRead));
+            } else {
+                record_hazards(api, command, hazards.access(vk::AccessKind::ComputeRead));
+                record_hazards(api, command, hazards.access(vk::AccessKind::ComputeWrite));
+            }
         } else {
             vk::HazardTracker staging_hazards;
             (void)staging_hazards.access(vk::AccessKind::HostWrite);
             record_hazards(api, command, staging_hazards.access(vk::AccessKind::TransferRead));
             vk::HazardTracker destination_hazards;
-            (void)destination_hazards.access(vk::AccessKind::ComputeRead);
-            (void)destination_hazards.access(vk::AccessKind::ComputeWrite);
+            if (cross_queue) {
+                (void)destination_hazards.access(vk::AccessKind::TransferWrite);
+            } else {
+                (void)destination_hazards.access(vk::AccessKind::ComputeRead);
+                (void)destination_hazards.access(vk::AccessKind::ComputeWrite);
+            }
             record_hazards(api, command, destination_hazards.access(vk::AccessKind::TransferWrite));
             VkBufferCopy region{};
             region.srcOffset = staging->offset;
             region.dstOffset = destination_offset;
             region.size = size;
             api.cmd_copy_buffer(command, staging->buffer, destination.buffer, 1, &region);
-            record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeRead));
-            record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeWrite));
+            if (!cross_queue) {
+                record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeRead));
+                record_hazards(api, command, destination_hazards.access(vk::AccessKind::ComputeWrite));
+            }
         }
         return ok_status();
     };
-    return enqueue(std::move(record), {}, staging, ring);
+    return enqueue(
+        std::move(record), {}, staging, ring, {},
+        destination.queue_use
+            ? std::function<void(std::uint64_t)>([use = destination.queue_use](std::uint64_t value) {
+                  use->transfer_value.store(value, std::memory_order_release);
+              })
+            : std::function<void(std::uint64_t)>{});
 }
 
 Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize source_offset,
-                                       std::span<std::byte> destination) {
+                                       std::span<std::byte> destination, QueueWait dependency) {
     if (source.buffer == VK_NULL_HANDLE || !checked::in_range(source_offset, destination.size(), source.size))
         return Error(ErrorCode::InvalidArgument, "download source range is invalid");
     if (destination.empty()) {
@@ -388,15 +413,20 @@ Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize sourc
     auto api = impl_->device->api();
     auto output = destination;
     const auto size = static_cast<VkDeviceSize>(destination.size());
-    auto record = [api, source, source_offset, size, direct, staging](VkCommandBuffer command) {
+    const bool cross_queue = impl_->options.cross_queue_concurrent;
+    auto record = [api, source, source_offset, size, direct, staging, cross_queue](VkCommandBuffer command) {
         if (direct) {
-            vk::HazardTracker hazards;
-            (void)hazards.access(vk::AccessKind::ComputeWrite);
-            record_hazards(api, command, hazards.access(vk::AccessKind::HostRead));
+            if (!cross_queue) {
+                vk::HazardTracker hazards;
+                (void)hazards.access(vk::AccessKind::ComputeWrite);
+                record_hazards(api, command, hazards.access(vk::AccessKind::HostRead));
+            }
         } else {
-            vk::HazardTracker source_hazards;
-            (void)source_hazards.access(vk::AccessKind::ComputeWrite);
-            record_hazards(api, command, source_hazards.access(vk::AccessKind::TransferRead));
+            if (!cross_queue) {
+                vk::HazardTracker source_hazards;
+                (void)source_hazards.access(vk::AccessKind::ComputeWrite);
+                record_hazards(api, command, source_hazards.access(vk::AccessKind::TransferRead));
+            }
             vk::HazardTracker staging_hazards;
             (void)staging_hazards.access(vk::AccessKind::HostRead);
             record_hazards(api, command, staging_hazards.access(vk::AccessKind::TransferWrite));
@@ -425,7 +455,7 @@ Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize sourc
         std::memcpy(output.data(), input, output.size());
         return ok_status();
     };
-    return enqueue(std::move(record), std::move(complete), staging, ring);
+    return enqueue(std::move(record), std::move(complete), staging, ring, dependency);
 }
 
 Result<Event> TransferEngine::copy(TransferBuffer source, VkDeviceSize source_offset,

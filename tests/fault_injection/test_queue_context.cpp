@@ -25,6 +25,8 @@ struct Mock {
     std::atomic<uint32_t> malformed_submit_infos{0};
     std::atomic<uint32_t> non_monotonic_timeline_values{0};
     std::atomic<uint32_t> non_null_fences{0};
+    std::atomic<uint32_t> external_wait_calls{0};
+    std::atomic<uint64_t> external_wait_value{0};
     std::atomic<uint32_t> created_fences{0};
     std::atomic<uint32_t> destroyed_fences{0};
     std::atomic<uint32_t> waited_fences{0};
@@ -87,6 +89,16 @@ VkResult VKAPI_PTR get_semaphore_counter_value(void* context, VkDevice, VkSemaph
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const VkSubmitInfo* submits,
                                 VkFence fence) noexcept {
     auto& mock = *static_cast<Mock*>(context);
+    if (submits != nullptr && submits[0].waitSemaphoreCount != 0) {
+        if (submits[0].waitSemaphoreCount != 1 || submits[0].pWaitSemaphores == nullptr ||
+            submits[0].pWaitSemaphores[0] != reinterpret_cast<VkSemaphore>(uintptr_t{88}) ||
+            submits[0].pWaitDstStageMask == nullptr ||
+            submits[0].pWaitDstStageMask[0] != VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) {
+            ++mock.malformed_submit_infos;
+        } else {
+            ++mock.external_wait_calls;
+        }
+    }
     if (fence != VK_NULL_HANDLE) ++mock.non_null_fences;
     const auto active = ++mock.active_submit_calls;
     auto maximum = mock.maximum_active.load();
@@ -104,6 +116,13 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const Vk
             timeline->pSignalSemaphoreValues == nullptr || timeline->pSignalSemaphoreValues[0] == 0) {
             ++mock.malformed_submit_infos;
         } else {
+            if (submits[0].waitSemaphoreCount != 0) {
+                if (timeline->waitSemaphoreValueCount != 1 || timeline->pWaitSemaphoreValues == nullptr) {
+                    ++mock.malformed_submit_infos;
+                } else {
+                    mock.external_wait_value.store(timeline->pWaitSemaphoreValues[0]);
+                }
+            }
             const auto value = timeline->pSignalSemaphoreValues[0];
             if (value <= mock.completed_timeline.load()) ++mock.non_monotonic_timeline_values;
             mock.completed_timeline.store(value);
@@ -229,6 +248,23 @@ TEST(QueueContext, RejectsMalformedSubmissionBeforeQueueing) {
     EXPECT_EQ(context->submit(std::move(submission)).error().code, ErrorCode::InvalidArgument);
     EXPECT_TRUE(context->shutdown());
     EXPECT_EQ(mock.submit_calls.load(), 0u);
+}
+
+TEST(QueueContext, ForwardsExternalTimelineWaitForCrossQueueDependency) {
+    Mock mock;
+    auto result = QueueContext::create(api_for(mock), reinterpret_cast<VkDevice>(uintptr_t{11}),
+                                       reinterpret_cast<VkQueue>(uintptr_t{22}));
+    ASSERT_TRUE(result) << result.error().describe();
+    auto context = std::move(result).value();
+    QueueContext::Submission submission;
+    submission.wait_semaphores.push_back(reinterpret_cast<VkSemaphore>(uintptr_t{88}));
+    submission.wait_stages.push_back(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    submission.wait_values.push_back(42);
+    ASSERT_TRUE(context->submit(std::move(submission)));
+    ASSERT_TRUE(context->shutdown());
+    EXPECT_EQ(mock.external_wait_calls.load(), 1U);
+    EXPECT_EQ(mock.external_wait_value.load(), 42U);
+    EXPECT_EQ(mock.malformed_submit_infos.load(), 0U);
 }
 
 TEST(QueueContext, FenceFallbackReusesBoundedPoolAndEmulatesCompletionValues) {
