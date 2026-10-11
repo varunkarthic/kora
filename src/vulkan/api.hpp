@@ -72,6 +72,7 @@ struct PhysicalDeviceInfo {
     VkPhysicalDevice handle = VK_NULL_HANDLE;
     uint32_t api_version = VK_API_VERSION_1_0;
     VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceIDProperties id_properties{};
     VkPhysicalDeviceFeatures features{};
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkPhysicalDeviceSubgroupProperties subgroup_properties{};

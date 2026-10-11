@@ -14,7 +14,7 @@ set(KORA_TEST_VULKAN_ICD "" CACHE FILEPATH
 # kora_add_test(<exe> <label> [USES_VULKAN] SOURCES <sources...>): create and discover a
 # GoogleTest executable. Vulkan tests inherit the requested software ICD without affecting other tests.
 function(kora_add_test exe label)
-  cmake_parse_arguments(KORA_TEST "USES_VULKAN" "" "SOURCES" ${ARGN})
+  cmake_parse_arguments(KORA_TEST "USES_VULKAN" "TIMEOUT" "SOURCES" ${ARGN})
   if(KORA_TEST_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "kora_add_test(${exe}): unknown arguments: ${KORA_TEST_UNPARSED_ARGUMENTS}")
   endif()
@@ -30,6 +30,9 @@ function(kora_add_test exe label)
   kora_configure_target(${exe})
 
   set(_properties LABELS ${label})
+  if(KORA_TEST_TIMEOUT)
+    list(APPEND _properties TIMEOUT ${KORA_TEST_TIMEOUT})
+  endif()
   if(KORA_TEST_USES_VULKAN AND KORA_TEST_VULKAN_ICD)
     list(APPEND _properties ENVIRONMENT "VK_ICD_FILENAMES=${KORA_TEST_VULKAN_ICD}")
   endif()

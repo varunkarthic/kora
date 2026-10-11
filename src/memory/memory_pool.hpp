@@ -46,6 +46,11 @@ struct MemoryPoolStats {
     std::uint64_t reserved_bytes = 0;
     std::uint64_t allocated_bytes = 0;
     std::uint64_t requested_bytes = 0;
+    std::uint64_t free_bytes = 0;
+    std::uint64_t internal_fragmentation_bytes = 0;
+    std::uint64_t external_fragmentation_bytes = 0;
+    std::uint64_t largest_free_block = 0;
+    std::uint64_t high_water_mark = 0;
     std::size_t blocks = 0;
     std::size_t dedicated_allocations = 0;
     std::size_t live_allocations = 0;
@@ -79,6 +84,7 @@ private:
     const vk::Device* device_ = nullptr;
     MemoryPoolConfig config_;
     std::uint64_t block_size_ = 0;
+    std::uint64_t high_water_mark_ = 0;
     std::uint64_t next_token_ = 1;
     std::uint64_t device_allocation_calls_ = 0;
     std::vector<std::unique_ptr<Block>> blocks_;

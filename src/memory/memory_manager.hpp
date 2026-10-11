@@ -2,9 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "core/device_caps.hpp"
+#include "kora/memory_stats.hpp"
+#include "memory/memory_pool.hpp"
 #include "vulkan/api.hpp"
 
 namespace kora::detail {
@@ -61,6 +64,7 @@ public:
     Status reserve(std::uint32_t heap_index, std::uint64_t bytes);
     Status release(std::uint32_t heap_index, std::uint64_t bytes);
     Result<HeapBudgetStats> budget(std::uint32_t heap_index) const;
+    static Result<kora::MemoryStats> aggregate_stats(std::span<const MemoryPoolStats> pools);
 
     const DeviceInfo::MemoryTypePreferences& preferences() const noexcept { return preferences_; }
     MemoryTopology topology() const noexcept { return topology_; }
