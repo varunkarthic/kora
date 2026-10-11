@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-10-11
+
 - Reuse version-current device buffers across dispatches and support deferred, explicitly requested
   readback for device-resident chains.
 
@@ -237,7 +239,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.39...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.40...HEAD
+[0.1.40]: https://github.com/varunkarthic/kora/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/varunkarthic/kora/compare/v0.1.38...v0.1.39
 [0.1.38]: https://github.com/varunkarthic/kora/compare/v0.1.37...v0.1.38
 [0.1.37]: https://github.com/varunkarthic/kora/compare/v0.1.36...v0.1.37
