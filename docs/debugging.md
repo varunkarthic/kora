@@ -21,6 +21,10 @@ detects an overwritten guard. These guards are absent from Release allocations. 
 robust buffer access are diagnostic/hardening aids, not a substitute for validating untrusted input or
 bounds in application kernels.
 
+Internal assertion semantics and the source/test map for the audited invariants are listed in
+[Internal invariant audit](internals/invariants.md). `KORA_ASSERT` does not replace recoverable input
+checks; its expression is side-effect-free and omitted from evaluation in Release builds.
+
 For example, enable safety mode explicitly in a Release build with:
 
 ```sh

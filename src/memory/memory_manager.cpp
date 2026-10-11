@@ -1,12 +1,12 @@
 #include "memory/memory_manager.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <limits>
 #include <string_view>
 #include <utility>
 
+#include "kora/detail/assert.hpp"
 #include "kora/detail/checked.hpp"
 
 namespace kora::detail {
@@ -59,7 +59,7 @@ Status BudgetLedger::reserve(std::uint32_t heap_index, std::uint64_t bytes) {
     reserved_bytes_[heap_index] = *updated;
 #ifndef NDEBUG
     const auto snapshot = stats(heap_index);
-    assert(snapshot && snapshot.value().reserved_bytes <= snapshot.value().limit_bytes);
+    KORA_ASSERT(snapshot && snapshot.value().reserved_bytes <= snapshot.value().limit_bytes);
 #endif
     return ok_status();
 }
@@ -75,7 +75,7 @@ Status BudgetLedger::release(std::uint32_t heap_index, std::uint64_t bytes) {
     reserved_bytes_[heap_index] -= bytes;
 #ifndef NDEBUG
     const auto snapshot = stats(heap_index);
-    assert(snapshot && snapshot.value().reserved_bytes <= snapshot.value().limit_bytes);
+    KORA_ASSERT(snapshot && snapshot.value().reserved_bytes <= snapshot.value().limit_bytes);
 #endif
     return ok_status();
 }

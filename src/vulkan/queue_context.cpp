@@ -1,12 +1,12 @@
 #include "vulkan/queue_context.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <chrono>
 #include <limits>
 #include <system_error>
 #include <utility>
 
+#include "kora/detail/assert.hpp"
 #include "kora/log.hpp"
 
 namespace kora::vk {
@@ -554,7 +554,7 @@ void QueueContext::submission_loop() {
         }
 
         const bool was_active = queue_submit_active_.test_and_set(std::memory_order_acquire);
-        assert(!was_active && "Concurrent host submission to one Vulkan queue");
+        KORA_ASSERT(!was_active && "Concurrent host submission to one Vulkan queue");
         if (was_active) {
             enqueue_completion(Completion{queued.id, 0,
                                           Error(ErrorCode::InternalInvariantViolation,

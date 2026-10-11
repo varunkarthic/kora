@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cassert>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -7,6 +6,7 @@
 #include <utility>
 
 #include "kora/buffer.hpp"
+#include "kora/detail/assert.hpp"
 #include "memory/dirty_ranges.hpp"
 
 namespace kora::detail {
@@ -116,7 +116,7 @@ struct BufferManagerState {
         std::lock_guard lock(mutex);
         auto* record = find(id);
         if (record == nullptr || record->reference_count == 0) {
-            assert(false && "buffer reference count invariant violated");
+            KORA_ASSERT(false && "buffer reference count invariant violated");
             return;
         }
         --record->reference_count;
@@ -131,7 +131,7 @@ struct BufferManagerState {
         std::lock_guard lock(mutex);
         auto* record = find(id);
         if (record == nullptr || record->pending_free) {
-            assert(false && "stale buffer generation used by a command");
+            KORA_ASSERT(false && "stale buffer generation used by a command");
             return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
         }
         if (!record->canaries_valid())
@@ -147,7 +147,7 @@ struct BufferManagerState {
         std::lock_guard lock(mutex);
         auto* record = find(id);
         if (record == nullptr || record->pin_count == 0) {
-            assert(false && "mapped buffer pin invariant violated");
+            KORA_ASSERT(false && "mapped buffer pin invariant violated");
             return;
         }
         --record->pin_count;
@@ -212,7 +212,7 @@ BufferHandle::~BufferHandle() {
 
 BufferHandle::BufferHandle(const BufferHandle& other) : state_(other.state_), id_(other.id_) {
     if (state_ != nullptr && !state_->retain(id_)) {
-        assert(false && "copying a stale buffer handle");
+        KORA_ASSERT(false && "copying a stale buffer handle");
         state_.reset();
     }
 }
@@ -223,7 +223,7 @@ BufferHandle& BufferHandle::operator=(const BufferHandle& other) {
     state_ = other.state_;
     id_ = other.id_;
     if (state_ != nullptr && !state_->retain(id_)) {
-        assert(false && "copying a stale buffer handle");
+        KORA_ASSERT(false && "copying a stale buffer handle");
         state_.reset();
     }
     return *this;
@@ -430,7 +430,7 @@ Result<BufferHandle> BufferManager::create(std::uint64_t size_bytes, BufferUsage
         }
     }
     auto& slot = state_->slots[index];
-    assert(slot.record == nullptr && !slot.retired);
+    KORA_ASSERT(slot.record == nullptr && !slot.retired);
     const BufferId id{index, slot.generation};
     slot.record = std::move(record);
     return BufferHandle(state_, id);

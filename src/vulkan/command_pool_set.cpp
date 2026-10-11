@@ -1,8 +1,9 @@
 #include "vulkan/command_pool_set.hpp"
 
-#include <cassert>
 #include <limits>
 #include <utility>
+
+#include "kora/detail/assert.hpp"
 
 namespace kora::vk {
 
@@ -74,7 +75,7 @@ bool CommandPoolSet::valid() const noexcept {
 
 Status CommandPoolSet::check_thread() const {
     if (debug_thread_checks_ && !on_owner_thread()) {
-        assert(false && "CommandPoolSet used from a non-owning thread");
+        KORA_ASSERT(false && "CommandPoolSet used from a non-owning thread");
         return Error(ErrorCode::InternalInvariantViolation, "CommandPoolSet used from a non-owning thread");
     }
     return ok_status();
