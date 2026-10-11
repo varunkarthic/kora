@@ -4,6 +4,7 @@ kora_add_test(kora_unit_tests unit
     test_event.cpp
     test_json.cpp
     test_kernel_metadata.cpp
+    test_autotuner.cpp
     test_spirv.cpp
     test_pipeline_cache.cpp
     test_checked.cpp

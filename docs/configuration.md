@@ -23,7 +23,7 @@ also reset to the default with a warning.
 | `KORA_CALIBRATION_BUDGET_MS` | Integer, 1–60000 | `250` | Per-device startup calibration time budget |
 | `KORA_DETERMINISTIC` | Boolean | `false` | Deterministic scheduling policy |
 | `KORA_SHUTDOWN_MODE` | `graceful`, `cancel_pending` | `graceful` | Runtime shutdown behavior |
-| `KORA_DISABLE_AUTOTUNE` | Boolean | `false` | Disable online tuning |
+| `KORA_DISABLE_AUTOTUNE` | Boolean | `false` | Disable LocalSizeId workgroup tuning |
 | `KORA_DISABLE_MULTI_QUEUE` | Boolean | `false` | Restrict device queue use |
 | `KORA_DISABLE_CPU_BACKEND` | Boolean | `false` | Exclude CPU execution |
 | `KORA_FORCE_LEGACY_SYNC` | Boolean | `false` | Test hook for legacy synchronization |

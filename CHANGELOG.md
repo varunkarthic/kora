@@ -22,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   task-level chunking/CPU fallback hooks, and structured exhaustion diagnostics.
 - Add nonblocking GPU dispatch timestamp profiling with valid-bit wrap handling, bounded query rings,
   calibrated host correlation when supported, and runtime profiling statistics.
+- Add capability-filtered LocalSizeId workgroup tuning with bounded warmup/measurement trials,
+  timestamp-driven selection, driver-version-scoped persistence, and an opt-out control.
 
 ## [0.1.44] - 2026-10-11
 
