@@ -56,3 +56,11 @@ add_subdirectory(unit)
 add_subdirectory(integration)
 add_subdirectory(stress)
 add_subdirectory(fault_injection)
+
+if(TARGET kora-bench)
+  find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME KoraBench.Smoke
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_kora_bench_json.py"
+      $<TARGET_FILE:kora-bench>)
+  set_tests_properties(KoraBench.Smoke PROPERTIES LABELS integration TIMEOUT 30)
+endif()

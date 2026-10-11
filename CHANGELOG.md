@@ -14,6 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add `kora-bench` CPU-side JSON microbenchmarks for scheduler cost, task-graph planning/replay,
+  host allocation, allocator throughput, and fragmentation, with raw samples and median/p95 summaries.
 - Add debug safety diagnostics with Release opt-in, Debug host-shadow canaries, Vulkan validation
   requests, and detailed synchronization logs.
 
