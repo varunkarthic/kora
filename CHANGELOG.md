@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.53] - 2026-10-11
+
 - Add isolated, budget-bounded H2D, D2H, and device-copy startup calibration probes with byte validation,
   repairable atomic cache replacement, and an explicit `Runtime::calibrate()` refresh operation.
 
@@ -338,7 +340,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.52...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.53...HEAD
+[0.1.53]: https://github.com/varunkarthic/kora/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/varunkarthic/kora/compare/v0.1.51...v0.1.52
 [0.1.51]: https://github.com/varunkarthic/kora/compare/v0.1.50...v0.1.51
 [0.1.50]: https://github.com/varunkarthic/kora/compare/v0.1.49...v0.1.50
