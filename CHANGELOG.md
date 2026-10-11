@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add immutable ExecutionPlan snapshots and callback-driven replay without repeating graph analysis
+  or allocating plan storage per replay.
+
 ## [0.1.37] - 2026-10-11
 
 - Add public Task/TaskGraph metadata, automatic RAW/WAR/WAW dependencies, explicit ordering, and

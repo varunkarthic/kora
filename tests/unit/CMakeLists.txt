@@ -20,6 +20,7 @@ kora_add_test(kora_unit_tests unit
     test_hazard_tracker.cpp
     test_queue_family_transfer.cpp
     test_task_graph.cpp
+    test_execution_plan.cpp
 )
 target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})
 

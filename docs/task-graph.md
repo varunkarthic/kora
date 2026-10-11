@@ -61,6 +61,26 @@ sets `Error::task_id` to one task left unresolved by the topological pass. Inval
 generations, and unknown dependency IDs return `ErrorCode::InvalidArgument`; task-ID exhaustion
 returns `ErrorCode::Overflow`.
 
-The graph is reusable as metadata, but execution/replay semantics are not part of this API yet. A
-successful plan is a dependency order only; it is not proof that the tasks themselves have an
-available implementation.
+The graph itself is metadata only. A successful finalized plan is a dependency order, not proof that
+the tasks have an available runtime implementation; callback-driven replay is described below.
+
+## Reusable execution plans
+
+`ExecutionPlan::create(graph, preparer, user_data)` finalizes the graph once and stores an immutable
+snapshot of its metadata, inferred dependencies, and topological order. When provided, the
+`TaskPreparer` runs once per node in topological order so the caller can resolve/cache its own
+pipelines, layouts, descriptors, or other task resources in `user_data`. Those resources are
+caller-owned and must outlive plan replays that use them. A preparation failure stops plan creation
+and receives the current task ID if the error does not already have one.
+
+`ExecutionPlan::replay(executor, user_data)` walks the cached order and invokes the supplied
+`TaskExecutor` for each node. It stops at the first failed `Status`, adds that task's ID when the
+error does not already identify one, and leaves the plan usable for subsequent replays. The callback
+is a plain function pointer plus borrowed user data, so the replay path does not allocate plan or
+callback storage.
+
+This layer caches graph analysis and exposes a one-time preparation seam; it does not itself create
+Vulkan command buffers, integrate the Runtime pipeline manager, own descriptor resources, or
+allocate/alias temporary GPU memory. A caller can prepare and retain such resources in user state and
+dispatch them from its executor. Backend resource reuse and temporary-buffer lifetime analysis are
+separate follow-up work.

@@ -5,6 +5,7 @@ add_library(kora
   core/buffer_manager.cpp
   core/calibration.cpp
   core/device_selection.cpp
+  core/execution_plan.cpp
   core/log.cpp
   core/json.cpp
   core/options.cpp
