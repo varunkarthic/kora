@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-10-11
+
 - Document the per-queue timeline completion contract, resource-lifetime integrations, and add a real
   Vulkan test for dependent timeline submissions and value-based waits.
 
@@ -197,7 +199,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.30...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.32...HEAD
+[0.1.32]: https://github.com/varunkarthic/kora/compare/v0.1.31...v0.1.32
 [0.1.30]: https://github.com/varunkarthic/kora/compare/v0.1.29...v0.1.30
 [0.1.29]: https://github.com/varunkarthic/kora/compare/v0.1.28...v0.1.29
 [0.1.28]: https://github.com/varunkarthic/kora/compare/v0.1.27...v0.1.28
