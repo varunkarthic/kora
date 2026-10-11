@@ -23,6 +23,8 @@ struct Mock {
     std::atomic<uint32_t> active_submit_calls{0};
     std::atomic<uint32_t> maximum_active{0};
     std::atomic<uint32_t> malformed_submit_infos{0};
+    std::atomic<uint32_t> non_monotonic_timeline_values{0};
+    std::atomic<uint32_t> non_null_fences{0};
     std::mutex gate_mutex;
     std::condition_variable gate_changed;
     bool block_first_submit = false;
@@ -55,8 +57,9 @@ VkResult VKAPI_PTR get_semaphore_counter_value(void* context, VkDevice, VkSemaph
     return VK_SUCCESS;
 }
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const VkSubmitInfo* submits,
-                                VkFence) noexcept {
+                                VkFence fence) noexcept {
     auto& mock = *static_cast<Mock*>(context);
+    if (fence != VK_NULL_HANDLE) ++mock.non_null_fences;
     const auto active = ++mock.active_submit_calls;
     auto maximum = mock.maximum_active.load();
     while (active > maximum && !mock.maximum_active.compare_exchange_weak(maximum, active)) {
@@ -71,7 +74,9 @@ VkResult VKAPI_PTR queue_submit(void* context, VkQueue, uint32_t count, const Vk
             timeline->pSignalSemaphoreValues == nullptr || timeline->pSignalSemaphoreValues[0] == 0) {
             ++mock.malformed_submit_infos;
         } else {
-            mock.completed_timeline.store(timeline->pSignalSemaphoreValues[0]);
+            const auto value = timeline->pSignalSemaphoreValues[0];
+            if (value <= mock.completed_timeline.load()) ++mock.non_monotonic_timeline_values;
+            mock.completed_timeline.store(value);
         }
     }
     ++mock.submit_calls;
@@ -131,6 +136,8 @@ TEST(QueueContext, SerializesSixteenConcurrentProducersAndCompletesCallbacks) {
     EXPECT_EQ(mock.submit_calls.load(), accepted.load());
     EXPECT_EQ(callbacks.load(), accepted.load());
     EXPECT_EQ(callback_errors.load(), 0u);
+    EXPECT_EQ(mock.non_monotonic_timeline_values.load(), 0u);
+    EXPECT_EQ(mock.non_null_fences.load(), 0u);
     EXPECT_EQ(mock.wait_calls.load(), accepted.load());
     EXPECT_EQ(mock.maximum_active.load(), 1u);
     EXPECT_EQ(mock.malformed_submit_infos.load(), 0u);

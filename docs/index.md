@@ -47,6 +47,7 @@ device-selection
 memory-model
 ci-cd
 releases
+synchronization
 security
 maintenance
 ```

@@ -87,5 +87,66 @@ TEST(QueueContext, RepeatedCreateSubmitShutdownDrainsCompletionBeforeDestruction
     EXPECT_EQ(completed.load(), kIterations);
 }
 
+TEST(QueueContext, WaitsForTimelineValueAndOrdersDependentSubmissions) {
+    auto loader = Loader::load();
+    if (!loader) GTEST_SKIP() << loader.error().describe();
+    auto instance = loader.value().create_instance();
+    if (!instance) GTEST_SKIP() << instance.error().describe();
+    auto physical_devices = instance.value().physical_devices();
+    ASSERT_TRUE(physical_devices) << physical_devices.error().describe();
+    if (physical_devices.value().empty()) GTEST_SKIP() << "No Vulkan physical device is available";
+    auto device = instance.value().create_device(physical_devices.value().front());
+    if (!device) GTEST_SKIP() << device.error().describe();
+    if (!device.value().enabled_features().timeline_semaphore)
+        GTEST_SKIP() << "Timeline semaphores are unavailable on this device";
+
+    VkSemaphoreTypeCreateInfo type_info{};
+    type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    create_info.pNext = &type_info;
+    VkSemaphore dependency = VK_NULL_HANDLE;
+    ASSERT_EQ(
+        device.value().api().create_semaphore(device.value().handle(), &create_info, nullptr, &dependency),
+        VK_SUCCESS);
+    auto context_result =
+        QueueContext::create(device.value().api(), device.value().handle(), device.value().compute_queue());
+    ASSERT_TRUE(context_result) << context_result.error().describe();
+    auto context = std::move(context_result).value();
+
+    std::atomic<std::uint32_t> callbacks{0};
+    QueueContext::Submission first;
+    first.signal_semaphores.push_back(dependency);
+    first.signal_values.push_back(1);
+    first.on_complete = [&](std::uint64_t, Status status) {
+        EXPECT_TRUE(status);
+        ++callbacks;
+    };
+    auto first_id = context->submit(std::move(first));
+    ASSERT_TRUE(first_id) << first_id.error().describe();
+
+    QueueContext::Submission second;
+    second.wait_semaphores.push_back(dependency);
+    second.wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    second.wait_values.push_back(1);
+    second.signal_semaphores.push_back(dependency);
+    second.signal_values.push_back(2);
+    second.on_complete = [&](std::uint64_t, Status status) {
+        EXPECT_TRUE(status);
+        ++callbacks;
+    };
+    auto second_id = context->submit(std::move(second));
+    ASSERT_TRUE(second_id) << second_id.error().describe();
+
+    ASSERT_TRUE(context->wait_for_value(second_id.value(), 5'000'000'000));
+    auto completed = context->completed_value();
+    ASSERT_TRUE(completed) << completed.error().describe();
+    EXPECT_GE(completed.value(), second_id.value());
+    ASSERT_TRUE(context->shutdown(ShutdownMode::Graceful));
+    EXPECT_EQ(callbacks.load(), 2U);
+    device.value().api().destroy_semaphore(device.value().handle(), dependency, nullptr);
+}
+
 }  // namespace
 }  // namespace kora::vk
