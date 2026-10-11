@@ -17,6 +17,7 @@ Header: `include/kora/options.hpp`
 `enable_startup_calibration`, `calibration_budget_ms`
 : Enable/disable best-effort per-device startup calibration and configure its budget (1–60,000 ms,
   default 250 ms). Corresponding environment variables are documented in `configuration.md`.
+  `Runtime::calibrate()` can explicitly rerun probes while bypassing the persistent cache.
 
 `disable_autotune`
 : Disable runtime workgroup tuning. When unset, `KORA_DISABLE_AUTOTUNE` controls this setting and

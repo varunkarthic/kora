@@ -139,7 +139,13 @@ Status write_atomic(const std::filesystem::path& path, const Record& record) {
     }
     static std::atomic<std::uint64_t> sequence{1};
     auto temporary = path;
-    temporary += ".tmp." + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+#if defined(_WIN32)
+    const auto process_id = static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    const auto process_id = static_cast<std::uint64_t>(::getpid());
+#endif
+    temporary += ".tmp." + std::to_string(process_id) + "." +
+                 std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
     const auto bytes = encode(record);
     {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
@@ -156,8 +162,15 @@ Status write_atomic(const std::filesystem::path& path, const Record& record) {
         std::filesystem::remove(temporary, error);
         return Error(ErrorCode::IoError, "cannot flush temporary calibration record");
     }
+#if defined(_WIN32)
+    const bool published =
+        MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (!published) {
+        error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+#else
     std::filesystem::rename(temporary, path, error);
     if (error) {
+#endif
         std::error_code remove_error;
         std::filesystem::remove(temporary, remove_error);
         return Error(ErrorCode::IoError, "cannot publish calibration record: " + error.message());

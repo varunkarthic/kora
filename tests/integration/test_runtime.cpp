@@ -454,6 +454,41 @@ TEST(Runtime, CorruptCalibrationCacheNeverBlocksStartup) {
     std::filesystem::remove_all(directory, ignored);
 }
 
+TEST(Runtime, CalibrationCanBeRequestedAndReplacesCorruptCache) {
+    const auto directory = std::filesystem::temp_directory_path() / "kora-calibration-request-test";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    kora::RuntimeOptions options;
+    options.cache_dir = directory.string();
+    options.enable_startup_calibration = false;
+    options.calibration_budget_ms = 250;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    const auto devices = runtime.value().devices();
+    ASSERT_FALSE(devices.empty());
+    if (devices.front().uuid.empty()) GTEST_SKIP() << "device does not expose a stable UUID";
+
+    const auto path = directory / "calibration" / (devices.front().uuid + ".json");
+    ASSERT_TRUE(runtime.value().calibrate());
+    ASSERT_TRUE(std::filesystem::exists(path));
+    {
+        std::ofstream corrupt(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(corrupt);
+        corrupt << "corrupt";
+    }
+    ASSERT_TRUE(runtime.value().calibrate());
+    std::ifstream repaired(path, std::ios::binary);
+    ASSERT_TRUE(repaired);
+    const std::string contents((std::istreambuf_iterator<char>(repaired)), std::istreambuf_iterator<char>());
+    EXPECT_NE(contents, "corrupt");
+    EXPECT_NE(contents.find("device_uuid"), std::string::npos);
+    std::filesystem::remove_all(directory, ignored);
+}
+
 TEST(Runtime, CorruptPerformanceDatabaseNeverBlocksStartup) {
     const auto directory = std::filesystem::temp_directory_path() / "kora-performance-db-runtime-test";
     std::error_code ignored;

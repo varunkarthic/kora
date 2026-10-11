@@ -64,6 +64,11 @@ TEST(CalibrationRecord, AtomicFileRoundTripAndCorruptFileAreCacheMisses) {
     Record loaded;
     EXPECT_TRUE(read(path, record.device_uuid, record.driver_version, loaded));
     EXPECT_EQ(loaded.streaming_bytes_per_second, record.streaming_bytes_per_second);
+    auto replacement = record;
+    replacement.submit_overhead_ns += 100;
+    ASSERT_TRUE(write_atomic(path, replacement));
+    ASSERT_TRUE(read(path, record.device_uuid, record.driver_version, loaded));
+    EXPECT_EQ(loaded.submit_overhead_ns, replacement.submit_overhead_ns);
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << "not json";

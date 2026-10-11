@@ -187,6 +187,9 @@ public:
     Result<RuntimeTransferStats> transfer_stats() const;
     /// Returns completed GPU timestamp samples observed so far; does not wait for pending work.
     Result<RuntimeProfilingStats> profiling_stats(const DeviceId& device) const;
+    /// Re-run best-effort startup calibration for every selected device, bypassing cached records.
+    /// Unsupported or unsafe probes remain zero in the persistent record.
+    Status calibrate();
     /// Return the optional fault report captured for a device after loss; unsupported devices report
     /// `supported == false` without turning the failure into another error.
     Result<DeviceFaultReport> device_fault_report(const DeviceId& device) const;
