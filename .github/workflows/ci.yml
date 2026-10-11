@@ -44,6 +44,11 @@ jobs:
         run: cmake --build --preset debug --parallel
       - name: Test
         run: ctest --preset debug --output-on-failure
+      - name: Build and test Python package
+        run: |
+          python3 -m venv build/python-venv
+          build/python-venv/bin/python -m pip install '.[test]'
+          build/python-venv/bin/python -m pytest -q tests/python
       - name: Test with synchronization validation
         env:
           VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
