@@ -187,6 +187,9 @@ public:
     Result<RuntimeTransferStats> transfer_stats() const;
     /// Returns completed GPU timestamp samples observed so far; does not wait for pending work.
     Result<RuntimeProfilingStats> profiling_stats(const DeviceId& device) const;
+    /// Export completed GPU samples in Chrome Trace Event JSON format (open in Perfetto).
+    /// Collection is nonblocking and history is bounded to 4096 samples per device.
+    Result<std::string> export_trace_json() const;
     /// Return the optional fault report captured for a device after loss; unsupported devices report
     /// `supported == false` without turning the failure into another error.
     Result<DeviceFaultReport> device_fault_report(const DeviceId& device) const;

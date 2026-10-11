@@ -83,5 +83,8 @@ TEST(GpuTimestampRing, ReadsOnlyCompletedSlotsWithoutWaiting) {
     EXPECT_EQ(fixture.reads, 1);
     EXPECT_EQ(fixture.flags, VK_QUERY_RESULT_64_BIT);
     EXPECT_EQ(ring.samples_collected(), 1U);
+    const auto history = ring.history();
+    ASSERT_EQ(history.size(), 1U);
+    EXPECT_EQ(history.front().submission_id, 7U);
 }
 }  // namespace

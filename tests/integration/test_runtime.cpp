@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/json.hpp"
 #include "core/runtime_test_access.hpp"
 #include "kora/runtime.hpp"
 #include "kora/task_partition.hpp"
@@ -551,6 +552,7 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
             options.device_policy = kora::DevicePolicy::ByIndex;
             options.device_index = device.index;
             options.force_legacy_sync = force_fallback;
+            options.telemetry = kora::TelemetryLevel::Trace;
             options.cache_dir =
                 (std::filesystem::temp_directory_path() / "kora-dispatch-test-cache").string();
             auto runtime = kora::Runtime::create(options);
@@ -614,6 +616,20 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
                 EXPECT_GT(profiling.value().last_duration_nanoseconds, 0U);
             } else {
                 EXPECT_EQ(profiling.error().code, kora::ErrorCode::UnsupportedFeature);
+            }
+            auto trace = runtime.value().export_trace_json();
+            ASSERT_TRUE(trace) << trace.error().describe();
+            auto parsed_trace = kora::detail::json::parse(trace.value());
+            ASSERT_TRUE(parsed_trace) << parsed_trace.error().describe();
+            const auto* trace_events_value = parsed_trace.value().find("traceEvents");
+            ASSERT_NE(trace_events_value, nullptr);
+            const auto* trace_events =
+                std::get_if<kora::detail::json::Value::Array>(&trace_events_value->storage);
+            ASSERT_NE(trace_events, nullptr);
+            if (profiling) ASSERT_FALSE(trace_events->empty());
+            if (!trace_events->empty()) {
+                EXPECT_NE(trace.value().find("\"ph\":\"X\""), std::string::npos);
+                EXPECT_NE(trace.value().find("submission_id"), std::string::npos);
             }
             auto values = output.value().read();
             ASSERT_TRUE(values) << values.error().describe();
