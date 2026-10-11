@@ -26,6 +26,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   timestamp-driven selection, driver-version-scoped persistence, and an opt-out control.
 - Add an opt-in pybind11 extension and scikit-build-core Python package exposing linked runtime
   version and persistence schema identity.
+- Expose Python Runtime, Buffer, Kernel, DispatchBuilder, and awaitable Event wrappers with mapped
+  memoryviews, structured `KoraError` codes, GIL release around blocking/native operations, and
+  retained owners for in-flight work.
 
 ## [0.1.44] - 2026-10-11
 
