@@ -46,6 +46,9 @@ struct LoaderState {
 struct DeviceState {
     std::shared_ptr<LoaderState> loader;
     PFN_vkAllocateMemory allocate_memory = nullptr;
+    PFN_vkFreeMemory free_memory = nullptr;
+    PFN_vkMapMemory map_memory = nullptr;
+    PFN_vkUnmapMemory unmap_memory = nullptr;
     PFN_vkQueueSubmit queue_submit = nullptr;
 };
 
@@ -53,6 +56,23 @@ VkResult VKAPI_PTR allocate_memory(void* context, VkDevice device, const VkMemor
                                    const VkAllocationCallbacks* allocator, VkDeviceMemory* memory) noexcept {
     const auto& state = *static_cast<DeviceState*>(context);
     return state.allocate_memory(device, info, allocator, memory);
+}
+
+void VKAPI_PTR free_memory(void* context, VkDevice device, VkDeviceMemory memory,
+                           const VkAllocationCallbacks* allocator) noexcept {
+    const auto& state = *static_cast<DeviceState*>(context);
+    state.free_memory(device, memory, allocator);
+}
+
+VkResult VKAPI_PTR map_memory(void* context, VkDevice device, VkDeviceMemory memory, VkDeviceSize offset,
+                              VkDeviceSize size, VkMemoryMapFlags flags, void** data) noexcept {
+    const auto& state = *static_cast<DeviceState*>(context);
+    return state.map_memory(device, memory, offset, size, flags, data);
+}
+
+void VKAPI_PTR unmap_memory(void* context, VkDevice device, VkDeviceMemory memory) noexcept {
+    const auto& state = *static_cast<DeviceState*>(context);
+    state.unmap_memory(device, memory);
 }
 
 VkResult VKAPI_PTR queue_submit(void* context, VkQueue queue, uint32_t count, const VkSubmitInfo* submits,
@@ -936,13 +956,24 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     api_state->loader = state_->loader;
     api_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device_state->device, "vkAllocateMemory");
+    api_state->free_memory =
+        load_device_function<PFN_vkFreeMemory>(get_device_proc, device_state->device, "vkFreeMemory");
+    api_state->map_memory =
+        load_device_function<PFN_vkMapMemory>(get_device_proc, device_state->device, "vkMapMemory");
+    api_state->unmap_memory =
+        load_device_function<PFN_vkUnmapMemory>(get_device_proc, device_state->device, "vkUnmapMemory");
     api_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device_state->device, "vkQueueSubmit");
-    if (api_state->allocate_memory == nullptr || api_state->queue_submit == nullptr) {
+    if (api_state->allocate_memory == nullptr || api_state->free_memory == nullptr ||
+        api_state->map_memory == nullptr || api_state->unmap_memory == nullptr ||
+        api_state->queue_submit == nullptr) {
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device is missing required backend entry points");
     }
     Api api;
     api.allocate_memory = {api_state.get(), allocate_memory};
+    api.free_memory = {api_state.get(), free_memory};
+    api.map_memory = {api_state.get(), map_memory};
+    api.unmap_memory = {api_state.get(), unmap_memory};
     api.queue_submit = {api_state.get(), queue_submit};
     api.lifetime_ = std::move(api_state);
     return Device(std::move(device_state), std::move(api));
@@ -994,15 +1025,24 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     device_state->loader = loader;
     device_state->allocate_memory =
         load_device_function<PFN_vkAllocateMemory>(get_device_proc, device, "vkAllocateMemory");
+    device_state->free_memory =
+        load_device_function<PFN_vkFreeMemory>(get_device_proc, device, "vkFreeMemory");
+    device_state->map_memory = load_device_function<PFN_vkMapMemory>(get_device_proc, device, "vkMapMemory");
+    device_state->unmap_memory =
+        load_device_function<PFN_vkUnmapMemory>(get_device_proc, device, "vkUnmapMemory");
     device_state->queue_submit =
         load_device_function<PFN_vkQueueSubmit>(get_device_proc, device, "vkQueueSubmit");
-    if (device_state->allocate_memory == nullptr)
-        return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide vkAllocateMemory");
+    if (device_state->allocate_memory == nullptr || device_state->free_memory == nullptr ||
+        device_state->map_memory == nullptr || device_state->unmap_memory == nullptr)
+        return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide memory entry points");
     if (device_state->queue_submit == nullptr)
         return Error(ErrorCode::UnsupportedFeature, "Vulkan device does not provide vkQueueSubmit");
 
     Api api;
     api.allocate_memory = {device_state.get(), allocate_memory};
+    api.free_memory = {device_state.get(), free_memory};
+    api.map_memory = {device_state.get(), map_memory};
+    api.unmap_memory = {device_state.get(), unmap_memory};
     api.queue_submit = {device_state.get(), queue_submit};
     api.lifetime_ = std::move(device_state);
     return api;
@@ -1070,6 +1110,9 @@ Api FaultInjector::api() const {
     Api result;
     if (!state_) return result;
     result.allocate_memory = {state_.get(), State::allocate_memory};
+    result.free_memory = state_->inner.free_memory;
+    result.map_memory = state_->inner.map_memory;
+    result.unmap_memory = state_->inner.unmap_memory;
     result.queue_submit = {state_.get(), State::queue_submit};
     result.lifetime_ = state_;
     return result;

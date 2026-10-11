@@ -33,6 +33,7 @@ internals/capabilities
 internals/queues
 internals/logical-device
 internals/suballocator
+internals/memory-pool
 device-selection
 memory-model
 ci-cd

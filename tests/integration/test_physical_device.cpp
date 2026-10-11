@@ -9,6 +9,7 @@
 
 #include "core/device_caps.hpp"
 #include "kora/log.hpp"
+#include "memory/memory_pool.hpp"
 #include "support/vulkan_test.hpp"
 #include "vulkan/api.hpp"
 
@@ -181,4 +182,66 @@ TEST(VulkanPhysicalDevice, CreatesLogicalDeviceForEveryComputeCapableDevice) {
     if (eligible == 0) KORA_REQUIRE_VULKAN(false);
 
     for (const auto& message : errors.messages()) ADD_FAILURE() << message;
+}
+
+TEST(VulkanMemoryPool, TenThousandSmallAllocationsUseBoundedDeviceMemoryBlocks) {
+    auto loader = kora::vk::Loader::load();
+    if (!loader) KORA_REQUIRE_VULKAN(loader);
+    auto instance = loader.value().create_instance();
+    if (!instance && instance.error().code == kora::ErrorCode::NoVulkanImplementation)
+        KORA_REQUIRE_VULKAN(false);
+    ASSERT_TRUE(instance) << instance.error().describe();
+    auto physical_devices = instance.value().physical_devices();
+    ASSERT_TRUE(physical_devices) << physical_devices.error().describe();
+
+    for (const auto& physical : physical_devices.value()) {
+        const auto compute =
+            std::find_if(physical.queue_family_properties.begin(), physical.queue_family_properties.end(),
+                         [](const auto& queue) { return (queue.queueFlags & VK_QUEUE_COMPUTE_BIT) != 0; });
+        if (compute == physical.queue_family_properties.end()) continue;
+        auto device = instance.value().create_device(physical);
+        ASSERT_TRUE(device) << device.error().describe();
+
+        std::uint32_t type_index = 0;
+        for (std::uint32_t i = 0; i < physical.memory_properties.memoryTypeCount; ++i) {
+            if ((physical.memory_properties.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0) {
+                type_index = i;
+                break;
+            }
+        }
+        const auto flags = physical.memory_properties.memoryTypes[type_index].propertyFlags;
+        const auto heap_index = physical.memory_properties.memoryTypes[type_index].heapIndex;
+        kora::detail::MemoryPoolConfig config;
+        config.memory_type_index = type_index;
+        config.host_visible = (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        config.host_coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+        config.heap_size = physical.memory_properties.memoryHeaps[heap_index].size;
+        config.budget = physical.memory_budget_properties.heapBudget[heap_index];
+        auto pool = kora::detail::MemoryPool::create(device.value(), config);
+        ASSERT_TRUE(pool) << pool.error().describe();
+
+        std::vector<kora::detail::PoolAllocation> allocations;
+        allocations.reserve(10'000);
+        for (int i = 0; i < 10'000; ++i) {
+            auto allocation = pool.value()->allocate({.size = 256, .alignment = 256});
+            ASSERT_TRUE(allocation) << allocation.error().describe();
+            EXPECT_EQ(allocation.value().offset % 256, 0u);
+            EXPECT_EQ(allocation.value().mapped_data != nullptr, config.host_visible);
+            allocations.push_back(allocation.value());
+        }
+        const auto stats = pool.value()->stats();
+        EXPECT_EQ(stats.live_allocations, 10'000u);
+        EXPECT_LE(stats.device_allocation_calls, 2u);
+        EXPECT_LT(stats.device_allocation_calls, allocations.size());
+        for (const auto& allocation : allocations) ASSERT_TRUE(pool.value()->deallocate(allocation));
+        EXPECT_EQ(pool.value()->stats().live_allocations, 0u);
+
+        auto dedicated = pool.value()->allocate({.size = 4096, .alignment = 256, .dedicated_required = true});
+        ASSERT_TRUE(dedicated) << dedicated.error().describe();
+        EXPECT_TRUE(dedicated.value().dedicated);
+        EXPECT_EQ(pool.value()->stats().dedicated_allocations, 1u);
+        EXPECT_TRUE(pool.value()->deallocate(dedicated.value()));
+        break;
+    }
 }
