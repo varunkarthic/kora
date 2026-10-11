@@ -5,6 +5,7 @@ add_library(kora
   core/buffer_manager.cpp
   core/device_selection.cpp
   core/log.cpp
+  core/json.cpp
   core/options.cpp
   core/runtime.cpp
   core/version.cpp
@@ -15,6 +16,7 @@ add_library(kora
   memory/memory_manager.cpp
   memory/dirty_ranges.cpp
   memory/residency.cpp
+  kernel/metadata.cpp
   vulkan/loader.cpp
   vulkan/command_pool_set.cpp
   vulkan/queue_context.cpp

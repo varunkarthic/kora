@@ -2,6 +2,8 @@ kora_add_test(kora_unit_tests unit
   SOURCES
     test_errors.cpp
     test_event.cpp
+    test_json.cpp
+    test_kernel_metadata.cpp
     test_checked.cpp
     test_device_caps.cpp
     test_device_selection.cpp
