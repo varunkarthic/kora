@@ -11,6 +11,15 @@ queue call. Work still waiting in the queue is detached and failed immediately w
 device-loss result rather than depending on another submission-loop iteration. Device loss is never
 treated as a transient timeout or retried on the same logical device.
 
+A finite `Event::wait_for()` or queue timeline wait returning `Timeout` is only a caller-side wait
+deadline: it does not cancel work, release referenced resources, or mark a device unhealthy. A true
+`VK_ERROR_DEVICE_LOST` returned by an explicit queue wait is preserved as `DeviceLost` and updates the
+shared fault state. Under `DevicePolicy::AllEligible`, logical-device initialization failures are
+isolated: KORA continues initializing the remaining selected devices, records failed identities in
+`Runtime::quarantined_devices()`, and emits a recovery warning. If every selected device fails,
+creation returns the first initialization error. Explicitly selected single-device policies remain
+fail-fast.
+
 An operation that was already submitted when loss is observed has undefined device-side outputs. KORA
 marks each writable buffer from that in-flight dispatch as lost; `BufferHandle::read_bytes()` and
 read-only or partial mappings then return `ErrorCode::DataLoss` rather than exposing a potentially

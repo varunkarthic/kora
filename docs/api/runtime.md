@@ -26,6 +26,9 @@ replacement creation fails, the original failed Runtime remains intact.
 `device_fault_report(id)` returns best-effort extension records when `VK_EXT_device_fault` is
 supported; KORA bounds the report to 256 address and vendor records and never persists or logs these
 diagnostic details. Query the report before `recover()`, which replaces the per-device fault state.
+For `DevicePolicy::AllEligible`, devices that fail logical-device initialization are skipped while
+other selected devices continue; `quarantined_devices()` lists those identities. Creation fails if
+none initialize. Other selection policies remain fail-fast.
 
 ## Memory snapshots
 

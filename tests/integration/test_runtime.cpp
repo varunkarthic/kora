@@ -62,6 +62,7 @@ TEST(Runtime, OwnsSelectedDeviceAndExposesMemoryStats) {
     ASSERT_TRUE(runtime) << runtime.error().describe();
     const auto devices = runtime.value().devices();
     ASSERT_FALSE(devices.empty());
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
 
     auto info = runtime.value().device_info(devices.front());
     ASSERT_TRUE(info) << info.error().describe();
@@ -110,6 +111,20 @@ TEST(Runtime, HonorsExplicitDeviceIndexSelection) {
     const auto devices = runtime.value().devices();
     ASSERT_EQ(devices.size(), 1U);
     EXPECT_EQ(devices.front().index, 0U);
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
+}
+
+TEST(Runtime, AllEligibleReportsQuarantinedDevicesSeparately) {
+    kora::RuntimeOptions options;
+    options.device_policy = kora::DevicePolicy::AllEligible;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    EXPECT_FALSE(runtime.value().devices().empty());
+    EXPECT_TRUE(runtime.value().quarantined_devices().empty());
 }
 
 TEST(Runtime, RecoversTransactionallyAndRetainsAuthoritativeBufferHandles) {

@@ -459,6 +459,7 @@ struct Runtime::Impl {
     vk::Loader loader;
     vk::Instance instance;
     std::vector<std::unique_ptr<DeviceEntry>> devices;
+    std::vector<DeviceId> quarantined_devices;
     std::uint64_t runtime_id = 0;
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
@@ -1204,56 +1205,78 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         (void)impl->performance_database->load(impl->performance_database_path,
                                                static_cast<std::uint64_t>(now_ms));
     }
+    std::optional<Error> first_device_error;
+    const bool isolate_device_failures = resolved.device_policy == DevicePolicy::AllEligible;
     for (const auto& id : selected.value()) {
-        if (id.index >= physical_devices.value().size()) {
-            return Error(ErrorCode::InternalInvariantViolation,
-                         "device selector returned an index outside the Vulkan enumeration");
+        const auto initialize_device = [&]() -> Status {
+            if (id.index >= physical_devices.value().size()) {
+                return Error(ErrorCode::InternalInvariantViolation,
+                             "device selector returned an index outside the Vulkan enumeration");
+            }
+            const auto& physical = physical_devices.value()[id.index];
+            vk::DeviceOptions device_options;
+            device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
+            device_options.enable_synchronization2 = !resolved.force_legacy_sync;
+            const bool core_12 = physical.properties.apiVersion >= VK_API_VERSION_1_2;
+            const bool timeline_available =
+                core_12 ? physical.vulkan12_features.timelineSemaphore == VK_TRUE
+                        : physical.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
+            device_options.enable_dedicated_transfer_queue =
+                !resolved.force_legacy_sync && timeline_available;
+            auto logical_device = impl->instance.create_device(physical, device_options);
+            if (!logical_device) return std::move(logical_device).error();
+            auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
+            auto memory_manager =
+                detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
+            if (!memory_manager) return std::move(memory_manager).error();
+            detail::kernel::PipelineCacheIdentity pipeline_identity;
+            pipeline_identity.vendor_id = physical.properties.vendorID;
+            pipeline_identity.device_id = physical.properties.deviceID;
+            pipeline_identity.driver_version = physical.properties.driverVersion;
+            std::copy(std::begin(physical.id_properties.deviceUUID),
+                      std::end(physical.id_properties.deviceUUID), pipeline_identity.device_uuid.begin());
+            std::copy(std::begin(physical.id_properties.driverUUID),
+                      std::end(physical.id_properties.driverUUID), pipeline_identity.driver_uuid.begin());
+            const auto cache_key = id.uuid.empty() ? std::to_string(pipeline_identity.vendor_id) + "-" +
+                                                         std::to_string(pipeline_identity.device_id) + "-" +
+                                                         std::to_string(pipeline_identity.driver_version)
+                                                   : id.uuid;
+            auto pipeline_manager = detail::kernel::PipelineManager::create(
+                logical_device.value().api(), logical_device.value().handle(),
+                detail::spirv::capabilities_from(info), pipeline_identity,
+                std::filesystem::path(resolved.cache_dir) / "pipelines" / (cache_key + ".bin"));
+            if (!pipeline_manager) return std::move(pipeline_manager).error();
+            auto entry = std::make_unique<Impl::DeviceEntry>(
+                id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
+                std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
+                physical.calibrated_time_domains);
+            entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
+            entry->driver_version = physical.properties.driverVersion;
+            auto initialized = entry->initialize();
+            if (!initialized) return std::move(initialized).error();
+            if (impl->calibrate_on_start)
+                entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
+            entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
+            entry->dispatch->performance_database = impl->performance_database;
+            entry->dispatch->performance_database_path = impl->performance_database_path;
+            impl->devices.push_back(std::move(entry));
+            return {};
+        };
+        auto initialized = initialize_device();
+        if (!initialized) {
+            auto device_error = std::move(initialized).error();
+            device_error.with_device("index " + std::to_string(id.index) +
+                                     (id.uuid.empty() ? std::string{} : " uuid " + id.uuid));
+            if (!first_device_error) first_device_error = device_error;
+            if (!isolate_device_failures) return std::move(*first_device_error);
+            impl->quarantined_devices.push_back(id);
+            KORA_LOG(Recovery, Warn, "Quarantined device {} during AllEligible initialization: {}", id.index,
+                     device_error.describe());
         }
-        const auto& physical = physical_devices.value()[id.index];
-        vk::DeviceOptions device_options;
-        device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
-        device_options.enable_synchronization2 = !resolved.force_legacy_sync;
-        const bool core_12 = physical.properties.apiVersion >= VK_API_VERSION_1_2;
-        const bool timeline_available =
-            core_12 ? physical.vulkan12_features.timelineSemaphore == VK_TRUE
-                    : physical.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
-        device_options.enable_dedicated_transfer_queue = !resolved.force_legacy_sync && timeline_available;
-        auto logical_device = impl->instance.create_device(physical, device_options);
-        if (!logical_device) return std::move(logical_device).error();
-        auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
-        auto memory_manager = detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
-        if (!memory_manager) return std::move(memory_manager).error();
-        detail::kernel::PipelineCacheIdentity pipeline_identity;
-        pipeline_identity.vendor_id = physical.properties.vendorID;
-        pipeline_identity.device_id = physical.properties.deviceID;
-        pipeline_identity.driver_version = physical.properties.driverVersion;
-        std::copy(std::begin(physical.id_properties.deviceUUID), std::end(physical.id_properties.deviceUUID),
-                  pipeline_identity.device_uuid.begin());
-        std::copy(std::begin(physical.id_properties.driverUUID), std::end(physical.id_properties.driverUUID),
-                  pipeline_identity.driver_uuid.begin());
-        const auto cache_key = id.uuid.empty() ? std::to_string(pipeline_identity.vendor_id) + "-" +
-                                                     std::to_string(pipeline_identity.device_id) + "-" +
-                                                     std::to_string(pipeline_identity.driver_version)
-                                               : id.uuid;
-        auto pipeline_manager = detail::kernel::PipelineManager::create(
-            logical_device.value().api(), logical_device.value().handle(),
-            detail::spirv::capabilities_from(info), pipeline_identity,
-            std::filesystem::path(resolved.cache_dir) / "pipelines" / (cache_key + ".bin"));
-        if (!pipeline_manager) return std::move(pipeline_manager).error();
-        auto entry = std::make_unique<Impl::DeviceEntry>(
-            id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
-            std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
-            physical.calibrated_time_domains);
-        entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
-        entry->driver_version = physical.properties.driverVersion;
-        auto initialized = entry->initialize();
-        if (!initialized) return std::move(initialized).error();
-        if (impl->calibrate_on_start)
-            entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
-        entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
-        entry->dispatch->performance_database = impl->performance_database;
-        entry->dispatch->performance_database_path = impl->performance_database_path;
-        impl->devices.push_back(std::move(entry));
+    }
+    if (impl->devices.empty()) {
+        if (first_device_error) return std::move(*first_device_error);
+        return Error(ErrorCode::NoEligibleDevice, "No selected device could be initialized");
     }
     RuntimeOptions effective_options;
     effective_options.enable_validation = resolved.enable_validation;
@@ -1316,6 +1339,10 @@ std::vector<DeviceId> Runtime::devices() const {
     ids.reserve(impl_->devices.size());
     for (const auto& device : impl_->devices) ids.push_back(device->id);
     return ids;
+}
+
+std::vector<DeviceId> Runtime::quarantined_devices() const {
+    return impl_ ? impl_->quarantined_devices : std::vector<DeviceId>{};
 }
 
 Result<DeviceInfo> Runtime::device_info(const DeviceId& id) const {

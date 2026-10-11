@@ -168,6 +168,8 @@ public:
 
     /// IDs are stable for this Runtime's lifetime and retain Vulkan enumeration indices.
     std::vector<DeviceId> devices() const;
+    /// Devices skipped during `AllEligible` initialization; explicitly selected devices still fail fast.
+    std::vector<DeviceId> quarantined_devices() const;
     Result<DeviceInfo> device_info(const DeviceId& device) const;
     /// Returns pool totals and per-heap budget data; an unused device has zero pool counters.
     Result<MemoryStats> memory_stats(const DeviceId& device) const;

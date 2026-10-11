@@ -83,6 +83,7 @@ api/checked
 api/buffer
 api/event
 api/kernel
+api/verification
 task-graph
 ```
 

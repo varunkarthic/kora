@@ -46,6 +46,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   shutdown-order-dependent cancellation of pending submissions.
 - Capture optional, bounded `VK_EXT_device_fault` address and vendor records after device loss and expose
   them through `Runtime::device_fault_report()` without writing sensitive details to logs or files.
+- Distinguish queue-wait timeouts from device loss and isolate failed device initialization under
+  `DevicePolicy::AllEligible`, exposing skipped devices through `Runtime::quarantined_devices()`.
+- Add reusable exact, absolute, relative, ULP, and custom floating-point verification comparators in
+  `kora/verification.hpp`.
 
 ## [0.1.44] - 2026-10-11
 
