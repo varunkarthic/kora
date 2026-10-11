@@ -42,6 +42,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   device; restore host readability only after a complete host rewrite.
 - Add transactional `Runtime::recover()` to rebuild logical devices after observed loss while
   retaining host-backed buffer handles and CPU fallback registrations; loaded kernels must be reloaded.
+- Drain queued work to `DeviceLost` immediately when the shared logical-device fault state trips, avoiding
+  shutdown-order-dependent cancellation of pending submissions.
 
 ## [0.1.44] - 2026-10-11
 

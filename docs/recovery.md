@@ -7,7 +7,9 @@ queues. A `VK_ERROR_DEVICE_LOST` returned by queue submission or a completion wa
 that state unhealthy and retains the Vulkan result. The first failing submission receives
 `ErrorCode::DeviceLost`; submissions already queued but not submitted are completed with the same
 error, and later submissions to any queue sharing that device state are rejected before a Vulkan
-queue call. Device loss is never treated as a transient timeout or retried on the same logical device.
+queue call. Work still waiting in the queue is detached and failed immediately with the original
+device-loss result rather than depending on another submission-loop iteration. Device loss is never
+treated as a transient timeout or retried on the same logical device.
 
 An operation that was already submitted when loss is observed has undefined device-side outputs. KORA
 marks each writable buffer from that in-flight dispatch as lost; `BufferHandle::read_bytes()` and

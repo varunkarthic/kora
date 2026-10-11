@@ -96,6 +96,7 @@ private:
     void submission_loop();
     void completion_loop();
     void enqueue_completion(Completion completion);
+    void fail_queued_device_lost();
     static Status validate(const Submission& submission);
     Result<VkFence> acquire_fence();
     void release_fence(VkFence fence, bool reset) noexcept;

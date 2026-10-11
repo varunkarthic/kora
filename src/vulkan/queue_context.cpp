@@ -250,6 +250,21 @@ void QueueContext::enqueue_completion(Completion completion) {
     completion_changed_.notify_one();
 }
 
+void QueueContext::fail_queued_device_lost() {
+    if (!fault_state_ || fault_state_->healthy()) return;
+    std::deque<QueuedSubmission> pending;
+    {
+        std::lock_guard lock(queue_mutex_);
+        pending.swap(ready_);
+    }
+    for (auto& queued : pending) {
+        auto error = Error(ErrorCode::DeviceLost, "logical device is lost; queued work was not submitted")
+                         .with_vk(fault_state_->last_result());
+        enqueue_completion(
+            Completion{queued.id, 0, std::move(error), std::move(queued.submission.on_complete)});
+    }
+}
+
 void QueueContext::submission_loop() {
     active_queue_context = this;
     for (;;) {
@@ -327,9 +342,12 @@ void QueueContext::submission_loop() {
             }
         }
         if (cancel) {
-            enqueue_completion(Completion{
-                queued.id, 0, Error(ErrorCode::Cancelled, "Submission cancelled before queue submit"),
-                std::move(queued.submission.on_complete)});
+            Status status = Error(ErrorCode::Cancelled, "Submission cancelled before queue submit");
+            if (fault_state_ && !fault_state_->healthy())
+                status = Error(ErrorCode::DeviceLost, "logical device is lost; queued work was not submitted")
+                             .with_vk(fault_state_->last_result());
+            enqueue_completion(
+                Completion{queued.id, 0, std::move(status), std::move(queued.submission.on_complete)});
             continue;
         }
         if (fault_state_ && !fault_state_->healthy()) {
@@ -337,6 +355,7 @@ void QueueContext::submission_loop() {
                              .with_vk(fault_state_->last_result());
             enqueue_completion(
                 Completion{queued.id, 0, std::move(error), std::move(queued.submission.on_complete)});
+            fail_queued_device_lost();
             continue;
         }
         if (batch.size() > 1) {
@@ -566,6 +585,7 @@ void QueueContext::submission_loop() {
             result = use_synchronization2_ ? api_.queue_submit2(queue_, 1, &submit_info2, submit_fence)
                                            : api_.queue_submit(queue_, 1, &submit_info, submit_fence);
         }
+        if (result == VK_ERROR_DEVICE_LOST) fail_queued_device_lost();
         queue_submit_active_.clear(std::memory_order_release);
         const Status submit_status =
             result == VK_SUCCESS
@@ -623,7 +643,10 @@ void QueueContext::completion_loop() {
                         api_.wait_semaphores(device_, &wait_info, kCompletionPollIntervalNs);
                     if (result == VK_SUCCESS) break;
                     if (result != VK_TIMEOUT) {
-                        if (result == VK_ERROR_DEVICE_LOST && fault_state_) fault_state_->mark_lost(result);
+                        if (result == VK_ERROR_DEVICE_LOST && fault_state_) {
+                            fault_state_->mark_lost(result);
+                            fail_queued_device_lost();
+                        }
                         completion.status = vk_error("Waiting for queue completion failed", result);
                         break;
                     }
@@ -634,8 +657,10 @@ void QueueContext::completion_loop() {
                     const VkResult query_result =
                         api_.get_semaphore_counter_value(device_, timeline_, &completed);
                     if (query_result != VK_SUCCESS) {
-                        if (query_result == VK_ERROR_DEVICE_LOST && fault_state_)
+                        if (query_result == VK_ERROR_DEVICE_LOST && fault_state_) {
                             fault_state_->mark_lost(query_result);
+                            fail_queued_device_lost();
+                        }
                         completion.status =
                             vk_error("Polling queue completion timeline failed", query_result);
                         break;
@@ -653,7 +678,10 @@ void QueueContext::completion_loop() {
                         break;
                     }
                     if (result != VK_TIMEOUT) {
-                        if (result == VK_ERROR_DEVICE_LOST && fault_state_) fault_state_->mark_lost(result);
+                        if (result == VK_ERROR_DEVICE_LOST && fault_state_) {
+                            fault_state_->mark_lost(result);
+                            fail_queued_device_lost();
+                        }
                         completion.status = vk_error("Waiting for queue completion fence failed", result);
                         if (completion.pooled_fence) {
                             std::lock_guard lock(fence_mutex_);

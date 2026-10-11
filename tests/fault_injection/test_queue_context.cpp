@@ -320,6 +320,8 @@ TEST(QueueContext, DeviceLostFailsQueuedSubmissionsAndPreventsFurtherQueueUse) {
     std::atomic<int32_t> first_vk_error{VK_SUCCESS};
     std::atomic<ErrorCode> first_error{ErrorCode::Ok};
     std::atomic<ErrorCode> second_error{ErrorCode::Ok};
+    std::mutex callback_mutex;
+    std::condition_variable callback_changed;
     QueueContext::Submission failed;
     failed.on_complete = [&](uint64_t, Status status) {
         if (!status) {
@@ -327,11 +329,13 @@ TEST(QueueContext, DeviceLostFailsQueuedSubmissionsAndPreventsFurtherQueueUse) {
             first_error = status.error().code;
         }
         ++callbacks;
+        callback_changed.notify_all();
     };
     QueueContext::Submission queued;
     queued.on_complete = [&](uint64_t, Status status) {
         if (!status) second_error = status.error().code;
         ++callbacks;
+        callback_changed.notify_all();
     };
     ASSERT_TRUE(context->submit(std::move(failed)));
     {
@@ -345,6 +349,11 @@ TEST(QueueContext, DeviceLostFailsQueuedSubmissionsAndPreventsFurtherQueueUse) {
         mock.release_first_submit = true;
     }
     mock.gate_changed.notify_all();
+    {
+        std::unique_lock lock(callback_mutex);
+        ASSERT_TRUE(
+            callback_changed.wait_for(lock, std::chrono::seconds(5), [&] { return callbacks.load() == 2; }));
+    }
     ASSERT_TRUE(context->shutdown());
     EXPECT_EQ(callbacks.load(), 2u);
     EXPECT_EQ(first_vk_error.load(), VK_ERROR_DEVICE_LOST);
