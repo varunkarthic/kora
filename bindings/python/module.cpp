@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "kora/execution_plan.hpp"
 #include "kora/runtime.hpp"
 #include "kora/version.hpp"
 
@@ -123,6 +124,31 @@ std::shared_ptr<PyMappedView> PyBuffer::map(kora::MapAccess access) const {
 struct PyKernel {
     kora::Kernel value;
     std::shared_ptr<PyRuntime> owner;
+};
+
+struct PyExecutionPlan {
+    kora::ExecutionPlan value;
+};
+
+struct PythonTaskExecutor {
+    py::function callback;
+
+    static kora::Status invoke(const kora::TaskNode& task, void* opaque) {
+        auto& self = *static_cast<PythonTaskExecutor*>(opaque);
+        try {
+            py::object result = self.callback(task);
+            if (result.is_none()) return {};
+            if (py::isinstance<py::bool_>(result)) {
+                if (result.cast<bool>()) return {};
+                return kora::Error(kora::ErrorCode::PythonBindingError,
+                                   "Python TaskGraph executor returned False");
+            }
+            return kora::Error(kora::ErrorCode::PythonBindingError,
+                               "Python TaskGraph executor must return None or True");
+        } catch (py::error_already_set& error) {
+            return kora::Error(kora::ErrorCode::PythonBindingError, error.what());
+        }
+    }
 };
 
 struct AwaitGuard {
@@ -341,6 +367,80 @@ PYBIND11_MODULE(_core, module) {
         .value("READ", kora::KernelAccess::Read)
         .value("WRITE", kora::KernelAccess::Write)
         .value("READ_WRITE", kora::KernelAccess::ReadWrite);
+    py::enum_<kora::TaskType>(module, "TaskType")
+        .value("UPLOAD", kora::TaskType::Upload)
+        .value("DOWNLOAD", kora::TaskType::Download)
+        .value("COPY", kora::TaskType::Copy)
+        .value("FILL", kora::TaskType::Fill)
+        .value("DISPATCH", kora::TaskType::Dispatch)
+        .value("CPU_TASK", kora::TaskType::CpuTask)
+        .value("HOST_CALLBACK", kora::TaskType::HostCallback);
+    py::enum_<kora::AccessMode>(module, "AccessMode")
+        .value("READ", kora::AccessMode::Read)
+        .value("WRITE", kora::AccessMode::Write)
+        .value("READ_WRITE", kora::AccessMode::ReadWrite);
+    py::class_<kora::BufferId>(module, "BufferId")
+        .def(py::init<>())
+        .def(py::init<std::uint32_t, std::uint64_t>(), py::arg("slot"), py::arg("generation"))
+        .def_readwrite("slot", &kora::BufferId::slot)
+        .def_readwrite("generation", &kora::BufferId::generation);
+    py::class_<kora::BufferAccess>(module, "BufferAccess")
+        .def(py::init<>())
+        .def(py::init<kora::BufferId, kora::AccessMode>(), py::arg("buffer"), py::arg("mode"))
+        .def_readwrite("buffer", &kora::BufferAccess::buffer)
+        .def_readwrite("mode", &kora::BufferAccess::mode);
+    py::class_<kora::TaskMetadata>(module, "TaskMetadata")
+        .def(py::init<>())
+        .def_readwrite("type", &kora::TaskMetadata::type)
+        .def_readwrite("kernel_id", &kora::TaskMetadata::kernel_id)
+        .def_readwrite("cpu_function_id", &kora::TaskMetadata::cpu_function_id)
+        .def_readwrite("accesses", &kora::TaskMetadata::accesses)
+        .def_readwrite("problem_dimensions", &kora::TaskMetadata::problem_dimensions)
+        .def_readwrite("priority", &kora::TaskMetadata::priority)
+        .def_readwrite("deadline_hint_ns", &kora::TaskMetadata::deadline_hint_ns)
+        .def_readwrite("allowed_devices", &kora::TaskMetadata::allowed_devices)
+        .def_readwrite("preferred_device", &kora::TaskMetadata::preferred_device)
+        .def_readwrite("cpu_fallback_available", &kora::TaskMetadata::cpu_fallback_available)
+        .def_readwrite("estimated_bytes_read", &kora::TaskMetadata::estimated_bytes_read)
+        .def_readwrite("estimated_bytes_written", &kora::TaskMetadata::estimated_bytes_written)
+        .def_readwrite("estimated_work_units", &kora::TaskMetadata::estimated_work_units);
+    py::class_<kora::TaskNode>(module, "TaskNode")
+        .def_readonly("id", &kora::TaskNode::id)
+        .def_readonly("metadata", &kora::TaskNode::metadata)
+        .def_readonly("dependencies", &kora::TaskNode::dependencies);
+    py::class_<kora::TaskGraphPlan>(module, "TaskGraphPlan")
+        .def_readonly("tasks", &kora::TaskGraphPlan::tasks)
+        .def_readonly("topological_order", &kora::TaskGraphPlan::topological_order);
+    py::class_<kora::TaskGraph>(module, "TaskGraph")
+        .def(py::init<>())
+        .def("add_task",
+             [](kora::TaskGraph& graph, kora::TaskMetadata metadata) {
+                 return value_or_throw(graph.add_task(std::move(metadata)));
+             })
+        .def("add_dependency",
+             [](kora::TaskGraph& graph, kora::TaskId prerequisite, kora::TaskId dependent) {
+                 status_or_throw(graph.add_dependency(prerequisite, dependent));
+             })
+        .def("finalize", [](const kora::TaskGraph& graph) { return value_or_throw(graph.finalize()); })
+        .def_property_readonly("size", &kora::TaskGraph::size)
+        .def_property_readonly("empty", &kora::TaskGraph::empty);
+    py::class_<PyExecutionPlan>(module, "ExecutionPlan")
+        .def_static("create",
+                    [](const kora::TaskGraph& graph) {
+                        return PyExecutionPlan{value_or_throw(kora::ExecutionPlan::create(graph))};
+                    })
+        .def_property_readonly("size", [](const PyExecutionPlan& plan) { return plan.value.size(); })
+        .def_property_readonly(
+            "graph_plan",
+            [](const PyExecutionPlan& plan) -> const kora::TaskGraphPlan& { return plan.value.graph_plan(); },
+            py::return_value_policy::reference_internal)
+        .def(
+            "replay",
+            [](const PyExecutionPlan& plan, py::function callback) {
+                PythonTaskExecutor executor{std::move(callback)};
+                status_or_throw(plan.value.replay(&PythonTaskExecutor::invoke, &executor));
+            },
+            py::arg("executor"));
 
     py::class_<kora::RuntimeOptions>(module, "RuntimeOptions")
         .def(py::init<>())
