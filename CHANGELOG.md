@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-10-11
+
 - Extend memory-pool fragmentation snapshots, add checked cross-pool telemetry aggregation, and add a
   deterministic lavapipe stress test for repeated small allocation/free cycles. Add a move-only public
   Runtime that owns selected Vulkan devices and exposes per-device memory and heap-budget snapshots.
@@ -144,7 +146,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.19...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.20...HEAD
+[0.1.20]: https://github.com/varunkarthic/kora/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/varunkarthic/kora/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/varunkarthic/kora/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/varunkarthic/kora/compare/v0.1.16...v0.1.17
