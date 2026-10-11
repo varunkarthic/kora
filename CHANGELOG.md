@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-10-11
+
 - Add conservative task-DAG temporary-buffer alias planning with compatibility checks and persistent
   resource isolation.
 
@@ -232,7 +234,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.38...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.39...HEAD
+[0.1.39]: https://github.com/varunkarthic/kora/compare/v0.1.38...v0.1.39
 [0.1.38]: https://github.com/varunkarthic/kora/compare/v0.1.37...v0.1.38
 [0.1.37]: https://github.com/varunkarthic/kora/compare/v0.1.36...v0.1.37
 [0.1.36]: https://github.com/varunkarthic/kora/compare/v0.1.35...v0.1.36
