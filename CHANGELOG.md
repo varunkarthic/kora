@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Coalesced dirty-range tracking, non-coherent atom alignment, and dispatch-backed Vulkan flush and
   invalidate helpers with coherent-memory no-ops.
+- Versioned host/device residency tracking, stale-copy-aware transfer planning, and invariant-safe
+  per-device eviction.
 
 ## [0.1.17] - 2026-10-11
 

@@ -10,6 +10,7 @@ add_library(kora
   memory/memory_pool.cpp
   memory/memory_manager.cpp
   memory/dirty_ranges.cpp
+  memory/residency.cpp
   vulkan/loader.cpp
 )
 add_library(kora::kora ALIAS kora)
