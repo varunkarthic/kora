@@ -721,6 +721,10 @@ Result<Event> DispatchBuilder::submit() {
                               bound_host_versions,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
         (void)pipeline_ref;
+        if (!status && status.error().code == ErrorCode::DeviceLost && compute_value != 0) {
+            for (std::size_t index = 0; index < accesses.size(); ++index)
+                if (accesses[index] != KernelAccess::Read) (void)bound_handles[index].mark_data_lost();
+        }
         if (ctx->timestamps) {
             auto samples = ctx->timestamps->collect(compute_value);
             if (samples)

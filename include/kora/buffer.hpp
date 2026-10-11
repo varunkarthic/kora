@@ -98,6 +98,8 @@ public:
     Result<std::uint64_t> host_version() const;
     Result<std::vector<std::byte>> read_bytes() const;
     Status write_bytes(std::span<const std::byte> bytes) const;
+    /// Mark contents unavailable after a device-side write failed in flight.
+    Status mark_data_lost() const;
     /// Write downloaded bytes only if the host shadow still has the captured version.
     Result<ConditionalBufferWrite> write_bytes_if_version(std::span<const std::byte> bytes,
                                                           std::uint64_t expected_version) const;
@@ -107,6 +109,7 @@ public:
 
 private:
     friend class BufferManager;
+    friend class DispatchBuilder;
     BufferHandle(std::shared_ptr<detail::BufferManagerState> state, BufferId id);
     void reset() noexcept;
 

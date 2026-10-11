@@ -10,13 +10,15 @@ error, and later submissions to any queue sharing that device state are rejected
 queue call. Device loss is never treated as a transient timeout or retried on the same logical device.
 
 An operation that was already submitted when loss is observed has undefined device-side outputs. KORA
-does not publish those outputs as valid host data. A host shadow that was authoritative before the
-submission remains the caller's recovery source; a buffer whose newest contents existed only on the
-lost device is unrecoverable and must be treated as data loss. Errors include the raw `VkResult` and
-state that device recreation is unavailable; applications must discard the failed Runtime and create
-a new one. Runtime-scoped queues, pipelines, descriptors, synchronization objects, and device
-replicas are not recreated in place, and automatic task rescheduling is not attempted because the
-runtime cannot prove arbitrary tasks are idempotent or their outputs complete.
+marks each writable buffer from that in-flight dispatch as lost; `BufferHandle::read_bytes()` and
+read-only or partial mappings then return `ErrorCode::DataLoss` rather than exposing a potentially
+stale shadow. A complete `BufferHandle::write_bytes()` replaces the entire host shadow and restores
+host readability. A host shadow that remained authoritative for work that was never submitted is
+left readable. Errors include the raw `VkResult` and state that device recreation is unavailable;
+applications must discard the failed Runtime and create a new one. Runtime-scoped queues, pipelines,
+descriptors, synchronization objects, and device replicas are not recreated in place, and automatic
+task rescheduling is not attempted because the runtime cannot prove arbitrary tasks are idempotent or
+their outputs complete.
 
 The current fault state retains the result code but does not yet query `VK_EXT_device_fault` records or
 emit vendor-specific fault addresses. The extension is optional and those diagnostics must remain
