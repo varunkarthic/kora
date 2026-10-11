@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-10-11
+
 ## [0.1.27] - 2026-10-11
 
 - Add strict, bounded `.kora.json` parsing and a programmatic kernel metadata model with duplicate,
@@ -179,7 +181,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.27...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.28...HEAD
+[0.1.28]: https://github.com/varunkarthic/kora/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/varunkarthic/kora/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/varunkarthic/kora/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/varunkarthic/kora/compare/v0.1.24...v0.1.25
