@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add strict, bounded `.kora.json` parsing and a programmatic kernel metadata model with duplicate,
+  range, type, UTF-8, and device-independent local-size validation.
+
 ## [0.1.25] - 2026-10-11
 
 ## [0.1.24] - 2026-10-11
