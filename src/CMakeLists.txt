@@ -13,6 +13,7 @@ add_library(kora
   core/performance_db.cpp
   core/transfer_model.cpp
   core/scheduler_cost.cpp
+  core/scheduler_policy.cpp
   core/runtime.cpp
   core/task_graph.cpp
   core/temporary_buffer_aliasing.cpp
