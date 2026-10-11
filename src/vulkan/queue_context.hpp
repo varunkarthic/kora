@@ -45,6 +45,7 @@ public:
     Result<uint64_t> submit(Submission submission);
     /// Samples or waits on this context's private monotonically increasing queue timeline.
     Result<uint64_t> completed_value() const;
+    bool uses_synchronization2() const noexcept { return use_synchronization2_; }
     Status wait_for_value(uint64_t value, uint64_t timeout_ns = UINT64_MAX) const;
     /// Stop accepting work, then drain or cancel work that has not reached vkQueueSubmit.
     Status shutdown(ShutdownMode mode = ShutdownMode::Graceful);
@@ -64,7 +65,7 @@ private:
     };
 
     QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
-                 std::vector<VkFence> fence_pool);
+                 bool use_synchronization2, std::vector<VkFence> fence_pool);
     Status start();
     void submission_loop();
     void completion_loop();
@@ -78,6 +79,7 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     VkSemaphore timeline_ = VK_NULL_HANDLE;
     bool use_timeline_ = true;
+    bool use_synchronization2_ = false;
     std::vector<VkFence> fence_pool_;
     mutable std::mutex fence_mutex_;
     mutable std::condition_variable fence_changed_;

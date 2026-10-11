@@ -1,7 +1,8 @@
 # QueueContext
 
 `vk::QueueContext` is the sole host-side submission owner for one `VkQueue`. Any API thread may
-enqueue an owned submission record; one service thread dequeues and calls `vkQueueSubmit` serially. A
+enqueue an owned submission record; one service thread dequeues and calls `vkQueueSubmit2` serially
+when synchronization2 is enabled, otherwise it uses `vkQueueSubmit`. A
 second worker waits on a private timeline semaphore and delivers completion callbacks after the GPU
 has completed each successful submission.
 

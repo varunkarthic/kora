@@ -44,6 +44,11 @@ jobs:
         run: cmake --build --preset debug --parallel
       - name: Test
         run: ctest --preset debug --output-on-failure
+      - name: Test with synchronization validation
+        env:
+          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+          VK_LAYER_VALIDATE_SYNC: "1"
+        run: bash tools/ci/run_sync_validation.sh
       - name: Validate installed package
         run: tools/ci/check_install.sh
       - name: Validate workflow and release tooling

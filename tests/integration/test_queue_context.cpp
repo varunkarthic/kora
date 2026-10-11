@@ -12,6 +12,35 @@
 namespace kora::vk {
 namespace {
 
+TEST(QueueContext, SelectsSynchronization2OnlyWhenEnabledOnLogicalDevice) {
+    auto loader = Loader::load();
+    if (!loader) GTEST_SKIP() << loader.error().describe();
+    auto instance = loader.value().create_instance();
+    if (!instance) GTEST_SKIP() << instance.error().describe();
+    auto physical_devices = instance.value().physical_devices();
+    ASSERT_TRUE(physical_devices) << physical_devices.error().describe();
+    if (physical_devices.value().empty()) GTEST_SKIP() << "No Vulkan physical device is available";
+
+    auto preferred_device = instance.value().create_device(physical_devices.value().front());
+    if (!preferred_device) GTEST_SKIP() << preferred_device.error().describe();
+    auto preferred_context =
+        QueueContext::create(preferred_device.value().api(), preferred_device.value().handle(),
+                             preferred_device.value().compute_queue());
+    ASSERT_TRUE(preferred_context) << preferred_context.error().describe();
+    EXPECT_EQ(preferred_context.value()->uses_synchronization2(),
+              preferred_device.value().enabled_features().synchronization2);
+
+    DeviceOptions legacy_options;
+    legacy_options.enable_synchronization2 = false;
+    auto legacy_device = instance.value().create_device(physical_devices.value().front(), legacy_options);
+    ASSERT_TRUE(legacy_device) << legacy_device.error().describe();
+    EXPECT_FALSE(legacy_device.value().enabled_features().synchronization2);
+    auto legacy_context = QueueContext::create(legacy_device.value().api(), legacy_device.value().handle(),
+                                               legacy_device.value().compute_queue());
+    ASSERT_TRUE(legacy_context) << legacy_context.error().describe();
+    EXPECT_FALSE(legacy_context.value()->uses_synchronization2());
+}
+
 TEST(QueueContext, CompletesConcurrentRealVulkanSubmissions) {
     auto loader = Loader::load();
     if (!loader) GTEST_SKIP() << loader.error().describe();
