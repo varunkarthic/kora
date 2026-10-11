@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Coalesced dirty-range tracking, non-coherent atom alignment, and dispatch-backed Vulkan flush and
+  invalidate helpers with coherent-memory no-ops.
+
 ## [0.1.17] - 2026-10-11
 
 ### Added

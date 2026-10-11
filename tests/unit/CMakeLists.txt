@@ -9,5 +9,6 @@ kora_add_test(kora_unit_tests unit
     test_suballocator.cpp
     test_memory_manager.cpp
     test_buffer_manager.cpp
+    test_dirty_ranges.cpp
 )
 target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})

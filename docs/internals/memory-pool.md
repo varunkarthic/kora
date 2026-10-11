@@ -24,8 +24,9 @@ same error and mapping semantics but have their own `VkDeviceMemory` lifetime.
 Host-visible blocks are mapped once across their full lifetime. Each returned allocation exposes a
 pointer advanced by its suballocation offset. The block is unmapped exactly once immediately before
 `vkFreeMemory`; individual frees never map or unmap. Non-host-visible pools always return a null
-mapped pointer. Coherency is recorded in the pool key but flush/invalidate range handling belongs to
-issue #25.
+mapped pointer. Coherency is recorded in the pool key. Non-coherent callers use the dirty-range
+helpers to atom-align and dispatch flush/invalidate calls; the pool does not silently flush on every
+map or suballocation free.
 
 ## API reference
 
