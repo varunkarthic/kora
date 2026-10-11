@@ -14,6 +14,7 @@ add_library(kora
   memory/residency.cpp
   vulkan/loader.cpp
   vulkan/command_pool_set.cpp
+  vulkan/queue_context.cpp
 )
 add_library(kora::kora ALIAS kora)
 target_include_directories(kora PUBLIC

@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add an MPSC Vulkan queue service with serialized submission, timeline-based GPU completion callbacks,
+  Drain/CancelPending shutdown, and concurrent producer stress coverage.
+
 ## [0.1.21] - 2026-10-11
 
 - Add a thread-owned Vulkan command-pool set with preallocated reusable command buffers, per-slot
