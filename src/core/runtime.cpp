@@ -18,8 +18,8 @@
 #include <utility>
 #include <vector>
 
-#include "core/device_caps.hpp"
 #include "core/calibration.hpp"
+#include "core/device_caps.hpp"
 #include "core/event_state.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "memory/memory_manager.hpp"

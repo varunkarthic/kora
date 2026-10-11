@@ -4,8 +4,8 @@
 #include <charconv>
 #include <fstream>
 #include <iterator>
-#include <system_error>
 #include <string_view>
+#include <system_error>
 
 #include "core/json.hpp"
 
@@ -25,13 +25,16 @@ Error invalid(std::string message) {
     return Error(ErrorCode::InvalidArgument, std::move(message));
 }
 
-std::string number(std::uint64_t value) { return std::to_string(value); }
+std::string number(std::uint64_t value) {
+    return std::to_string(value);
+}
 
 bool get_u64(const json::Value* value, std::uint64_t& output) {
     if (!value) return false;
     const auto* item = std::get_if<json::Value::Number>(&value->storage);
     if (!item) return false;
-    const auto [end, error] = std::from_chars(item->text.data(), item->text.data() + item->text.size(), output);
+    const auto [end, error] =
+        std::from_chars(item->text.data(), item->text.data() + item->text.size(), output);
     return error == std::errc{} && end == item->text.data() + item->text.size();
 }
 
@@ -65,14 +68,15 @@ bool flush_file(const std::filesystem::path& path) {
 std::vector<std::uint8_t> encode(const Record& record) {
     const std::string text =
         "{\"schema\":" + number(record.schema) + ",\"device_uuid\":\"" + record.device_uuid +
-        "\",\"driver_version\":" + number(record.driver_version) + ",\"kora_schema\":" +
-        number(record.kora_schema) + ",\"submit_overhead_ns\":" + number(record.submit_overhead_ns) +
-        ",\"tiny_dispatch_ns\":" + number(record.tiny_dispatch_ns) + ",\"h2d_bytes_per_second\":" +
-        number(record.h2d_bytes_per_second) + ",\"d2h_bytes_per_second\":" +
-        number(record.d2h_bytes_per_second) + ",\"device_copy_bytes_per_second\":" +
-        number(record.device_copy_bytes_per_second) + ",\"streaming_bytes_per_second\":" +
-        number(record.streaming_bytes_per_second) + ",\"alu_operations_per_second\":" +
-        number(record.alu_operations_per_second) + "}";
+        "\",\"driver_version\":" + number(record.driver_version) +
+        ",\"kora_schema\":" + number(record.kora_schema) +
+        ",\"submit_overhead_ns\":" + number(record.submit_overhead_ns) +
+        ",\"tiny_dispatch_ns\":" + number(record.tiny_dispatch_ns) +
+        ",\"h2d_bytes_per_second\":" + number(record.h2d_bytes_per_second) +
+        ",\"d2h_bytes_per_second\":" + number(record.d2h_bytes_per_second) +
+        ",\"device_copy_bytes_per_second\":" + number(record.device_copy_bytes_per_second) +
+        ",\"streaming_bytes_per_second\":" + number(record.streaming_bytes_per_second) +
+        ",\"alu_operations_per_second\":" + number(record.alu_operations_per_second) + "}";
     return {text.begin(), text.end()};
 }
 
@@ -87,9 +91,9 @@ Result<Record> decode(const std::vector<std::uint8_t>& bytes, const std::string&
     if (!get_u64(parsed.value().find("schema"), schema) ||
         !get_string(parsed.value().find("device_uuid"), record.device_uuid) ||
         !get_u64(parsed.value().find("driver_version"), driver) ||
-        !get_u64(parsed.value().find("kora_schema"), kora_schema) ||
-        schema != kSchemaVersion || driver > UINT32_MAX || kora_schema != 1 ||
-        record.device_uuid != expected_uuid || driver != expected_driver)
+        !get_u64(parsed.value().find("kora_schema"), kora_schema) || schema != kSchemaVersion ||
+        driver > UINT32_MAX || kora_schema != 1 || record.device_uuid != expected_uuid ||
+        driver != expected_driver)
         return invalid("calibration record identity or schema mismatch");
     record.schema = static_cast<std::uint32_t>(schema);
     record.driver_version = static_cast<std::uint32_t>(driver);
@@ -105,8 +109,8 @@ Result<Record> decode(const std::vector<std::uint8_t>& bytes, const std::string&
     return record;
 }
 
-bool read(const std::filesystem::path& path, const std::string& expected_uuid,
-          std::uint32_t expected_driver, Record& record) noexcept {
+bool read(const std::filesystem::path& path, const std::string& expected_uuid, std::uint32_t expected_driver,
+          Record& record) noexcept {
     try {
         std::error_code error;
         const auto size = std::filesystem::file_size(path, error);
@@ -130,7 +134,8 @@ Status write_atomic(const std::filesystem::path& path, const Record& record) {
     std::error_code error;
     if (!path.parent_path().empty()) {
         std::filesystem::create_directories(path.parent_path(), error);
-        if (error) return Error(ErrorCode::IoError, "cannot create calibration directory: " + error.message());
+        if (error)
+            return Error(ErrorCode::IoError, "cannot create calibration directory: " + error.message());
     }
     static std::atomic<std::uint64_t> sequence{1};
     auto temporary = path;

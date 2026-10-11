@@ -32,8 +32,8 @@ struct RuntimeOptions {
     std::optional<bool> disable_cpu_backend;
     std::optional<bool> force_legacy_sync;  ///< Test hook: skip timeline semaphores / sync2.
     std::optional<bool> trace;
-    std::optional<bool> enable_startup_calibration; ///< Run bounded measurements for selected devices.
-    std::optional<std::uint32_t> calibration_budget_ms; ///< Per-device upper bound; default 250 ms.
+    std::optional<bool> enable_startup_calibration;      ///< Run bounded measurements for selected devices.
+    std::optional<std::uint32_t> calibration_budget_ms;  ///< Per-device upper bound; default 250 ms.
 };
 
 /// Fully concrete options after merging API values, environment and defaults.

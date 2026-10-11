@@ -1,8 +1,8 @@
 #include "kora/options.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 
 namespace kora {
@@ -76,8 +76,7 @@ ResolvedOptions resolve(const RuntimeOptions& o, const EnvLookup& env) {
     r.disable_cpu_backend = env_bool("KORA_DISABLE_CPU_BACKEND", o.disable_cpu_backend, false);
     r.deterministic = env_bool("KORA_DETERMINISTIC", o.deterministic, false);
     r.force_legacy_sync = env_bool("KORA_FORCE_LEGACY_SYNC", o.force_legacy_sync, false);
-    r.enable_startup_calibration =
-        env_bool("KORA_STARTUP_CALIBRATION", o.enable_startup_calibration, true);
+    r.enable_startup_calibration = env_bool("KORA_STARTUP_CALIBRATION", o.enable_startup_calibration, true);
     r.calibration_budget_ms = o.calibration_budget_ms.value_or(250);
     if (auto v = env("KORA_CALIBRATION_BUDGET_MS"); !o.calibration_budget_ms && v) {
         std::uint64_t parsed = 0;

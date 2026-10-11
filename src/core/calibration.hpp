@@ -28,8 +28,8 @@ struct Record {
 std::vector<std::uint8_t> encode(const Record& record);
 Result<Record> decode(const std::vector<std::uint8_t>& bytes, const std::string& expected_uuid,
                       std::uint32_t expected_driver);
-bool read(const std::filesystem::path& path, const std::string& expected_uuid,
-          std::uint32_t expected_driver, Record& record) noexcept;
+bool read(const std::filesystem::path& path, const std::string& expected_uuid, std::uint32_t expected_driver,
+          Record& record) noexcept;
 Status write_atomic(const std::filesystem::path& path, const Record& record);
 
 }  // namespace kora::detail::calibration
