@@ -158,3 +158,25 @@ inferred to be faster on other memory topologies. Devices without device-local h
 cannot run this direct/staged comparison, so the optional GPU suite reports unavailable there. The raw
 comparison covers buffer copies and one vector-add dispatch, not all KORA compute workloads. Re-run on
 each target; do not use these single-host values to set a universal staging threshold.
+
+### Optimization decisions and limits
+
+The evidence above supports keeping the existing bounded command-buffer pool reuse: it reduced
+host-side record/reset overhead in this local comparison, and the pool is already the normal path.
+It does not justify changing pool sizing or claiming a workload-level speedup because the benchmark
+does not submit the recorded buffers to a queue.
+
+No descriptor-update fast path or buffer-device-address (BDA) dispatch path is enabled by these
+results. The raw vector-add case reuses a pre-created descriptor set and pipeline, so it isolates
+steady-state dispatch overhead but does not compare descriptor allocation/update strategies. The BDA
+capability and allocation support likewise do not constitute an implemented or benchmarked BDA
+kernel path. Those changes need correctness-equivalent workloads and setup-inclusive as well as
+steady-state comparisons before they can be evaluated.
+
+No adaptive dedicated-transfer-queue threshold is inferred. The transfer measurements compare direct
+mapping and staging on one host-visible/device-local path; they do not compare dedicated and compute
+queues across integrated, discrete, and software devices, nor measure overlap with concurrent compute.
+An evidence-backed threshold therefore requires repeatable upload/download size sweeps on those
+topologies, queue-family and synchronization validation, concurrent-work measurements, and end-to-end
+latency/throughput results. Until then, KORA's conservative capability-based queue selection remains
+unchanged. These measurements are diagnostic inputs, not runtime policy or guarantees.
