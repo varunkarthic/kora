@@ -63,6 +63,10 @@ struct Api {
     PFN_vkCreatePipelineCache create_pipeline_cache = nullptr;
     PFN_vkDestroyPipelineCache destroy_pipeline_cache = nullptr;
     PFN_vkGetPipelineCacheData get_pipeline_cache_data = nullptr;
+    PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+    PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
+    PFN_vkCmdPushConstants cmd_push_constants = nullptr;
+    PFN_vkCmdDispatch cmd_dispatch = nullptr;
 
     DispatchFunction<VkResult(VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer*)>
         create_buffer;
@@ -161,6 +165,13 @@ struct DeviceOptions {
     bool enable_dedicated_transfer_queue = true;
 };
 
+struct BufferMemoryInfo {
+    VkMemoryRequirements requirements{};
+    std::uint32_t memory_type_count = 0;
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    VkPhysicalDeviceProperties properties{};
+};
+
 /// Owned logical device, selected queues, and device-level dispatch table.
 class Device {
 public:
@@ -186,6 +197,7 @@ public:
     const EnabledFeatures& enabled_features() const noexcept;
     const std::vector<std::string>& enabled_extensions() const noexcept;
     const Api& api() const noexcept;
+    const BufferMemoryInfo& buffer_memory_info() const noexcept;
 
 private:
     friend class Instance;

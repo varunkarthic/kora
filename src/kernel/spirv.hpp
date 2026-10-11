@@ -40,6 +40,10 @@ struct ReflectedBinding {
 struct Reflection {
     std::string entry_point;
     std::array<std::uint32_t, 3> local_size{};
+    bool local_size_id_based = false;
+    std::array<std::uint32_t, 3> local_size_ids{};
+    std::array<std::uint32_t, 3> local_size_spec_ids{};
+    std::array<std::uint32_t, 3> local_size_spec_defaults{};
     std::vector<ReflectedBinding> bindings;
     std::uint32_t push_constant_size = 0;
     std::vector<PushConstantFieldMetadata> push_constants;
@@ -54,5 +58,6 @@ DeviceCapabilities capabilities_from(const DeviceInfo& device) noexcept;
 Result<Reflection> validate_and_reflect(std::span<const std::uint32_t> words, const KernelMetadata& metadata,
                                         const DeviceCapabilities& device,
                                         std::string_view entry_point = "main");
+Status validate_module_structure(std::span<const std::uint32_t> words);
 
 }  // namespace kora::detail::spirv

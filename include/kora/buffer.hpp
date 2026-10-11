@@ -4,9 +4,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -86,6 +88,9 @@ public:
     BufferId id() const noexcept { return id_; }
     explicit operator bool() const noexcept { return state_ != nullptr; }
     Result<BufferInfo> info() const;
+    std::uint64_t size_bytes() const noexcept;
+    Result<std::vector<std::byte>> read_bytes() const;
+    Status write_bytes(std::span<const std::byte> bytes) const;
     Result<MappedBytes> map(MapAccess access = MapAccess::ReadWrite, std::uint64_t offset = 0,
                             std::uint64_t size = std::numeric_limits<std::uint64_t>::max()) const;
     Status mark_used(std::uint64_t timeline_value) const;
@@ -130,9 +135,30 @@ public:
     Buffer() = default;
     std::uint64_t size() const noexcept { return count_; }
     std::uint64_t size_bytes() const noexcept { return count_ * sizeof(T); }
+    const BufferHandle& handle() const noexcept { return handle_; }
     BufferId id() const noexcept { return handle_.id(); }
     explicit operator bool() const noexcept { return static_cast<bool>(handle_); }
     Result<BufferInfo> info() const { return handle_.info(); }
+    Status write(std::span<const T> values) const {
+        if (values.size() != count_)
+            return Error(ErrorCode::InvalidArgument,
+                         "buffer write element count does not match its capacity");
+        return handle_.write_bytes(std::as_bytes(values));
+    }
+    Status read(std::span<T> values) const {
+        if (values.size() != count_)
+            return Error(ErrorCode::InvalidArgument, "buffer read element count does not match its capacity");
+        auto bytes = handle_.read_bytes();
+        if (!bytes) return std::move(bytes).error();
+        std::memcpy(values.data(), bytes.value().data(), bytes.value().size());
+        return {};
+    }
+    Result<std::vector<T>> read() const {
+        std::vector<T> values(static_cast<std::size_t>(count_));
+        auto status = read(std::span<T>(values));
+        if (!status) return std::move(status).error();
+        return values;
+    }
 
     Result<MappedBuffer<T>> map(MapAccess access = MapAccess::ReadWrite) {
         auto mapped = handle_.map(access);

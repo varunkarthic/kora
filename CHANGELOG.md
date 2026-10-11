@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+- Add a fluent storage-buffer dispatch API with checked workgroup limits, typed host-shadow buffer
+  copies, compiled vector-add/SAXPY integration fixtures, and event completion covering output readback.
+
 ## [0.1.29] - 2026-10-11
 
 ## [0.1.28] - 2026-10-11

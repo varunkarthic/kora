@@ -14,9 +14,27 @@ kora_add_test(kora_integration_tests integration
 target_link_libraries(kora_integration_tests PRIVATE ${KORA_VULKAN_HEADERS})
 target_include_directories(kora_integration_tests PRIVATE ${KORA_SPIRV_HEADERS_INCLUDE_DIR})
 if(KORA_GLSLANG_VALIDATOR)
+  set(KORA_VECTOR_ADD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/vector_add.comp.spv)
+  set(KORA_SAXPY_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/saxpy.comp.spv)
+  add_custom_command(
+    OUTPUT ${KORA_VECTOR_ADD_FIXTURE}
+    COMMAND ${KORA_GLSLANG_VALIDATOR} -V --target-env vulkan1.0 -o ${KORA_VECTOR_ADD_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/vector_add.comp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/vector_add.comp
+    VERBATIM)
+  add_custom_command(
+    OUTPUT ${KORA_SAXPY_FIXTURE}
+    COMMAND ${KORA_GLSLANG_VALIDATOR} -V --target-env vulkan1.0 -o ${KORA_SAXPY_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/saxpy.comp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/saxpy.comp
+    VERBATIM)
+  add_custom_target(kora_dispatch_fixtures DEPENDS ${KORA_VECTOR_ADD_FIXTURE} ${KORA_SAXPY_FIXTURE})
   add_dependencies(kora_integration_tests kora_spirv_fixture)
+  add_dependencies(kora_integration_tests kora_dispatch_fixtures)
   target_compile_definitions(kora_integration_tests PRIVATE
-    KORA_SPIRV_FIXTURE_PATH="${KORA_SPIRV_FIXTURE}")
+    KORA_SPIRV_FIXTURE_PATH="${KORA_SPIRV_FIXTURE}"
+    KORA_VECTOR_ADD_FIXTURE_PATH="${KORA_VECTOR_ADD_FIXTURE}"
+    KORA_SAXPY_FIXTURE_PATH="${KORA_SAXPY_FIXTURE}")
 endif()
 
 if(TARGET kora-info)

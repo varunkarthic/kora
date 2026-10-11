@@ -216,6 +216,35 @@ Result<BufferInfo> BufferHandle::info() const {
     return inspect_locked(*state_, id_);
 }
 
+std::uint64_t BufferHandle::size_bytes() const noexcept {
+    if (state_ == nullptr) return 0;
+    std::lock_guard lock(state_->mutex);
+    const auto* record = state_->find(id_);
+    return record == nullptr ? 0 : record->size_bytes;
+}
+
+Result<std::vector<std::byte>> BufferHandle::read_bytes() const {
+    if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
+    std::lock_guard lock(state_->mutex);
+    const auto* record = state_->find(id_);
+    if (record == nullptr || record->pending_free)
+        return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    return record->host_shadow;
+}
+
+Status BufferHandle::write_bytes(std::span<const std::byte> bytes) const {
+    if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
+    std::lock_guard lock(state_->mutex);
+    auto* record = state_->find(id_);
+    if (record == nullptr || record->pending_free)
+        return Error(ErrorCode::StaleHandle, "buffer generation is stale or pending reclamation");
+    if (bytes.size() != record->host_shadow.size())
+        return Error(ErrorCode::InvalidArgument, "buffer write byte count does not match its capacity");
+    std::copy(bytes.begin(), bytes.end(), record->host_shadow.begin());
+    if (!bytes.empty()) return record->dirty_ranges.add({0, bytes.size()});
+    return ok_status();
+}
+
 Result<MappedBytes> BufferHandle::map(MapAccess access, std::uint64_t offset, std::uint64_t size) const {
     if (state_ == nullptr) return Error(ErrorCode::StaleHandle, "buffer handle is empty");
     std::lock_guard lock(state_->mutex);

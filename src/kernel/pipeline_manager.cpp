@@ -486,11 +486,10 @@ Result<VkPipelineLayout> PipelineManager::pipeline_layout(
     return layout;
 }
 
-Result<PipelineManager::PipelineRef> PipelineManager::create_pipeline(std::span<const std::uint32_t> module,
-                                                                      const KernelMetadata& metadata,
-                                                                      std::string_view entry_point,
-                                                                      std::string key,
-                                                                      std::uint64_t key_hash) {
+Result<PipelineManager::PipelineRef> PipelineManager::create_pipeline(
+    std::span<const std::uint32_t> module, const KernelMetadata& metadata,
+    std::span<const SpecializationConstantMetadata> specialization_values, std::string_view entry_point,
+    std::string key, std::uint64_t key_hash) {
     auto layouts = descriptor_layouts(metadata);
     if (!layouts) return std::move(layouts).error();
     auto layout = pipeline_layout(metadata, layouts.value());
@@ -510,8 +509,8 @@ Result<PipelineManager::PipelineRef> PipelineManager::create_pipeline(std::span<
 
     std::vector<VkSpecializationMapEntry> map_entries;
     std::vector<std::byte> specialization_data;
-    map_entries.reserve(metadata.specialization_constants.size());
-    for (const auto& item : metadata.specialization_constants)
+    map_entries.reserve(specialization_values.size());
+    for (const auto& item : specialization_values)
         append_specialization_value(specialization_data, map_entries, item);
     VkSpecializationInfo specialization{};
     specialization.mapEntryCount = static_cast<std::uint32_t>(map_entries.size());
@@ -546,6 +545,7 @@ Result<PipelineManager::PipelineRef> PipelineManager::create_pipeline(std::span<
     pipeline->handle = pipeline_handle;
     pipeline->layout = layout.value();
     pipeline->descriptor_set_layouts = std::move(layouts).value();
+    pipeline->bindings = metadata.bindings;
     pipeline->key_hash = key_hash;
     pipeline->owner = this;
     lru_.push_front(std::move(key));
@@ -557,11 +557,53 @@ Result<PipelineManager::PipelineRef> PipelineManager::create_pipeline(std::span<
 Result<PipelineManager::PipelineRef> PipelineManager::get_or_create(std::span<const std::uint32_t> module,
                                                                     const KernelMetadata& metadata,
                                                                     std::string_view entry_point) {
+    return get_or_create(module, metadata, metadata.specialization_constants, entry_point);
+}
+
+Result<PipelineManager::PipelineRef> PipelineManager::get_or_create(
+    std::span<const std::uint32_t> module, const KernelMetadata& metadata,
+    std::span<const SpecializationConstantMetadata> overrides, std::string_view entry_point) {
     std::lock_guard lock(mutex_);
     collect_retired();
     auto reflected = spirv::validate_and_reflect(module, metadata, capabilities_, entry_point);
     if (!reflected) return std::move(reflected).error();
-    auto pipeline_key = make_pipeline_key(module, metadata, entry_point, identity_);
+    auto resolved_metadata = metadata;
+    for (const auto& override : overrides) {
+        const auto original =
+            std::find_if(metadata.specialization_constants.begin(), metadata.specialization_constants.end(),
+                         [&](const auto& item) { return item.id == override.id; });
+        if (original == metadata.specialization_constants.end() || original->type != override.type)
+            return pipeline_error("specialization override has an unknown ID or mismatched type",
+                                  ErrorCode::InvalidArgument);
+    }
+    for (auto& value : resolved_metadata.specialization_constants) {
+        const auto override = std::find_if(overrides.begin(), overrides.end(),
+                                           [&](const auto& item) { return item.id == value.id; });
+        if (override != overrides.end()) value.default_value = override->default_value;
+    }
+    if (reflected.value().local_size_id_based) {
+        KernelMetadata reflected_metadata = metadata;
+        for (std::size_t dimension = 0; dimension < 3; ++dimension)
+            reflected_metadata.local_size[dimension] = reflected.value().local_size[dimension];
+        reflected = spirv::validate_and_reflect(module, reflected_metadata, capabilities_, entry_point);
+        if (!reflected) return std::move(reflected).error();
+        for (std::size_t dimension = 0; dimension < 3; ++dimension) {
+            const auto found =
+                std::find_if(resolved_metadata.specialization_constants.begin(),
+                             resolved_metadata.specialization_constants.end(), [&](const auto& item) {
+                                 return item.id == reflected.value().local_size_spec_ids[dimension];
+                             });
+            if (found == resolved_metadata.specialization_constants.end() || found->type != "u32" ||
+                !std::holds_alternative<std::uint64_t>(found->default_value) ||
+                std::get<std::uint64_t>(found->default_value) == 0 ||
+                std::get<std::uint64_t>(found->default_value) > UINT32_MAX)
+                return pipeline_error("LocalSizeId override must be a nonzero u32 specialization value",
+                                      ErrorCode::InvalidArgument);
+            resolved_metadata.local_size[dimension] =
+                static_cast<std::uint32_t>(std::get<std::uint64_t>(found->default_value));
+        }
+    }
+    auto pipeline_key = make_pipeline_key(module, resolved_metadata, entry_point, identity_);
     auto key = std::move(pipeline_key.serialized);
     const auto key_hash = pipeline_key.hash;
     const auto found = pipelines_.find(key);
@@ -572,7 +614,8 @@ Result<PipelineManager::PipelineRef> PipelineManager::get_or_create(std::span<co
         return PipelineRef(found->second.pipeline);
     }
     ++stats_.pipeline_cache_misses;
-    return create_pipeline(module, metadata, entry_point, std::move(key), key_hash);
+    return create_pipeline(module, resolved_metadata, resolved_metadata.specialization_constants, entry_point,
+                           std::move(key), key_hash);
 }
 
 void PipelineManager::evict_if_needed() {
