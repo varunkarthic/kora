@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-10-11
+
 - Add a thread-owned Vulkan command-pool set with preallocated reusable command buffers, per-slot
   completion tracking, one-time recording, and mock plus 10,000-submission integration coverage.
 
@@ -149,7 +151,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.20...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.1.21...HEAD
+[0.1.21]: https://github.com/varunkarthic/kora/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/varunkarthic/kora/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/varunkarthic/kora/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/varunkarthic/kora/compare/v0.1.17...v0.1.18
