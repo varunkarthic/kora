@@ -75,5 +75,32 @@ TEST(Verification, SizeMismatchIsNotEqual) {
     EXPECT_FALSE(VerificationPolicy{}.compare<float>(one, two).value());
 }
 
+TEST(Verification, ComparesByteSpansForFloatAndDoubleAndRejectsUnequalInfinities) {
+    const std::array<float, 2> first{1.0F, std::numeric_limits<float>::infinity()};
+    const std::array<float, 2> second{std::nextafter(1.0F, 2.0F), std::numeric_limits<float>::infinity()};
+    VerificationPolicy policy;
+    policy.mode = VerificationMode::ULP;
+    policy.max_ulps = 1;
+    auto equal = policy.compare_bytes(std::as_bytes(std::span(first)), std::as_bytes(std::span(second)),
+                                      VerificationDataType::Float32);
+    ASSERT_TRUE(equal);
+    EXPECT_TRUE(equal.value());
+
+    const std::array<double, 1> left{2.0};
+    const std::array<double, 1> right{2.0};
+    equal = policy.compare_bytes(std::as_bytes(std::span(left)), std::as_bytes(std::span(right)),
+                                 VerificationDataType::Float64);
+    ASSERT_TRUE(equal);
+    EXPECT_TRUE(equal.value());
+
+    const std::array<float, 1> positive_infinity{std::numeric_limits<float>::infinity()};
+    const std::array<float, 1> finite{std::numeric_limits<float>::max()};
+    policy.mode = VerificationMode::RelativeTolerance;
+    policy.tolerance = 1.0;
+    equal = policy.compare<float>(positive_infinity, finite);
+    ASSERT_TRUE(equal);
+    EXPECT_FALSE(equal.value());
+}
+
 }  // namespace
 }  // namespace kora

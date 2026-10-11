@@ -617,6 +617,10 @@ TEST(QueueContext, ExplicitWaitDistinguishesTimeoutFromDeviceLoss) {
     EXPECT_EQ(lost.error().code, ErrorCode::DeviceLost);
     EXPECT_FALSE(fault_state->healthy());
     EXPECT_EQ(fault_state->last_result(), VK_ERROR_DEVICE_LOST);
+    auto rejected = context->submit({});
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code, ErrorCode::DeviceLost);
+    EXPECT_EQ(mock.submit_calls.load(), 0U);
     EXPECT_TRUE(context->shutdown());
 }
 

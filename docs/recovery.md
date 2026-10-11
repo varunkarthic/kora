@@ -20,6 +20,13 @@ isolated: KORA continues initializing the remaining selected devices, records fa
 creation returns the first initialization error. Explicitly selected single-device policies remain
 fail-fast.
 
+`DispatchBuilder::verify_with()` opts a dispatch into duplicate execution across all initialized,
+non-quarantined devices. KORA withholds host publication until every device result is downloaded and
+compared. A mismatch returns `ValidationError`, marks writable outputs `DataLoss`, and quarantines all
+participants; the runtime cannot identify which device was wrong without an external oracle. The
+quarantine remains for that Runtime's lifetime. Comparator choices and supported output types are
+documented in `docs/api/verification.md`.
+
 An operation that was already submitted when loss is observed has undefined device-side outputs. KORA
 marks each writable buffer from that in-flight dispatch as lost; `BufferHandle::read_bytes()` and
 read-only or partial mappings then return `ErrorCode::DataLoss` rather than exposing a potentially

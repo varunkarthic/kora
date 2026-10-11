@@ -22,6 +22,7 @@
 
 #include "core/calibration.hpp"
 #include "core/device_caps.hpp"
+#include "core/device_initialization.hpp"
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
 #include "core/runtime_test_access.hpp"
@@ -40,6 +41,21 @@
 namespace kora {
 
 namespace detail {
+
+struct DeviceQuarantineRegistry {
+    mutable std::mutex mutex;
+    std::vector<DeviceId> devices;
+
+    void add(const DeviceId& id) {
+        std::lock_guard lock(mutex);
+        if (std::find(devices.begin(), devices.end(), id) == devices.end()) devices.push_back(id);
+    }
+
+    std::vector<DeviceId> snapshot() const {
+        std::lock_guard lock(mutex);
+        return devices;
+    }
+};
 
 struct BufferIdHash {
     std::size_t operator()(const BufferId& id) const noexcept {
@@ -69,6 +85,7 @@ struct KernelState {
 
 struct DispatchContext {
     std::atomic<bool> accepting_work{true};
+    std::atomic<bool> quarantined{false};
     std::shared_ptr<RuntimeBufferState> buffer_state;
     std::uint64_t runtime_id = 0;
     std::size_t device_index = 0;
@@ -117,6 +134,15 @@ struct DispatchContext {
         allocation_pools.clear();
     }
     ~DispatchContext() { release_buffers(); }
+};
+
+struct VerificationTargetSet {
+    struct Target {
+        DeviceId id;
+        std::shared_ptr<DispatchContext> context;
+    };
+    std::vector<Target> targets;
+    std::shared_ptr<DeviceQuarantineRegistry> quarantine;
 };
 
 void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
@@ -459,7 +485,8 @@ struct Runtime::Impl {
     vk::Loader loader;
     vk::Instance instance;
     std::vector<std::unique_ptr<DeviceEntry>> devices;
-    std::vector<DeviceId> quarantined_devices;
+    std::shared_ptr<detail::DeviceQuarantineRegistry> quarantine =
+        std::make_shared<detail::DeviceQuarantineRegistry>();
     std::uint64_t runtime_id = 0;
     std::filesystem::path calibration_directory;
     std::uint32_t calibration_budget_ms = 250;
@@ -482,9 +509,12 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }
 
 Result<Event> DispatchBuilder::submit() {
+    if (verification_policy_) return submit_verified();
     if (!context_ || !context_->accepting_work.load(std::memory_order_acquire) || !kernel_ ||
         !context_->pipelines || !context_->queue || !context_->device)
         return Error(ErrorCode::InvalidArgument, "dispatch builder has an invalid runtime or kernel");
+    if (context_->quarantined.load(std::memory_order_acquire))
+        return Error(ErrorCode::ValidationError, "device is quarantined after a verification mismatch");
     if (kernel_->runtime_id != context_->runtime_id || kernel_->device_index != context_->device_index)
         return Error(ErrorCode::InvalidArgument, "kernel was not loaded for this runtime device");
     auto metadata_status = validate_kernel_metadata(kernel_->metadata);
@@ -969,6 +999,220 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }
 }  // namespace
 
+Result<Event> DispatchBuilder::submit_verified() {
+    if (!verification_policy_ || !verification_targets_ || !context_ || !kernel_)
+        return Error(ErrorCode::InvalidArgument, "verified dispatch has no policy or runtime targets");
+    if (verification_targets_->targets.size() < 2)
+        return Error(ErrorCode::UnsupportedFeature,
+                     "duplicate verification requires at least two initialized, non-quarantined devices");
+    if (buffers_.size() != accesses_.size() || buffers_.size() != kernel_->metadata.bindings.size())
+        return Error(ErrorCode::InvalidKernelBinding, "dispatch buffer count does not match kernel metadata");
+    auto policy_valid = verification_policy_->validate();
+    if (!policy_valid) return std::move(policy_valid).error();
+
+    std::vector<std::size_t> output_indices;
+    std::unordered_set<BufferId, detail::BufferIdHash> unique_outputs;
+    std::vector<std::uint64_t> host_versions(buffers_.size());
+    for (std::size_t index = 0; index < buffers_.size(); ++index) {
+        if (accesses_[index] != KernelAccess::Read && unique_outputs.insert(buffers_[index].id()).second)
+            output_indices.push_back(index);
+    }
+    if (output_indices.empty())
+        return Error(ErrorCode::InvalidArgument, "verified dispatch requires at least one writable output");
+    for (std::size_t index = 0; index < buffers_.size(); ++index) {
+        if (!buffers_[index]) return Error(ErrorCode::InvalidKernelBinding, "dispatch has an empty buffer");
+        if (accesses_[index] != KernelAccess::Read) {
+            const auto element_size =
+                verification_type_ == VerificationDataType::Float32 ? sizeof(float) : sizeof(double);
+            if (buffers_[index].size_bytes() % element_size != 0 &&
+                verification_policy_->mode != VerificationMode::Custom)
+                return Error(ErrorCode::InvalidArgument,
+                             "verified output size is not a multiple of the selected floating-point type");
+        }
+        auto version = buffers_[index].host_version();
+        if (!version) return std::move(version).error();
+        host_versions[index] = version.value();
+    }
+
+    std::vector<Event> dispatch_events;
+    std::vector<detail::VerificationTargetSet::Target> targets;
+    std::vector<std::shared_ptr<const detail::KernelState>> kernels;
+    dispatch_events.reserve(verification_targets_->targets.size());
+    targets.reserve(verification_targets_->targets.size());
+    kernels.reserve(verification_targets_->targets.size());
+    for (const auto& target : verification_targets_->targets) {
+        if (!target.context || target.context->quarantined.load(std::memory_order_acquire)) continue;
+        if (!target.context->accepting_work.load(std::memory_order_acquire))
+            return Error(ErrorCode::Cancelled, "a verification target is shutting down");
+        auto reflection = detail::spirv::validate_and_reflect(
+            kernel_->words, kernel_->metadata, detail::spirv::capabilities_from(*target.context->info),
+            kernel_->entry_point);
+        if (!reflection) return std::move(reflection).error();
+        auto target_kernel = std::make_shared<detail::KernelState>();
+        target_kernel->entry_point = kernel_->entry_point;
+        target_kernel->metadata = kernel_->metadata;
+        target_kernel->words = kernel_->words;
+        target_kernel->runtime_id = kernel_->runtime_id;
+        target_kernel->device_index = target.id.index;
+        targets.push_back(target);
+        kernels.push_back(std::move(target_kernel));
+    }
+    if (targets.size() < 2)
+        return Error(ErrorCode::UnsupportedFeature,
+                     "fewer than two verification targets support this kernel");
+
+    std::optional<Error> submission_error;
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+        const auto& target = targets[index];
+        const auto& target_kernel = kernels[index];
+        DispatchBuilder duplicate(target.context, target_kernel);
+        duplicate.global_size_ = global_size_;
+        duplicate.buffers_ = buffers_;
+        duplicate.accesses_ = accesses_;
+        duplicate.push_constants_ = push_constants_;
+        duplicate.defer_readback_ = true;
+        duplicate.priority_ = priority_;
+        auto submitted = duplicate.submit();
+        if (!submitted) {
+            submission_error = std::move(submitted).error();
+            break;
+        }
+        dispatch_events.push_back(std::move(submitted).value());
+    }
+    if (dispatch_events.empty()) return std::move(*submission_error);
+
+    auto dispatches_complete = Event::when_all(dispatch_events);
+    if (!dispatches_complete) return std::move(dispatches_complete).error();
+    auto promise = std::make_shared<detail::EventPromise>();
+    const auto verified_event = promise->event();
+    auto registered = dispatches_complete.value().on_complete(
+        [promise, targets = std::move(targets), kernels = std::move(kernels), buffers = buffers_,
+         output_indices = std::move(output_indices), host_versions = std::move(host_versions),
+         policy = *verification_policy_, type = verification_type_,
+         submission_error = std::move(submission_error),
+         registry = verification_targets_->quarantine](Status dispatch_status) mutable {
+            (void)kernels;
+            const auto mark_outputs_lost = [&] {
+                for (const auto index : output_indices) (void)buffers[index].mark_data_lost();
+            };
+            if (!dispatch_status) {
+                mark_outputs_lost();
+                promise->complete(std::move(dispatch_status));
+                return;
+            }
+            if (submission_error) {
+                mark_outputs_lost();
+                promise->complete(std::move(*submission_error));
+                return;
+            }
+            auto snapshots = std::make_shared<std::vector<std::vector<std::vector<std::byte>>>>(
+                targets.size(), std::vector<std::vector<std::byte>>(output_indices.size()));
+            std::vector<Event> downloads;
+            downloads.reserve(targets.size() * output_indices.size());
+            for (std::size_t target_index = 0; target_index < targets.size(); ++target_index) {
+                const auto& context = targets[target_index].context;
+                for (std::size_t output_index = 0; output_index < output_indices.size(); ++output_index) {
+                    const auto buffer_index = output_indices[output_index];
+                    const auto& handle = buffers[buffer_index];
+                    auto device_buffer =
+                        ensure_transfer_buffer(context, handle, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                    if (!device_buffer) {
+                        mark_outputs_lost();
+                        promise->complete(Status(std::move(device_buffer).error()));
+                        return;
+                    }
+                    auto& bytes = (*snapshots)[target_index][output_index];
+                    bytes.resize(static_cast<std::size_t>(device_buffer.value().size));
+                    detail::QueueWait dependency;
+                    if (context->transfer_queue != context->queue) {
+                        dependency.semaphore = context->queue->completion_semaphore();
+                        {
+                            std::lock_guard lock(context->submit_mutex);
+                            const auto last_use = context->device_last_use.find(handle.id());
+                            dependency.value =
+                                last_use == context->device_last_use.end() ? 0 : last_use->second;
+                        }
+                        dependency.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                    }
+                    auto downloaded =
+                        context->transfers->download(device_buffer.value(), 0, bytes, dependency);
+                    if (!downloaded) {
+                        mark_outputs_lost();
+                        promise->complete(Status(std::move(downloaded).error()));
+                        return;
+                    }
+                    context->download_count.fetch_add(1, std::memory_order_relaxed);
+                    downloads.push_back(std::move(downloaded).value());
+                }
+            }
+            auto all_downloads = Event::when_all(downloads);
+            if (!all_downloads) {
+                mark_outputs_lost();
+                promise->complete(Status(std::move(all_downloads).error()));
+                return;
+            }
+            (void)all_downloads.value().on_complete(
+                [promise, targets = std::move(targets), buffers = std::move(buffers), snapshots,
+                 output_indices = std::move(output_indices), host_versions = std::move(host_versions),
+                 policy = std::move(policy), type,
+                 registry = std::move(registry)](Status download_status) mutable {
+                    const auto mark_outputs_lost = [&] {
+                        for (const auto index : output_indices) (void)buffers[index].mark_data_lost();
+                    };
+                    if (!download_status) {
+                        mark_outputs_lost();
+                        promise->complete(std::move(download_status));
+                        return;
+                    }
+                    for (std::size_t output = 0; output < output_indices.size(); ++output) {
+                        const auto& reference = (*snapshots)[0][output];
+                        for (std::size_t target = 1; target < targets.size(); ++target) {
+                            auto equal = policy.compare_bytes(reference, (*snapshots)[target][output], type);
+                            if (!equal) {
+                                mark_outputs_lost();
+                                promise->complete(Status(std::move(equal).error()));
+                                return;
+                            }
+                            if (equal.value()) continue;
+                            mark_outputs_lost();
+                            for (const auto& participant : targets) {
+                                participant.context->quarantined.store(true, std::memory_order_release);
+                                if (registry) registry->add(participant.id);
+                            }
+                            promise->complete(
+                                Error(ErrorCode::ValidationError,
+                                      "duplicate dispatch outputs differ; all participants quarantined"));
+                            return;
+                        }
+                    }
+                    for (std::size_t output = 0; output < output_indices.size(); ++output) {
+                        const auto index = output_indices[output];
+                        auto copied = buffers[index].write_bytes_if_version((*snapshots)[0][output],
+                                                                            host_versions[index]);
+                        if (!copied) {
+                            mark_outputs_lost();
+                            promise->complete(Status(std::move(copied).error()));
+                            return;
+                        }
+                        if (!copied.value().written) {
+                            promise->complete(Error(ErrorCode::StaleHandle,
+                                                    "host buffer changed during verified dispatch"));
+                            return;
+                        }
+                        for (const auto& target : targets) {
+                            std::lock_guard lock(target.context->submit_mutex);
+                            target.context->resident_host_versions[buffers[index].id()] =
+                                copied.value().host_version;
+                            target.context->device_newer_buffers.erase(buffers[index].id());
+                        }
+                    }
+                    promise->complete(ok_status());
+                });
+        });
+    if (!registered) promise->complete(Status(std::move(registered).error()));
+    return verified_event;
+}
+
 Runtime::Runtime() = default;
 Runtime::Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options)
     : impl_(std::move(impl)), options_(std::move(options)) {}
@@ -1057,6 +1301,12 @@ DispatchBuilder& DispatchBuilder::defer_readback() {
 
 DispatchBuilder& DispatchBuilder::priority(DispatchPriority priority) {
     priority_ = priority;
+    return *this;
+}
+
+DispatchBuilder& DispatchBuilder::verify_with(VerificationPolicy policy, VerificationDataType type) {
+    verification_policy_ = std::move(policy);
+    verification_type_ = type;
     return *this;
 }
 
@@ -1149,8 +1399,19 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
     const auto selected_device =
         std::find_if(impl_->devices.begin(), impl_->devices.end(),
                      [&](const auto& device) { return device->id.index == kernel.state_->device_index; });
-    return DispatchBuilder(selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr,
-                           kernel.state_);
+    DispatchBuilder builder(selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr,
+                            kernel.state_);
+    if (selected_device != impl_->devices.end()) {
+        auto targets = std::make_shared<detail::VerificationTargetSet>();
+        targets->quarantine = impl_->quarantine;
+        targets->targets.reserve(impl_->devices.size());
+        for (const auto& device : impl_->devices) {
+            if (device->dispatch->quarantined.load(std::memory_order_acquire)) continue;
+            targets->targets.push_back({device->id, device->dispatch});
+        }
+        builder.verification_targets_ = std::move(targets);
+    }
+    return builder;
 }
 
 Result<Runtime> Runtime::create(const RuntimeOptions& options) {
@@ -1205,79 +1466,67 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         (void)impl->performance_database->load(impl->performance_database_path,
                                                static_cast<std::uint64_t>(now_ms));
     }
-    std::optional<Error> first_device_error;
     const bool isolate_device_failures = resolved.device_policy == DevicePolicy::AllEligible;
-    for (const auto& id : selected.value()) {
-        const auto initialize_device = [&]() -> Status {
-            if (id.index >= physical_devices.value().size()) {
-                return Error(ErrorCode::InternalInvariantViolation,
-                             "device selector returned an index outside the Vulkan enumeration");
-            }
-            const auto& physical = physical_devices.value()[id.index];
-            vk::DeviceOptions device_options;
-            device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
-            device_options.enable_synchronization2 = !resolved.force_legacy_sync;
-            const bool core_12 = physical.properties.apiVersion >= VK_API_VERSION_1_2;
-            const bool timeline_available =
-                core_12 ? physical.vulkan12_features.timelineSemaphore == VK_TRUE
-                        : physical.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
-            device_options.enable_dedicated_transfer_queue =
-                !resolved.force_legacy_sync && timeline_available;
-            auto logical_device = impl->instance.create_device(physical, device_options);
-            if (!logical_device) return std::move(logical_device).error();
-            auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
-            auto memory_manager =
-                detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
-            if (!memory_manager) return std::move(memory_manager).error();
-            detail::kernel::PipelineCacheIdentity pipeline_identity;
-            pipeline_identity.vendor_id = physical.properties.vendorID;
-            pipeline_identity.device_id = physical.properties.deviceID;
-            pipeline_identity.driver_version = physical.properties.driverVersion;
-            std::copy(std::begin(physical.id_properties.deviceUUID),
-                      std::end(physical.id_properties.deviceUUID), pipeline_identity.device_uuid.begin());
-            std::copy(std::begin(physical.id_properties.driverUUID),
-                      std::end(physical.id_properties.driverUUID), pipeline_identity.driver_uuid.begin());
-            const auto cache_key = id.uuid.empty() ? std::to_string(pipeline_identity.vendor_id) + "-" +
-                                                         std::to_string(pipeline_identity.device_id) + "-" +
-                                                         std::to_string(pipeline_identity.driver_version)
-                                                   : id.uuid;
-            auto pipeline_manager = detail::kernel::PipelineManager::create(
-                logical_device.value().api(), logical_device.value().handle(),
-                detail::spirv::capabilities_from(info), pipeline_identity,
-                std::filesystem::path(resolved.cache_dir) / "pipelines" / (cache_key + ".bin"));
-            if (!pipeline_manager) return std::move(pipeline_manager).error();
-            auto entry = std::make_unique<Impl::DeviceEntry>(
-                id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
-                std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
-                physical.calibrated_time_domains);
-            entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
-            entry->driver_version = physical.properties.driverVersion;
-            auto initialized = entry->initialize();
-            if (!initialized) return std::move(initialized).error();
-            if (impl->calibrate_on_start)
-                entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
-            entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
-            entry->dispatch->performance_database = impl->performance_database;
-            entry->dispatch->performance_database_path = impl->performance_database_path;
-            impl->devices.push_back(std::move(entry));
-            return {};
-        };
-        auto initialized = initialize_device();
-        if (!initialized) {
-            auto device_error = std::move(initialized).error();
-            device_error.with_device("index " + std::to_string(id.index) +
-                                     (id.uuid.empty() ? std::string{} : " uuid " + id.uuid));
-            if (!first_device_error) first_device_error = device_error;
-            if (!isolate_device_failures) return std::move(*first_device_error);
-            impl->quarantined_devices.push_back(id);
-            KORA_LOG(Recovery, Warn, "Quarantined device {} during AllEligible initialization: {}", id.index,
-                     device_error.describe());
+    const auto initialize_device = [&](const DeviceId& id) -> Status {
+        if (id.index >= physical_devices.value().size()) {
+            return Error(ErrorCode::InternalInvariantViolation,
+                         "device selector returned an index outside the Vulkan enumeration");
         }
-    }
-    if (impl->devices.empty()) {
-        if (first_device_error) return std::move(*first_device_error);
-        return Error(ErrorCode::NoEligibleDevice, "No selected device could be initialized");
-    }
+        const auto& physical = physical_devices.value()[id.index];
+        vk::DeviceOptions device_options;
+        device_options.enable_timeline_semaphore = !resolved.force_legacy_sync;
+        device_options.enable_synchronization2 = !resolved.force_legacy_sync;
+        const bool core_12 = physical.properties.apiVersion >= VK_API_VERSION_1_2;
+        const bool timeline_available =
+            core_12 ? physical.vulkan12_features.timelineSemaphore == VK_TRUE
+                    : physical.timeline_semaphore_features.timelineSemaphore == VK_TRUE;
+        device_options.enable_dedicated_transfer_queue = !resolved.force_legacy_sync && timeline_available;
+        auto logical_device = impl->instance.create_device(physical, device_options);
+        if (!logical_device) return std::move(logical_device).error();
+        auto info = detail::DeviceCaps::from_vulkan(physical).to_device_info();
+        auto memory_manager = detail::MemoryManager::create(physical, info, resolved.memory_budget_fraction);
+        if (!memory_manager) return std::move(memory_manager).error();
+        detail::kernel::PipelineCacheIdentity pipeline_identity;
+        pipeline_identity.vendor_id = physical.properties.vendorID;
+        pipeline_identity.device_id = physical.properties.deviceID;
+        pipeline_identity.driver_version = physical.properties.driverVersion;
+        std::copy(std::begin(physical.id_properties.deviceUUID), std::end(physical.id_properties.deviceUUID),
+                  pipeline_identity.device_uuid.begin());
+        std::copy(std::begin(physical.id_properties.driverUUID), std::end(physical.id_properties.driverUUID),
+                  pipeline_identity.driver_uuid.begin());
+        const auto cache_key = id.uuid.empty() ? std::to_string(pipeline_identity.vendor_id) + "-" +
+                                                     std::to_string(pipeline_identity.device_id) + "-" +
+                                                     std::to_string(pipeline_identity.driver_version)
+                                               : id.uuid;
+        auto pipeline_manager = detail::kernel::PipelineManager::create(
+            logical_device.value().api(), logical_device.value().handle(),
+            detail::spirv::capabilities_from(info), pipeline_identity,
+            std::filesystem::path(resolved.cache_dir) / "pipelines" / (cache_key + ".bin"));
+        if (!pipeline_manager) return std::move(pipeline_manager).error();
+        auto entry = std::make_unique<Impl::DeviceEntry>(
+            id, std::move(info), std::move(memory_manager).value(), std::move(logical_device).value(),
+            std::move(pipeline_manager).value(), impl->runtime_id, resolved.force_legacy_sync,
+            physical.calibrated_time_domains);
+        entry->configure_budget_refresh(impl->instance, resolved.memory_budget_fraction);
+        entry->driver_version = physical.properties.driverVersion;
+        auto initialized = entry->initialize();
+        if (!initialized) return std::move(initialized).error();
+        if (impl->calibrate_on_start)
+            entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
+        entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
+        entry->dispatch->performance_database = impl->performance_database;
+        entry->dispatch->performance_database_path = impl->performance_database_path;
+        impl->devices.push_back(std::move(entry));
+        return {};
+    };
+    auto device_initialization = detail::initialize_selected_devices(
+        selected.value(), isolate_device_failures, initialize_device,
+        [&](const DeviceId& id) { impl->quarantine->add(id); },
+        [](const DeviceId& id, const Error& error) {
+            KORA_LOG(Recovery, Warn, "Quarantined device {} during AllEligible initialization: {}", id.index,
+                     error.describe());
+        });
+    if (!device_initialization) return std::move(device_initialization).error();
     RuntimeOptions effective_options;
     effective_options.enable_validation = resolved.enable_validation;
     effective_options.device_policy = resolved.device_policy;
@@ -1310,6 +1559,16 @@ Status Runtime::recover() {
     auto created = Runtime::create(options_);
     if (!created) return Status(std::move(created).error());
     auto replacement = std::move(created).value();
+    auto new_quarantines = replacement.impl_->quarantine->snapshot();
+    for (const auto& id : new_quarantines) impl_->quarantine->add(id);
+    replacement.impl_->quarantine = impl_->quarantine;
+    for (const auto& id : replacement.impl_->quarantine->snapshot()) {
+        const auto quarantined =
+            std::find_if(replacement.impl_->devices.begin(), replacement.impl_->devices.end(),
+                         [&](const auto& entry) { return entry->id == id; });
+        if (quarantined != replacement.impl_->devices.end())
+            (*quarantined)->dispatch->quarantined.store(true, std::memory_order_release);
+    }
     {
         std::scoped_lock lock(impl_->cpu_mutex, replacement.impl_->cpu_mutex);
         replacement.impl_->cpu_fallbacks = impl_->cpu_fallbacks;
@@ -1342,7 +1601,8 @@ std::vector<DeviceId> Runtime::devices() const {
 }
 
 std::vector<DeviceId> Runtime::quarantined_devices() const {
-    return impl_ ? impl_->quarantined_devices : std::vector<DeviceId>{};
+    if (!impl_) return {};
+    return impl_->quarantine->snapshot();
 }
 
 Result<DeviceInfo> Runtime::device_info(const DeviceId& id) const {

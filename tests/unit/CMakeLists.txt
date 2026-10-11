@@ -10,6 +10,7 @@ kora_add_test(kora_unit_tests unit
     test_checked.cpp
     test_device_caps.cpp
     test_device_selection.cpp
+    test_device_initialization.cpp
     test_options.cpp
     test_calibration.cpp
     test_performance_db.cpp
