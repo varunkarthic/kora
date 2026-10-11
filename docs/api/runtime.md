@@ -23,6 +23,9 @@ authoritative host contents upload lazily on their next use. Outputs of in-fligh
 `DataLoss` until replaced with a complete `write_bytes()` call. Existing `Kernel` values are bound to
 the old Runtime and must be loaded again. Recovery drains old queue callbacks before returning; if
 replacement creation fails, the original failed Runtime remains intact.
+`device_fault_report(id)` returns best-effort extension records when `VK_EXT_device_fault` is
+supported; KORA bounds the report to 256 address and vendor records and never persists or logs these
+diagnostic details. Query the report before `recover()`, which replaces the per-device fault state.
 
 ## Memory snapshots
 

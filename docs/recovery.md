@@ -30,11 +30,13 @@ Automatic task rescheduling is not attempted because the runtime cannot prove ar
 idempotent or their outputs complete. Applications should resubmit only work whose inputs remain
 authoritative and whose semantics permit retry.
 
-The current fault state retains the result code but does not yet query `VK_EXT_device_fault` records or
-emit vendor-specific fault addresses. The extension is optional and those diagnostics must remain
-best-effort; they cannot be used as a correctness dependency. Timeouts remain poll boundaries and do
-not mark a device unhealthy. A future recovery layer may add explicit Runtime recreation and
-authoritative-host-buffer restoration without changing this fail-closed behavior.
+When `VK_EXT_device_fault` and its `deviceFault` feature are available, KORA enables the feature and
+captures the extension's description, bounded address records, and vendor records after first loss.
+`Runtime::device_fault_report(device)` returns the snapshot; reports are best-effort, capped at 256
+records per category, and never written to logs or persistent files. Query this report before calling
+`recover()`, because recovery replaces the per-device fault state. Vendor binary capture is not
+enabled. Unsupported devices return a report with `supported == false`. These diagnostics are not a
+correctness dependency. Timeouts remain poll boundaries and do not mark a device unhealthy.
 
 | API/internal state | Contract |
 | --- | --- |
@@ -43,6 +45,7 @@ authoritative-host-buffer restoration without changing this fail-closed behavior
 | `QueueContext::submit()` | Rejects work on a lost device before submission; already queued work completes with `DeviceLost`. |
 | Device-loss `Error` | Preserves `vk_result` and directs callers to `Runtime::recover()`; no same-device retry is claimed. |
 | `Runtime::recover()` | Requires an observed loss, builds replacement devices transactionally, retains host buffer handles and CPU fallbacks, invalidates old kernels, and drains the old queues before returning. |
+| `Runtime::device_fault_report(device)` | Returns an optional bounded `VK_EXT_device_fault` snapshot captured after loss; unsupported devices return `supported == false`. |
 
 Fault-injection coverage blocks the first submit, injects device loss, queues later work, and verifies
 deterministic failure without a completion-thread wait or deadlock. A sibling queue sharing the same

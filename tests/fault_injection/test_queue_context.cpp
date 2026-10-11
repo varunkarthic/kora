@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -13,6 +14,38 @@
 
 namespace kora::vk {
 namespace {
+
+TEST(DeviceFaultState, CapturesOptionalDiagnosticsOnlyOnceAcrossConcurrentLossReports) {
+    DeviceFaultState state;
+    std::atomic<uint32_t> queries{0};
+    state.set_diagnostics_query([&] {
+        ++queries;
+        DeviceFaultSnapshot report;
+        report.query_result = VK_SUCCESS;
+        report.description = "injected diagnostic";
+        report.addresses.push_back({3, 0x1234, 16});
+        report.vendor_records.push_back({"injected vendor record", 7, 9});
+        return report;
+    });
+
+    std::array<std::thread, 8> reporters;
+    for (auto& reporter : reporters) reporter = std::thread([&] { state.mark_lost(VK_ERROR_DEVICE_LOST); });
+    for (auto& reporter : reporters) reporter.join();
+
+    const auto report = state.diagnostics();
+    EXPECT_FALSE(state.healthy());
+    EXPECT_EQ(state.last_result(), VK_ERROR_DEVICE_LOST);
+    EXPECT_EQ(queries.load(), 1U);
+    EXPECT_TRUE(report.supported);
+    EXPECT_TRUE(report.queried);
+    EXPECT_FALSE(report.truncated);
+    EXPECT_EQ(report.query_result, VK_SUCCESS);
+    EXPECT_EQ(report.description, "injected diagnostic");
+    ASSERT_EQ(report.addresses.size(), 1U);
+    EXPECT_EQ(report.addresses.front().reported_address, 0x1234U);
+    ASSERT_EQ(report.vendor_records.size(), 1U);
+    EXPECT_EQ(report.vendor_records.front().code, 7U);
+}
 
 struct Mock {
     std::atomic<uint64_t> submit_calls{0};

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <vulkan/vulkan.h>
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/runtime_test_access.hpp"
 #include "kora/runtime.hpp"
 #include "kora/task_partition.hpp"
 #include "support/vulkan_test.hpp"
@@ -108,6 +110,37 @@ TEST(Runtime, HonorsExplicitDeviceIndexSelection) {
     const auto devices = runtime.value().devices();
     ASSERT_EQ(devices.size(), 1U);
     EXPECT_EQ(devices.front().index, 0U);
+}
+
+TEST(Runtime, RecoversTransactionallyAndRetainsAuthoritativeBufferHandles) {
+    auto created = kora::Runtime::create();
+    if (!created && (created.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     created.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(created) << created.error().describe();
+    auto runtime = std::move(created).value();
+    const auto before_devices = runtime.devices();
+    ASSERT_FALSE(before_devices.empty());
+    auto buffer_result = runtime.create_buffer(4);
+    ASSERT_TRUE(buffer_result) << buffer_result.error().describe();
+    auto buffer = std::move(buffer_result).value();
+    const std::array<std::byte, 4> original{std::byte{0x10}, std::byte{0x20}, std::byte{0x30},
+                                            std::byte{0x40}};
+    ASSERT_TRUE(buffer.write_bytes(original));
+    ASSERT_TRUE(kora::detail::RuntimeTestAccess::mark_device_lost(runtime, before_devices.front()));
+    auto report = runtime.device_fault_report(before_devices.front());
+    ASSERT_TRUE(report) << report.error().describe();
+    EXPECT_EQ(report.value().loss_result, VK_ERROR_DEVICE_LOST);
+
+    ASSERT_TRUE(runtime.recover());
+    EXPECT_EQ(runtime.devices(), before_devices);
+    const auto restored = buffer.read_bytes();
+    ASSERT_TRUE(restored) << restored.error().describe();
+    EXPECT_EQ(restored.value(), std::vector<std::byte>(original.begin(), original.end()));
+
+    auto subsequent_buffer = runtime.create_buffer(8);
+    ASSERT_TRUE(subsequent_buffer) << subsequent_buffer.error().describe();
 }
 
 TEST(Runtime, StagesOutputsAcrossEverySelectedDevicePairThroughHostMemory) {

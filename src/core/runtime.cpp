@@ -24,6 +24,7 @@
 #include "core/device_caps.hpp"
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
+#include "core/runtime_test_access.hpp"
 #include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "memory/eviction.hpp"
@@ -207,6 +208,62 @@ struct Runtime::Impl {
               calibrated_time_domains(std::move(calibrated_time_domains)) {}
 
         Status initialize() {
+#ifdef VK_EXT_device_fault
+            if (device.api().get_device_fault_info != nullptr) {
+                const auto get_fault_info = device.api().get_device_fault_info;
+                const auto logical_device = device.handle();
+                fault_state->set_diagnostics_query([get_fault_info, logical_device] {
+                    vk::DeviceFaultSnapshot snapshot;
+                    snapshot.supported = true;
+                    VkDeviceFaultCountsEXT counts{};
+                    counts.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT;
+                    VkResult result = get_fault_info(logical_device, &counts, nullptr);
+                    snapshot.query_result = result;
+                    if (result != VK_SUCCESS) return snapshot;
+
+                    constexpr std::uint32_t kMaximumFaultRecords = 256;
+                    const auto address_capacity = std::min(counts.addressInfoCount, kMaximumFaultRecords);
+                    const auto vendor_capacity = std::min(counts.vendorInfoCount, kMaximumFaultRecords);
+                    snapshot.truncated = counts.addressInfoCount > address_capacity ||
+                                         counts.vendorInfoCount > vendor_capacity;
+                    std::vector<VkDeviceFaultAddressInfoEXT> addresses(address_capacity);
+                    std::vector<VkDeviceFaultVendorInfoEXT> vendors(vendor_capacity);
+                    VkDeviceFaultInfoEXT info{};
+                    info.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT;
+                    info.pAddressInfos = addresses.data();
+                    info.pVendorInfos = vendors.data();
+                    counts.addressInfoCount = address_capacity;
+                    counts.vendorInfoCount = vendor_capacity;
+                    counts.vendorBinarySize = 0;
+                    result = get_fault_info(logical_device, &counts, &info);
+                    snapshot.query_result = result;
+                    snapshot.truncated = snapshot.truncated || result == VK_INCOMPLETE;
+                    const auto description_end =
+                        std::find(std::begin(info.description), std::end(info.description), '\0');
+                    snapshot.description.assign(std::begin(info.description), description_end);
+                    const auto returned_addresses = std::min(counts.addressInfoCount, address_capacity);
+                    snapshot.addresses.reserve(returned_addresses);
+                    for (std::uint32_t index = 0; index < returned_addresses; ++index) {
+                        const auto& value = addresses[index];
+                        snapshot.addresses.push_back({static_cast<std::uint32_t>(value.addressType),
+                                                      value.reportedAddress, value.addressPrecision});
+                    }
+                    const auto returned_vendors = std::min(counts.vendorInfoCount, vendor_capacity);
+                    snapshot.vendor_records.reserve(returned_vendors);
+                    for (std::uint32_t index = 0; index < returned_vendors; ++index) {
+                        const auto& value = vendors[index];
+                        const auto vendor_description_end =
+                            std::find(std::begin(value.description), std::end(value.description), '\0');
+                        snapshot.vendor_records.push_back(
+                            {std::string(std::begin(value.description), vendor_description_end),
+                             value.vendorFaultCode, value.vendorFaultData});
+                    }
+                    snapshot.truncated = snapshot.truncated || counts.addressInfoCount > address_capacity ||
+                                         counts.vendorInfoCount > vendor_capacity;
+                    return snapshot;
+                });
+            }
+#endif
             vk::QueueContext::CoalescingOptions coalescing;
             coalescing.enabled = true;
             auto queue_result =
@@ -1243,6 +1300,16 @@ Status Runtime::recover() {
     return {};
 }
 
+Status detail::RuntimeTestAccess::mark_device_lost(Runtime& runtime, const DeviceId& id) {
+    if (!runtime.impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(runtime.impl_->devices.begin(), runtime.impl_->devices.end(),
+                                    [&](const auto& entry) { return entry->id == id; });
+    if (found == runtime.impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    (*found)->fault_state->mark_lost(VK_ERROR_DEVICE_LOST, false);
+    return {};
+}
+
 std::vector<DeviceId> Runtime::devices() const {
     std::vector<DeviceId> ids;
     if (!impl_) return ids;
@@ -1326,6 +1393,30 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
                                  latest.duration_nanoseconds,
                                  latest.host_timestamp_nanoseconds,
                                  latest.calibration_deviation_nanoseconds};
+}
+
+Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                    [&](const auto& device) { return device->id == id; });
+    if (found == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    const auto& entry = **found;
+    const auto captured = entry.fault_state->diagnostics();
+    DeviceFaultReport report;
+    report.supported = captured.supported;
+    report.queried = captured.queried;
+    report.truncated = captured.truncated;
+    report.loss_result = static_cast<std::int32_t>(entry.fault_state->last_result());
+    report.query_result = captured.query_result;
+    report.description = captured.description;
+    report.addresses.reserve(captured.addresses.size());
+    for (const auto& address : captured.addresses)
+        report.addresses.push_back({address.type, address.reported_address, address.precision});
+    report.vendor_records.reserve(captured.vendor_records.size());
+    for (const auto& vendor : captured.vendor_records)
+        report.vendor_records.push_back({vendor.description, vendor.code, vendor.data});
+    return report;
 }
 
 Result<Event> Runtime::readback(const BufferHandle& buffer) const {

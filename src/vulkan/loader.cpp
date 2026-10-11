@@ -71,6 +71,9 @@ struct DeviceState {
     PFN_vkDestroyQueryPool destroy_query_pool = nullptr;
     PFN_vkGetQueryPoolResults get_query_pool_results = nullptr;
     PFN_vkGetCalibratedTimestampsKHR get_calibrated_timestamps = nullptr;
+#ifdef VK_EXT_device_fault
+    PFN_vkGetDeviceFaultInfoEXT get_device_fault_info = nullptr;
+#endif
     PFN_vkCreateBuffer create_buffer = nullptr;
     PFN_vkDestroyBuffer destroy_buffer = nullptr;
     PFN_vkGetBufferMemoryRequirements get_buffer_memory_requirements = nullptr;
@@ -1042,6 +1045,13 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     const bool sync2 = options.enable_synchronization2 &&
                        (core13 ? physical_device.vulkan13_features.synchronization2 == VK_TRUE
                                : physical_device.synchronization2_features.synchronization2 == VK_TRUE);
+#ifdef VK_EXT_device_fault
+    const bool device_fault = options.enable_device_fault_diagnostics &&
+                              has_extension(physical_device.extensions, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) &&
+                              physical_device.device_fault_features_ext.deviceFault == VK_TRUE;
+#else
+    const bool device_fault = false;
+#endif
 
     std::vector<const char*> extensions;
     auto enable_extension = [&](const char* name) {
@@ -1054,6 +1064,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     }
     if (!core12 && descriptor_indexing) enable_extension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
     if (!core13 && sync2) enable_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+#ifdef VK_EXT_device_fault
+    if (device_fault) enable_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+#endif
     enable_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
     enable_extension(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
     enable_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
@@ -1066,6 +1079,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     VkPhysicalDeviceBufferDeviceAddressFeaturesEXT bda_features_ext{};
     VkPhysicalDeviceDescriptorIndexingFeatures descriptor_features{};
     VkPhysicalDeviceSynchronization2Features sync2_features{};
+#ifdef VK_EXT_device_fault
+    VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};
+#endif
     if (core12) {
         features12.timelineSemaphore = timeline;
         features12.bufferDeviceAddress = bda;
@@ -1113,6 +1129,14 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
         append_query_structure(feature_chain, sync2_features,
                                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES);
     }
+#ifdef VK_EXT_device_fault
+    if (device_fault) {
+        device_fault_features.deviceFault = VK_TRUE;
+        device_fault_features.deviceFaultVendorBinary = VK_FALSE;
+        append_query_structure(feature_chain, device_fault_features,
+                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT);
+    }
+#endif
 
     VkPhysicalDeviceFeatures base_features{};
     base_features.robustBufferAccess = physical_device.features.robustBufferAccess;
@@ -1169,7 +1193,7 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     device_state->buffer_memory_info.memory_properties = physical_device.memory_properties;
     device_state->buffer_memory_info.memory_type_count = physical_device.memory_properties.memoryTypeCount;
     device_state->buffer_memory_info.properties = physical_device.properties;
-    device_state->enabled_features = {timeline, bda, descriptor_indexing, sync2};
+    device_state->enabled_features = {timeline, bda, descriptor_indexing, sync2, device_fault};
     for (const char* extension : extensions) device_state->enabled_extensions.emplace_back(extension);
 
     auto api_state = std::make_shared<DeviceState>();
@@ -1229,6 +1253,11 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     if (api_state->get_calibrated_timestamps == nullptr)
         api_state->get_calibrated_timestamps = load_device_function<PFN_vkGetCalibratedTimestampsKHR>(
             get_device_proc, device_state->device, "vkGetCalibratedTimestampsEXT");
+#ifdef VK_EXT_device_fault
+    if (device_fault)
+        api_state->get_device_fault_info = load_device_function<PFN_vkGetDeviceFaultInfoEXT>(
+            get_device_proc, device_state->device, "vkGetDeviceFaultInfoEXT");
+#endif
     api_state->create_buffer =
         load_device_function<PFN_vkCreateBuffer>(get_device_proc, device_state->device, "vkCreateBuffer");
     api_state->destroy_buffer =
@@ -1339,6 +1368,9 @@ Result<Device> Instance::create_device(const PhysicalDeviceInfo& physical_device
     if (api_state->get_query_pool_results != nullptr)
         api.get_query_pool_results = {api_state.get(), query_pool_results};
     api.get_calibrated_timestamps = api_state->get_calibrated_timestamps;
+#ifdef VK_EXT_device_fault
+    api.get_device_fault_info = api_state->get_device_fault_info;
+#endif
     api.create_buffer = {api_state.get(), create_buffer};
     api.destroy_buffer = {api_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {api_state.get(), get_buffer_memory_requirements};
@@ -1591,6 +1623,9 @@ Result<Api> Loader::device_api(VkInstance instance, VkDevice device) const {
     if (device_state->get_query_pool_results != nullptr)
         api.get_query_pool_results = {device_state.get(), query_pool_results};
     api.get_calibrated_timestamps = device_state->get_calibrated_timestamps;
+#ifdef VK_EXT_device_fault
+    api.get_device_fault_info = device_state->get_device_fault_info;
+#endif
     api.create_buffer = {device_state.get(), create_buffer};
     api.destroy_buffer = {device_state.get(), destroy_buffer};
     api.get_buffer_memory_requirements = {device_state.get(), get_buffer_memory_requirements};
@@ -1721,6 +1756,9 @@ Api FaultInjector::api() const {
     if (state_->inner.get_query_pool_results)
         result.get_query_pool_results = {state_.get(), State::get_query_pool_results};
     result.get_calibrated_timestamps = state_->inner.get_calibrated_timestamps;
+#ifdef VK_EXT_device_fault
+    result.get_device_fault_info = state_->inner.get_device_fault_info;
+#endif
     result.create_shader_module = state_->inner.create_shader_module;
     result.destroy_shader_module = state_->inner.destroy_shader_module;
     result.create_descriptor_set_layout = state_->inner.create_descriptor_set_layout;

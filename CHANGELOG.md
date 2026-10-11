@@ -44,6 +44,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   retaining host-backed buffer handles and CPU fallback registrations; loaded kernels must be reloaded.
 - Drain queued work to `DeviceLost` immediately when the shared logical-device fault state trips, avoiding
   shutdown-order-dependent cancellation of pending submissions.
+- Capture optional, bounded `VK_EXT_device_fault` address and vendor records after device loss and expose
+  them through `Runtime::device_fault_report()` without writing sensitive details to logs or files.
 
 ## [0.1.44] - 2026-10-11
 
