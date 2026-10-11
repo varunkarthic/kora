@@ -22,6 +22,7 @@ add_library(kora
   kernel/spirv.cpp
   vulkan/loader.cpp
   vulkan/command_pool_set.cpp
+  vulkan/hazard_tracker.cpp
   vulkan/queue_context.cpp
 )
 add_library(kora::kora ALIAS kora)

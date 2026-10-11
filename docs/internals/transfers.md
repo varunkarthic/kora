@@ -30,11 +30,13 @@ engine flushes non-coherent writes before submission and invalidates non-coheren
 after completion. A policy-selected direct path without a usable mapping returns
 `UnsupportedFeature` instead of silently changing policy.
 
-Each transfer records conservative legacy `vkCmdPipelineBarrier` memory barriers. Upload makes host
-writes visible before the transfer read or later device access; download orders prior device writes
-before transfer or host reads; copy and fill make previous writes visible and publish transfer writes
-to later accesses. These broad barriers are a correctness-first placeholder until the synchronization2
-work introduces narrower stage/access scopes and explicit queue-family ownership transfers.
+Each transfer describes its buffer accesses to the internal `vk::HazardTracker`, which produces
+legacy `vkCmdPipelineBarrier` stage/access scopes for RAW, WAR, and WAW dependencies. Upload makes
+host writes visible before transfer reads and publishes destination writes; download orders prior
+device writes before transfer or host reads; copy and fill declare source/destination accesses
+separately. Normal plans use precise host, transfer, and compute stages rather than
+`VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`. Explicit runtime task access declarations, synchronization2
+lowering, and queue-family ownership transfers remain follow-up work.
 Operations submitted through one context are ordered on that queue. Cross-queue use requires external
 semaphores/ownership management and is not provided by this engine.
 
