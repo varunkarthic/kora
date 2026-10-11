@@ -22,6 +22,10 @@ struct SchedulerCostInput {
     double uncertainty_lambda = 1;
     double locality_saved_ns = 0;
     double locality_cap_ns = 0;
+    /// Estimated movement downstream consumers incur if this candidate runs on this backend.
+    double estimated_downstream_movement_ns = 0;
+    /// Bounded-lookahead coefficient in [0, 1]; defaults to one quarter of estimated movement cost.
+    double lookahead_beta = 0.25;
 };
 
 struct ScoreBreakdown {
@@ -34,6 +38,8 @@ struct ScoreBreakdown {
     double memory_penalty_ns = 0;
     double uncertainty_penalty_ns = 0;
     double locality_bonus_ns = 0;
+    /// Weighted downstream movement added by the graph-lookahead term.
+    double downstream_movement_penalty_ns = 0;
     double predicted_finish_ns = 0;
 };
 

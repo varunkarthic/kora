@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "core/scheduler_cost.hpp"
+#include "core/scheduler_policy.hpp"
+#include "core/transfer_model.hpp"
 
 namespace kora::detail {
 namespace {
@@ -20,6 +22,7 @@ TEST(SchedulerCost, HandComputedBreakdownMatchesEftAndSumsToTotal) {
     input.uncertainty_lambda = 0.5;
     input.locality_saved_ns = 50;
     input.locality_cap_ns = 25;
+    input.estimated_downstream_movement_ns = 40;
 
     const auto result = evaluate_scheduler_cost(input);
     ASSERT_TRUE(result);
@@ -29,11 +32,43 @@ TEST(SchedulerCost, HandComputedBreakdownMatchesEftAndSumsToTotal) {
     EXPECT_DOUBLE_EQ(score.memory_penalty_ns, 10);
     EXPECT_DOUBLE_EQ(score.uncertainty_penalty_ns, 4);
     EXPECT_DOUBLE_EQ(score.locality_bonus_ns, 25);
-    EXPECT_DOUBLE_EQ(score.predicted_finish_ns, 214);
+    EXPECT_DOUBLE_EQ(score.downstream_movement_penalty_ns, 10);
+    EXPECT_DOUBLE_EQ(score.predicted_finish_ns, 224);
     EXPECT_DOUBLE_EQ(score.ready_delay_ns + score.queue_delay_ns + score.input_transfer_ns +
                          score.execute_ns + score.required_output_ns + score.synchronization_ns +
-                         score.memory_penalty_ns + score.uncertainty_penalty_ns - score.locality_bonus_ns,
+                         score.memory_penalty_ns + score.uncertainty_penalty_ns - score.locality_bonus_ns +
+                         score.downstream_movement_penalty_ns,
                      score.predicted_finish_ns);
+}
+
+TEST(SchedulerCost, LookaheadKeepsTwoGiBChainOnDownstreamPreferredDevice) {
+    constexpr std::uint64_t kIntermediateBytes = 2ULL * 1024 * 1024 * 1024;
+    constexpr double kCrossDeviceMovementNs = 200'000'000;
+    TransferModelSet transfers;
+    ASSERT_TRUE(
+        transfers.observe(TransferPath::CrossDeviceViaHost, kIntermediateBytes, kCrossDeviceMovementNs));
+    const auto movement = transfers.estimate_ns(TransferPath::CrossDeviceViaHost, kIntermediateBytes);
+    ASSERT_TRUE(movement);
+    EXPECT_DOUBLE_EQ(movement.value(), kCrossDeviceMovementNs);
+
+    SchedulerCostInput gpu0;
+    gpu0.execute_ns = 97'000'000;  // About 3% faster for the current node.
+    gpu0.estimated_downstream_movement_ns = movement.value();
+    SchedulerCostInput gpu1;
+    gpu1.execute_ns = 100'000'000;
+    const auto gpu0_score = evaluate_scheduler_cost(gpu0);
+    const auto gpu1_score = evaluate_scheduler_cost(gpu1);
+    ASSERT_TRUE(gpu0_score);
+    ASSERT_TRUE(gpu1_score);
+    EXPECT_DOUBLE_EQ(gpu0_score.value().downstream_movement_penalty_ns, 50'000'000);
+
+    SchedulerPolicyOptions options;
+    options.deterministic = true;
+    const auto selected = select_scheduler_candidate(
+        {{0, gpu0_score.value().predicted_finish_ns, 1}, {1, gpu1_score.value().predicted_finish_ns, 1}},
+        options, std::nullopt, 0.5);
+    ASSERT_TRUE(selected);
+    EXPECT_EQ(selected.value().candidate_id, 1U);
 }
 
 TEST(SchedulerCost, UsesBudgetKneeAndRejectsInfeasibleOrInvalidInputs) {
@@ -49,6 +84,14 @@ TEST(SchedulerCost, UsesBudgetKneeAndRejectsInfeasibleOrInvalidInputs) {
     EXPECT_FALSE(evaluate_scheduler_cost(input));
     input.predicted_usage_bytes = 0;
     input.execute_ns = -1;
+    EXPECT_FALSE(evaluate_scheduler_cost(input));
+    input.execute_ns = 0;
+    input.estimated_downstream_movement_ns = -1;
+    EXPECT_FALSE(evaluate_scheduler_cost(input));
+    input.estimated_downstream_movement_ns = 1;
+    input.lookahead_beta = -0.1;
+    EXPECT_FALSE(evaluate_scheduler_cost(input));
+    input.lookahead_beta = 1.1;
     EXPECT_FALSE(evaluate_scheduler_cost(input));
 }
 

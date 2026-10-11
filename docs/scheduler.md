@@ -59,19 +59,38 @@ Memory penalty is zero through 70% of effective budget, then grows quadratically
 `scale * ((usage_ratio - 0.70) / 0.30)^2`. A candidate at or above 100% is infeasible and returns an
 error so callers can first apply an explicit eviction/admission plan. Uncertainty adds
 `lambda * sigma`; locality subtracts estimated avoided transfer cost, capped by `locality_cap_ns`.
-All inputs are finite and nonnegative, and a locality benefit that would make predicted finish
-negative is rejected. `ScoreBreakdown` exposes each term, including the final predicted finish; the
-terms sum exactly to that value.
+Graph look-ahead separately adds `lookahead_beta * estimated_downstream_movement_ns` (default beta
+0.25). That estimate represents movement a downstream consumer would incur if this candidate places
+the current node away from its future consumer; it is distinct from the current node's input-locality
+bonus. The graph planner supplies this per-candidate estimate from its known successors and measured
+transfer models. All costs and beta are finite and nonnegative, and a locality benefit that would make
+predicted finish negative is rejected. `ScoreBreakdown` exposes each term, including the weighted
+downstream-movement penalty and final predicted finish; the terms sum exactly to that value.
+
+For example, suppose the current kernel takes 97 ms on GPU 0 and 100 ms on GPU 1, while its 2 GiB
+intermediate would cost an estimated 200 ms to move from GPU 0 to the downstream-preferred GPU 1. With
+the default beta, adjusted costs are 147 ms on GPU 0 and 100 ms on GPU 1, so selection preserves the
+chain locality despite GPU 0's 3% immediate advantage. This is a bounded heuristic: beta zero restores
+greedy immediate-cost behavior, and the model does not itself execute or inspect a task graph.
 
 `QueueAvailability` accumulates estimated pending work per queue. On real completion, the caller passes
 the estimated and observed duration; a configurable EWMA correction learns the estimate error while
 subtracting the completed estimated work. This is a scheduling primitive, not an executor or a source
 of wall-clock timestamps; the owner supplies durations from a consistent measurement domain.
 
+| API or field | Contract |
+| --- | --- |
+| `evaluate_scheduler_cost(input)` | Returns immediate EFT components plus `lookahead_beta * estimated_downstream_movement_ns`; rejects invalid or infeasible estimates. |
+| `SchedulerCostInput::estimated_downstream_movement_ns` | Caller-supplied measured-model estimate of bytes/time movement induced in known downstream consumers for this candidate device. |
+| `SchedulerCostInput::lookahead_beta` | Multiplier constrained to `[0, 1]`, default `0.25`; set to zero for immediate-only selection. |
+| `ScoreBreakdown::downstream_movement_penalty_ns` | Exposes the weighted downstream movement added to the final predicted finish. |
+
 Unit tests use hand-computed EFT examples to validate the additive breakdown, the 70% memory knee,
-infeasibility, invalid-input rejection, pending-work accounting, and completion correction. Candidate
-evaluation remains independent of Runtime placement until the future scheduler combines measured
-transfer, execution, queue, and memory observations.
+infeasibility, invalid-input rejection, pending-work accounting, and completion correction. A simulated
+2 GiB chain uses the measured transfer-model interface and deterministic candidate selection to verify
+the look-ahead term can outweigh a small immediate execution-time advantage. Candidate evaluation
+remains independent of Runtime placement until the future scheduler combines measured transfer,
+execution, queue, and memory observations.
 
 ## Candidate selection policy
 
