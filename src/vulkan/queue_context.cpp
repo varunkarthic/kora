@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -21,9 +22,19 @@ Status vk_error(const char* operation, VkResult result) {
 
 Result<std::unique_ptr<QueueContext>> QueueContext::create(Api api, VkDevice device, VkQueue queue,
                                                            bool force_fence_fallback) {
+    return create(std::move(api), device, queue, force_fence_fallback, CoalescingOptions{});
+}
+
+Result<std::unique_ptr<QueueContext>> QueueContext::create(Api api, VkDevice device, VkQueue queue,
+                                                           bool force_fence_fallback,
+                                                           CoalescingOptions coalescing) {
     if (device == VK_NULL_HANDLE || queue == VK_NULL_HANDLE || !api.queue_submit)
         return Error(ErrorCode::InvalidArgument,
                      "QueueContext requires a device, queue, and queue-submit dispatch");
+    if (coalescing.maximum_wait_ns >
+            static_cast<uint64_t>(std::numeric_limits<std::chrono::nanoseconds::rep>::max()) ||
+        coalescing.maximum_batch_size > std::numeric_limits<uint32_t>::max() / 2U)
+        return Error(ErrorCode::InvalidArgument, "QueueContext coalescing limits exceed supported bounds");
 
     const bool timeline_available = api.create_semaphore && api.destroy_semaphore && api.wait_semaphores &&
                                     api.get_semaphore_counter_value;
@@ -66,21 +77,24 @@ Result<std::unique_ptr<QueueContext>> QueueContext::create(Api api, VkDevice dev
     }
     const bool use_synchronization2 = !force_fence_fallback && api.synchronization2_enabled() &&
                                       api.cmd_pipeline_barrier2 && api.queue_submit2;
-    auto context = std::unique_ptr<QueueContext>(new QueueContext(
-        std::move(api), device, queue, timeline, use_timeline, use_synchronization2, std::move(fences)));
+    auto context =
+        std::unique_ptr<QueueContext>(new QueueContext(std::move(api), device, queue, timeline, use_timeline,
+                                                       use_synchronization2, std::move(fences), coalescing));
     auto start_status = context->start();
     if (!start_status) return std::move(start_status).error();
     return context;
 }
 
 QueueContext::QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,
-                           bool use_synchronization2, std::vector<VkFence> fence_pool)
+                           bool use_synchronization2, std::vector<VkFence> fence_pool,
+                           CoalescingOptions coalescing)
     : api_(std::move(api)),
       device_(device),
       queue_(queue),
       timeline_(timeline),
       use_timeline_(use_timeline),
       use_synchronization2_(use_synchronization2),
+      coalescing_(coalescing),
       fence_pool_(std::move(fence_pool)),
       available_fences_(fence_pool_.begin(), fence_pool_.end()) {}
 
@@ -228,6 +242,7 @@ void QueueContext::submission_loop() {
     active_queue_context = this;
     for (;;) {
         QueuedSubmission queued;
+        std::vector<QueuedSubmission> batch;
         bool cancel = false;
         {
             std::unique_lock lock(queue_mutex_);
@@ -240,6 +255,63 @@ void QueueContext::submission_loop() {
             } else {
                 queued = std::move(ready_.front());
                 ready_.pop_front();
+                batch.push_back(std::move(queued));
+                auto compatible_waits = [](const Submission& first, const Submission& next) {
+                    if (first.wait_semaphores != next.wait_semaphores ||
+                        first.wait_stages != next.wait_stages)
+                        return false;
+                    for (std::size_t index = 0; index < first.wait_semaphores.size(); ++index) {
+                        const auto first_value =
+                            first.wait_values.empty() ? uint64_t{0} : first.wait_values[index];
+                        const auto next_value =
+                            next.wait_values.empty() ? uint64_t{0} : next.wait_values[index];
+                        if (first_value != next_value) return false;
+                    }
+                    return true;
+                };
+                auto can_join = [&](const QueuedSubmission& candidate,
+                                    const std::vector<ResourceAccess>& accumulated_resources) {
+                    const auto& first = batch.front().submission;
+                    const auto& next = candidate.submission;
+                    if (!coalescing_.enabled || !use_timeline_ || coalescing_.maximum_batch_size < 2 ||
+                        coalescing_.maximum_wait_ns == 0 || !first.coalescible || !first.dependency_free ||
+                        first.priority > 1 || first.coalescing_key == 0 || !next.coalescible ||
+                        !next.dependency_free || next.priority > 1 ||
+                        next.coalescing_key != first.coalescing_key || !first.signal_semaphores.empty() ||
+                        !next.signal_semaphores.empty() || first.fence != VK_NULL_HANDLE ||
+                        next.fence != VK_NULL_HANDLE || !compatible_waits(first, next))
+                        return false;
+                    for (const auto& existing : accumulated_resources) {
+                        for (const auto& access : next.resources) {
+                            if (existing.slot == access.slot && existing.generation == access.generation &&
+                                (existing.write || access.write))
+                                return false;
+                        }
+                    }
+                    return true;
+                };
+                if (batch.front().submission.coalescible && batch.front().submission.dependency_free &&
+                    batch.front().submission.priority <= 1 && coalescing_.enabled && use_timeline_ &&
+                    coalescing_.maximum_batch_size > 1 && coalescing_.maximum_wait_ns > 0) {
+                    const auto deadline = std::chrono::steady_clock::now() +
+                                          std::chrono::nanoseconds(coalescing_.maximum_wait_ns);
+                    auto resources = batch.front().submission.resources;
+                    while (batch.size() < coalescing_.maximum_batch_size) {
+                        if (ready_.empty()) {
+                            const auto woke = queue_changed_.wait_until(
+                                lock, deadline, [this] { return stop_requested_ || !ready_.empty(); });
+                            if (!woke) break;
+                        }
+                        if (ready_.empty() ||
+                            (stop_requested_ && shutdown_mode_ == ShutdownMode::CancelPending) ||
+                            !can_join(ready_.front(), resources))
+                            break;
+                        batch.push_back(std::move(ready_.front()));
+                        ready_.pop_front();
+                        resources.insert(resources.end(), batch.back().submission.resources.begin(),
+                                         batch.back().submission.resources.end());
+                    }
+                }
             }
         }
         if (cancel) {
@@ -248,14 +320,87 @@ void QueueContext::submission_loop() {
                 std::move(queued.submission.on_complete)});
             continue;
         }
-        if (next_timeline_value_ == std::numeric_limits<uint64_t>::max()) {
+        if (batch.size() > 1) {
+            queued.id = batch.front().id;
+            auto parts = std::make_shared<std::vector<std::pair<uint64_t, Submission>>>();
+            parts->reserve(batch.size());
+            for (auto& item : batch) parts->emplace_back(item.id, std::move(item.submission));
+            Submission combined;
+            combined.coalescible = true;
+            combined.dependency_free = true;
+            combined.coalescing_key = parts->front().second.coalescing_key;
+            combined.priority = parts->front().second.priority;
+            std::vector<uint64_t> wait_values;
+            for (auto& [id, part] : *parts) {
+                (void)id;
+                for (std::size_t index = 0; index < part.wait_semaphores.size(); ++index) {
+                    const auto semaphore = part.wait_semaphores[index];
+                    const auto stage = part.wait_stages[index];
+                    const auto value = part.wait_values.empty() ? uint64_t{0} : part.wait_values[index];
+                    const auto found = std::find(combined.wait_semaphores.begin(),
+                                                 combined.wait_semaphores.end(), semaphore);
+                    if (found == combined.wait_semaphores.end()) {
+                        combined.wait_semaphores.push_back(semaphore);
+                        combined.wait_stages.push_back(stage);
+                        wait_values.push_back(value);
+                    } else {
+                        const auto existing =
+                            static_cast<std::size_t>(found - combined.wait_semaphores.begin());
+                        combined.wait_stages[existing] |= stage;
+                        wait_values[existing] = std::max(wait_values[existing], value);
+                    }
+                }
+            }
+            combined.wait_values = std::move(wait_values);
+            combined.record_commands = [parts](uint64_t timeline, std::vector<VkCommandBuffer>& commands) {
+                for (auto& [id, part] : *parts) {
+                    (void)id;
+                    if (part.record_commands) {
+                        auto status = part.record_commands(timeline, part.command_buffers);
+                        if (!status) return status;
+                    }
+                    commands.insert(commands.end(), part.command_buffers.begin(), part.command_buffers.end());
+                }
+                return ok_status();
+            };
+            combined.on_submitted = [parts](uint64_t timeline, Status status) {
+                for (auto& [id, part] : *parts) {
+                    (void)id;
+                    if (part.on_submitted) {
+                        try {
+                            part.on_submitted(timeline, status);
+                        } catch (...) {
+                        }
+                    }
+                }
+            };
+            combined.on_complete = [parts](uint64_t, Status status) {
+                for (auto& [id, part] : *parts) {
+                    if (!part.on_complete) continue;
+                    try {
+                        part.on_complete(id, status);
+                    } catch (...) {
+                    }
+                }
+            };
+            queued.submission = std::move(combined);
+        } else {
+            queued = std::move(batch.front());
+        }
+        const auto timeline_values_needed = static_cast<uint64_t>(batch.size());
+        if (timeline_values_needed == 0 || next_timeline_value_ == 0 ||
+            timeline_values_needed - 1 > std::numeric_limits<uint64_t>::max() - next_timeline_value_) {
             enqueue_completion(Completion{
                 queued.id, 0, Error(ErrorCode::Overflow, "QueueContext timeline value space is exhausted"),
                 std::move(queued.submission.on_complete)});
             continue;
         }
 
-        const uint64_t timeline_value = next_timeline_value_++;
+        const uint64_t timeline_value = next_timeline_value_ + timeline_values_needed - 1;
+        next_timeline_value_ =
+            timeline_values_needed > std::numeric_limits<uint64_t>::max() - next_timeline_value_
+                ? 0
+                : next_timeline_value_ + timeline_values_needed;
         auto& submission = queued.submission;
         if (submission.record_commands) {
             Status record_status;

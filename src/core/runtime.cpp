@@ -155,8 +155,10 @@ struct Runtime::Impl {
               force_legacy_sync(force_fallback) {}
 
         Status initialize() {
-            auto queue_result = vk::QueueContext::create(device.api(), device.handle(),
-                                                         device.compute_queue(), force_legacy_sync);
+            vk::QueueContext::CoalescingOptions coalescing;
+            coalescing.enabled = true;
+            auto queue_result = vk::QueueContext::create(
+                device.api(), device.handle(), device.compute_queue(), force_legacy_sync, coalescing);
             if (!queue_result) return Status(std::move(queue_result).error());
             queue = std::move(queue_result).value();
             transfer_queue = queue.get();
@@ -433,6 +435,16 @@ Result<Event> DispatchBuilder::submit() {
     auto work = std::make_shared<std::pair<VkCommandBuffer, std::uint64_t>>(VK_NULL_HANDLE, 0);
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
+    submission.coalescible = true;
+    submission.dependency_free = true;
+    submission.coalescing_key =
+        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pipeline_ref.get()));
+    submission.priority = static_cast<std::uint8_t>(priority_);
+    submission.resources.reserve(buffers_.size());
+    for (std::size_t index = 0; index < buffers_.size(); ++index) {
+        const auto id = buffers_[index].id();
+        submission.resources.push_back({id.slot, id.generation, accesses_[index] != KernelAccess::Read});
+    }
     if (transfer_wait_value != 0) {
         const auto semaphore = context_->transfer_queue->completion_semaphore();
         if (semaphore == VK_NULL_HANDLE)
@@ -776,6 +788,11 @@ DispatchBuilder& DispatchBuilder::read_write(const BufferHandle& buffer) {
 
 DispatchBuilder& DispatchBuilder::defer_readback() {
     defer_readback_ = true;
+    return *this;
+}
+
+DispatchBuilder& DispatchBuilder::priority(DispatchPriority priority) {
+    priority_ = priority;
     return *this;
 }
 

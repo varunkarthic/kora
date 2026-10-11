@@ -19,6 +19,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   queue-availability correction from real completion samples.
 - Add constraint-filtered scheduler candidate selection with confidence-decaying exploration,
   hysteresis, priority aging, and deterministic tie-breaking.
+- Coalesce compatible low/normal-priority dispatch submissions in a bounded queue window while
+  preserving per-dispatch Events and excluding resource conflicts.
 
 ## [0.1.42] - 2026-10-11
 

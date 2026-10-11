@@ -53,6 +53,13 @@ limit. `submit()` returns an `Event` whose `wait()` covers compute completion an
 output readback. Host writes and writable mappings advance the buffer's host content version and
 invalidate the device-copy cache on its next use.
 
+Compute submissions with the same cached kernel pipeline may be coalesced by the Runtime for up to
+100 microseconds (maximum batch of eight) when their buffer accesses are independent. Each dispatch
+retains its own `Event`; shared writes, read/write conflicts, or differing external semaphore waits
+are submitted separately. Use
+`.priority(DispatchPriority::High)` or `.priority(DispatchPriority::RealtimeHint)` to bypass the
+coalescing wait. Priorities are hints, not hard real-time guarantees.
+
 This first dispatch version supports storage-buffer descriptors only. Other descriptor kinds return
 `UnsupportedFeature`. Invalid dimensions, binding counts/access modes, push-constant sizes, and device
 limits are rejected before pipeline/dispatch Vulkan calls. A runtime, its `Kernel`, and builders should

@@ -32,6 +32,8 @@ public:
     /// Discard a recorded command buffer when preparation or queue submission fails.
     Status discard(VkCommandBuffer buffer);
     /// Associate an ended buffer with its signal value after successful queue submission.
+    /// Associate a recorded buffer with its completion value; equal values are allowed for one
+    /// coalesced queue submission whose command buffers complete together.
     Status submitted(VkCommandBuffer buffer, uint64_t signal_value);
     /// Number of ring slots, useful for capacity diagnostics and deterministic tests.
     size_t capacity() const noexcept;

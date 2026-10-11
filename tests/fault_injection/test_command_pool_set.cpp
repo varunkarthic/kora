@@ -97,7 +97,7 @@ TEST(CommandPoolSet, ReusesRingWithoutSteadyStateAllocationOrFree) {
 TEST(CommandPoolSet, RejectsUnacquiredBufferAndZeroTimelineValue) {
     Mock mock;
     CommandPoolSet::Options options;
-    options.ring_size = 1;
+    options.ring_size = 2;
     CommandPoolSet pools(mock_api(mock), reinterpret_cast<VkDevice>(uintptr_t{99}), options);
     EXPECT_EQ(pools.submitted(reinterpret_cast<VkCommandBuffer>(uintptr_t{88}), 1).error().code,
               ErrorCode::InvalidArgument);
@@ -106,7 +106,14 @@ TEST(CommandPoolSet, RejectsUnacquiredBufferAndZeroTimelineValue) {
     EXPECT_EQ(pools.submitted(buffer.value(), 0).error().code, ErrorCode::InvalidArgument);
     ASSERT_TRUE(pools.end_recording(buffer.value()));
     ASSERT_TRUE(pools.submitted(buffer.value(), 1));
-    EXPECT_EQ(pools.submitted(buffer.value(), 2).error().code, ErrorCode::InvalidArgument);
+    auto second = pools.acquire(0);
+    ASSERT_TRUE(second);
+    ASSERT_TRUE(pools.end_recording(second.value()));
+    ASSERT_TRUE(pools.submitted(second.value(), 1));
+    auto third = pools.acquire(1);
+    ASSERT_TRUE(third);
+    ASSERT_TRUE(pools.end_recording(third.value()));
+    EXPECT_EQ(pools.submitted(third.value(), 0).error().code, ErrorCode::InvalidArgument);
 }
 
 TEST(CommandPoolSet, DiscardsARecordingAfterSubmissionPreparationFails) {
