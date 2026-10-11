@@ -128,6 +128,9 @@ TEST(Runtime, AllEligibleReportsQuarantinedDevicesSeparately) {
 }
 
 TEST(Runtime, VerifiedDispatchPublishesMatchingResultsAndQuarantinesMismatches) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
     kora::RuntimeOptions options;
     options.device_policy = kora::DevicePolicy::AllEligible;
     auto created = kora::Runtime::create(options);
@@ -208,6 +211,7 @@ TEST(Runtime, VerifiedDispatchPublishesMatchingResultsAndQuarantinesMismatches) 
                         .submit();
     ASSERT_FALSE(rejected);
     EXPECT_EQ(rejected.error().code, kora::ErrorCode::ValidationError);
+#endif
 }
 
 TEST(Runtime, RecoversTransactionallyAndRetainsAuthoritativeBufferHandles) {
