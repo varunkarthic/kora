@@ -35,6 +35,7 @@ internals/queues
 internals/logical-device
 internals/suballocator
 internals/memory-pool
+internals/eviction
 internals/command-pools
 internals/queue-context
 internals/completion
