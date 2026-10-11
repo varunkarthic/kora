@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign the README and documentation landing page around verified capabilities, setup workflows,
+  architecture/dispatch diagrams, support boundaries, and accessible subsystem guides.
+- Refresh benchmark snapshots with a pinned reference device, complete environment metadata,
+  reproducible commands, and explicit single-host interpretation limits.
+- Start the `0.2.x` release line; patch versions remain automatically assigned from Git tags.
+
 ## [0.1.53] - 2026-10-11
 
 - Add isolated, budget-bounded H2D, D2H, and device-copy startup calibration probes with byte validation,

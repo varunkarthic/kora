@@ -18,7 +18,7 @@ python -c "import kora; print(kora.version())"
 ```
 
 On Windows, activate with `.venv\Scripts\Activate.ps1`. A successful import prints the linked KORA
-version, currently `0.1.0` for the default CMake version configuration. The wheel includes the
+version, currently `0.2.0` for the default CMake version configuration. The wheel includes the
 compiled native extension and the small Python import facade. The build uses scikit-build-core and
 pybind11 from PEP 517 build isolation; Python dependencies are not required for the default native
 CMake build.

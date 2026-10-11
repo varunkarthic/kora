@@ -1,114 +1,160 @@
 # KORA
 
-KORA (Kernel Offload Runtime Architecture) is a vendor-neutral heterogeneous compute runtime for
-explicit CPU and GPU workloads. Its GPU execution layer uses Vulkan and prebuilt SPIR-V compute
-modules rather than CUDA, ROCm/HIP, oneAPI, OpenCL, or another vendor compute stack.
+**K**ernel **O**ffload **R**untime **A**rchitecture is a C++20 runtime for explicit CPU and Vulkan
+compute workloads. It gives applications building blocks for device-bound kernels, buffers,
+transfers, events, task graphs, and diagnostics while keeping Vulkan capabilities—and their limits—
+visible to the caller.
 
-> **Project status:** early development. The build system and foundational C++ contracts are in
-> place; Vulkan discovery, execution, scheduling, memory management, Python bindings, and production
-> packages are being implemented incrementally. Beta releases are suitable for evaluation, not
-> production workloads.
+[![CI](https://github.com/varunkarthic/kora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/varunkarthic/kora/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/varunkarthic/kora?include_prereleases&label=latest%20release)](https://github.com/varunkarthic/kora/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-Read%20the%20Docs-2f6f9f)](https://kora.readthedocs.io/en/latest/)
 
-## Goals
+> **Maturity:** KORA is in active development. Releases are evaluation builds, not a production
+> suitability guarantee. The v0.2.x line is tracked by the [`v0.2` milestone](https://github.com/varunkarthic/kora/milestone/20);
+> GitHub release automation publishes patch versions and keeps the line Beta until its validation
+> issues are closed.
 
-- One C++20 runtime across Linux, Windows, and macOS through Vulkan/MoltenVK.
-- Explicit buffers, kernels, events, task graphs, and reusable execution plans.
-- Capability- and measurement-driven scheduling across CPU, integrated GPU, discrete GPU, and
-  multiple GPUs without vendor-ID heuristics.
-- Memory pooling, residency tracking, transfer overlap, hazard management, recovery, profiling, and
-  persistent performance models above raw Vulkan.
-- Thin Python bindings over the same C++ implementation.
+## What KORA does
 
-## Current architecture
+- Loads and validates prebuilt SPIR-V compute kernels and caches Vulkan pipelines.
+- Manages host shadows, per-device buffer replicas, transfers, queue work, and completion events.
+- Provides task-graph dependency analysis and reusable callback plans for caller-controlled
+  orchestration.
+- Offers CPU execution/fallback, multi-device primitives, profiling, trace export, recovery
+  diagnostics, and a thin optional Python API.
+- Uses Vulkan as a vendor-neutral GPU interface; it does not require CUDA, ROCm/HIP, oneAPI, or
+  OpenCL.
 
-KORA is organized into focused runtime layers:
+KORA is explicit rather than automatic: a loaded kernel is bound to a Runtime device. Task graphs
+replay callbacks, and scheduler/partitioning components are independent building blocks; they do not
+automatically place arbitrary graph work across CPUs and GPUs. See [what is implemented](docs/overview.md)
+and the [platform support matrix](docs/platform-support.md) before choosing it for a workload.
 
-```text
-Public C++ / Python APIs
-          |
-Task graph, scheduler, and execution plans
-          |
-CPU executor | Vulkan kernel and queue execution
-          |
-Memory, synchronization, profiling, and recovery
-          |
-Vulkan loader and platform implementation
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+  APP["Your application"] --> API["C++ Runtime API"]
+  PY["Optional Python API"] --> API
+  APP -. "owns graph order and placement" .-> GRAPH["TaskGraph / ExecutionPlan"]
+  API --> CPU["CPU executor / explicit fallback"]
+  API --> DISPATCH["Device-bound dispatch"]
+  DISPATCH --> PIPE["SPIR-V validation / pipeline"]
+  DISPATCH --> QUEUE["Queue / Event completion"]
+  QUEUE --> GPU["Vulkan compute device"]
+  API --> MEMORY["Buffers / transfers / replicas"]
+  API --> OBS["Profiling / trace / diagnostics"]
 ```
 
-Vulkan entry points are loaded at runtime. Building KORA therefore requires Vulkan headers but does
-not require a Vulkan loader or GPU to be present. GPU operations will report a structured capability
-error when no usable implementation is available.
+### A dispatch lifecycle
 
-## Requirements
+```mermaid
+sequenceDiagram
+  participant App as Application
+  participant K as KORA Runtime
+  participant Q as Device queue
+  participant D as Vulkan device
+  App->>K: load validated SPIR-V + metadata
+  App->>K: bind buffers, dimensions, push data
+  App->>K: submit()
+  K->>K: validate access and prepare residency/transfers
+  K->>Q: enqueue command and return Event
+  Q->>D: submit dispatch
+  D-->>Q: complete timeline value
+  Q-->>K: resolve Event and eligible readback
+  K-->>App: Event becomes complete
+```
 
-- CMake 3.21 or newer
-- Ninja
-- A C++20 compiler
-- Git and network access when CMake must download a pinned build dependency
-- A Vulkan 1.1-capable implementation for GPU execution; MoltenVK is used on macOS
+The Event covers dispatch completion and, by default, writable-output readback. Deferred readback
+keeps results device-resident until the caller requests them. See the [Runtime API guide](docs/api/runtime.md)
+for lifetime, buffer, and error contracts.
 
-## Build and test
+## Quick start
+
+Requirements: CMake 3.21+, Ninja, a C++20 compiler, and Git. A Vulkan loader/compute implementation
+is needed only for GPU execution; KORA resolves the loader at runtime, so a CPU-only machine can
+still build the library and run applicable tests.
 
 ```sh
 git clone https://github.com/varunkarthic/kora.git
 cd kora
 cmake --preset debug
 cmake --build --preset debug --parallel
-ctest --preset debug
+ctest --preset debug --output-on-failure
 ```
 
-Release and sanitizer configurations are also available:
+For an optimized build and installable CMake package:
 
 ```sh
 cmake --preset release
 cmake --build --preset release --parallel
-
-cmake --preset asan
-cmake --build --preset asan --parallel
-ctest --preset asan
+ctest --preset release --output-on-failure
+cmake --install build/release --prefix "$PWD/install"
 ```
 
-See [building](docs/building.md) and [testing](docs/testing.md) for every preset, option, dependency,
-software Vulkan ICD configuration, installation, and package-consumer instructions.
-
-## Install and consume from CMake
-
-```sh
-cmake --install build/release --prefix /path/to/kora-install
-```
-
-Then use the exported target:
+Link an application to the exported target:
 
 ```cmake
 find_package(kora CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE kora::kora)
+target_link_libraries(my_app PRIVATE kora::kora)
 ```
 
-The public API is still evolving before the first stable release. The currently documented error
-contract is available in [docs/api/errors.md](docs/api/errors.md).
+The package and first-dispatch walkthrough are in [Getting started](docs/getting-started.md); all
+options and build presets are in [Building](docs/building.md).
 
-## Releases
+## Performance snapshot
 
-Every push to `main` is validated and produces a `MAJOR.MINOR.PATCH` release. `MAJOR.MINOR` comes
-from [`VERSION`](VERSION); automation increments `PATCH` from the latest matching tag. Releases are
-marked **Beta** while any release-validation issue in the matching milestone remains open and become
-**Stable** when all tracked issues are closed. Release notes include installation and usage guidance,
-the changelog, downloadable source/package artifacts, and the current validation table.
+These are captured local Release measurements, not portable promises. They show both the low cost of
+replaying a prepared CPU plan and the current overhead of the complete GPU dispatch path. Always
+rerun on the target compiler, driver, device, and workload; the [benchmark guide](docs/benchmarking.md)
+includes commands, workload definitions, full data, and interpretation limits.
 
-See [CHANGELOG.md](CHANGELOG.md) for user-visible changes once release automation is installed.
+| Workload | Median | p95 | What is timed |
+| --- | ---: | ---: | --- |
+| C++ replay of prepared 64-task plan | 0.292 µs | 0.292 µs | Native plan replay and counter callback |
+| Python callback replay of same plan | 24.333 µs | 24.750 µs | End-to-end replay including Python callback crossings |
+| CPU vector add, 4,096 elements | 0.375 µs | 0.542 µs | Arithmetic only; initialized data outside timing |
+| KORA Vulkan vector add, 4,096 elements | 4,783.917 µs | 8,184.458 µs | Warm dispatch and completion wait; resident inputs |
+| Raw Vulkan vector add, 4,096 elements | 199.208 µs | 275.334 µs | Same selected device; reused pipeline/descriptors/buffers |
+
+Benchmark sample: 1,000 measured iterations after 50 warm-ups, on an Apple M4 running macOS 27.0;
+the GPU cases were pinned to device 0 (KosmicKrisp, Vulkan 1.3.354). The C++/Python replay is not
+comparable to GPU time. The GPU rows expose a local dispatch-overhead gap, not a general KORA versus
+Vulkan ratio, and no CPU/GPU crossover was observed in the tested vector-add sizes. Full environment
+metadata, commands, transfer results, and caveats are in [Benchmarking](docs/benchmarking.md).
 
 ## Documentation
 
-The documentation source lives in [`docs/`](docs/) and is structured for future Read the Docs
-hosting. It covers setup, API contracts, architecture, testing, releases, security, and maintenance.
+Start with [Overview](docs/overview.md), then choose a path:
 
-## Project policy
+| If you want to… | Start here |
+| --- | --- |
+| Build, install, and run tests | [Getting started](docs/getting-started.md) · [Building](docs/building.md) · [Testing](docs/testing.md) |
+| Understand the boundaries and ownership model | [Architecture](docs/architecture.md) · [Invariants](docs/internals/invariants.md) |
+| Select devices and manage buffers/transfers | [Device selection](docs/device-selection.md) · [Memory model](docs/memory-model.md) |
+| Load kernels and dispatch work | [Kernel format](docs/kernel-format.md) · [Runtime API](docs/api/runtime.md) |
+| Profile or compare performance | [Profiling](docs/profiling.md) · [Benchmarking](docs/benchmarking.md) |
+| Diagnose failures or device loss | [Debugging](docs/debugging.md) · [Recovery](docs/recovery.md) |
+| Use Python | [Python API](docs/python-api.md) |
+| Check release status and installation | [Releases](docs/releases.md) · [Platform support](docs/platform-support.md) |
 
-KORA is a solo-maintained personal open-source project. The repository does not accept external pull
-requests or feature/support issues. Please use the published source and documentation as provided.
-Security vulnerabilities are the exception: report them privately as described in
-[SECURITY.md](SECURITY.md).
+The full, searchable handbook is published on [Read the Docs](https://kora.readthedocs.io/en/latest/).
+
+## Releases and compatibility
+
+[`VERSION`](VERSION) contains `MAJOR.MINOR`; successful main-branch CI triggers release automation,
+which increments the patch from existing tags (`0.2.0`, `0.2.1`, …). A release is Beta while any
+issue in its matching `vMAJOR.MINOR` milestone is open, and Stable only after every issue in that
+release line is closed. Stable describes completion of repository validation gates, not a guarantee
+for every application or GPU. See [release policy](docs/releases.md) and [CHANGELOG](CHANGELOG.md).
+
+## Project and security policy
+
+KORA is a solo-maintained project and does not accept external feature/support issues or pull
+requests. Please use published releases and documentation as provided. Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Apache-2.0; see [LICENSE](LICENSE).

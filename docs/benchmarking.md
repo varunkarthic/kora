@@ -44,6 +44,8 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+### Python callback measurement
+
 The Python callback-boundary measurement is an optional companion report and requires the `python`
 CMake preset (which builds the native extension):
 
@@ -110,47 +112,77 @@ kernel-only times. Python callback overhead is measured separately as documented
 results do not include end-to-end Runtime device selection because the candidate cost model is not yet
 wired into `Runtime::dispatch()`.
 
-One local Release comparison used 1,000 measured replays and 50 warm-ups with the same prebuilt
-64-task plan and counter-increment callback. The C++ reusable-plan path measured 291 ns median / 292 ns
-p95; the Python callback path measured 24,000 ns / 24,625 ns. These are total plan-replay durations,
-not per-callback costs; the Python case includes interpreter and callback-boundary overhead. This is a
-single-host observation, not a portable estimate. Re-run both documented commands on the target build
-and interpreter before making comparisons.
+## Reference run and results
 
-The same local GPU report recorded the CPU arithmetic versus warmed KORA dispatch medians below; units
-are microseconds, with 1,000 measured samples and 50 warm-ups:
+The following reference was collected on one local machine; it is included to make results
+interpretable, not to predict another system. The GPU run explicitly used enumeration index 0 for
+KORA (`KORA_DEVICE=0`), matching the raw Vulkan helper's first-enumerated physical device. The
+benchmark runner does not yet enforce or emit this identity for arbitrary configurations; until
+[issue #170](https://github.com/varunkarthic/kora/issues/170) is resolved, pin the device and record
+the environment when comparing KORA against raw Vulkan.
 
-| Elements | CPU vector add | KORA dispatch and wait |
-| ---: | ---: | ---: |
-| 4,096 | 0.334 | 4,135.500 |
-| 1,048,576 | 148.500 | 4,102.541 |
-| 4,194,240 | 1,220.208 | 5,484.750 |
+| Environment field | Value |
+| --- | --- |
+| Operating system | macOS 27.0 (build 26A428), arm64 |
+| CPU/device | Apple M4 |
+| KORA GPU selection | `KORA_DEVICE=0`, Apple M4 via KosmicKrisp, Vulkan 1.3.354 |
+| Compiler | AppleClang 21.0.0 |
+| Build | CMake `release` preset, 64-bit |
+| CMake / Ninja | CMake 4.4.2; repository preset uses Ninja |
+| Python (callback run) | CPython 3.14.7 |
+| Shader compiler | glslang 16.6.0 |
+| Samples | 1,000 measured iterations; 50 warm-ups unless a separate command states otherwise |
 
-No CPU/GPU crossover was observed in this tested range on that system. The KORA timings include
-runtime dispatch and completion-wait overhead, while excluding upload/readback after buffers are
-resident. The raw Vulkan vector-add baseline at 4,096 elements measured 217.125 us median / 290.417 us
-p95 with pipeline, descriptors, and buffers pre-created. This exposes a substantial local warm-path
-gap worth profiling, but noise and hardware/software backend differences prevent treating it as a
-portable ratio or threshold. It provides the raw baseline for this benchmarked workload only.
+Reproduce CPU/GPU results with:
+
+```sh
+cmake --preset release
+cmake --build --preset release --parallel
+KORA_DEVICE=0 build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 > kora-bench.json
+```
+
+The prepared-plan Python result uses the separate command in the Python callback measurement section above.
+The numbers below are medians and nearest-rank p95 values. GPU timings include host-side runtime,
+submission, and completion-wait costs; they are not kernel-only duration.
+
+| Workload | Median | p95 | Interpretation |
+| --- | ---: | ---: | --- |
+| C++ replay, prepared 64-task plan | 0.292 µs | 0.292 µs | Native replay and counter callback |
+| Python replay, same plan/callback | 24.333 µs | 24.750 µs | Includes interpreter and Python callback crossings |
+| CPU vector add, 4,096 elements | 0.375 µs | 0.542 µs | Host arithmetic only; arrays initialized outside timing |
+| KORA vector add, 4,096 elements | 4,783.917 µs | 8,184.458 µs | Warm resident buffers; dispatch and Event completion |
+| Raw Vulkan vector add, 4,096 elements | 199.208 µs | 275.334 µs | Same selected device; reused pipeline, descriptors, and buffers |
+
+This local sample has no CPU/GPU crossover within the documented vector-add sizes. The large KORA
+versus raw dispatch gap is evidence to investigate this device/driver path, not a portable performance
+ratio or product guarantee. Re-run before making design decisions, and preserve the JSON report.
+
+| Vector elements | CPU median | CPU p95 | KORA median | KORA p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 4,096 | 0.375 µs | 0.542 µs | 4,783.917 µs | 8,184.458 µs |
+| 1,048,576 | 206.750 µs | 234.209 µs | 5,701.500 µs | 9,517.708 µs |
+| 4,194,240 | 1,119.875 µs | 4,144.625 µs | 7,253.500 µs | 11,967.208 µs |
 
 ### Local command-pool sample
 
-One local Release run (`--gpu --iterations 1000 --warmup 50`) recorded 1,000 host-side samples per
-command-pool case: persistent-ring reuse had a nearest-rank median of 750 ns and p95 of 834 ns;
-creating and destroying a one-slot pool per operation had a median of 1,500 ns and p95 of 1,542 ns.
+The reference Release run (`KORA_DEVICE=0`, `--gpu --iterations 1000 --warmup 50`) recorded 1,000
+host-side samples per command-pool case: persistent-ring reuse had a nearest-rank median of 750 ns
+and p95 of 875 ns; creating and destroying a one-slot pool per operation had a median of 1,542 ns
+and p95 of 1,583 ns.
 This is a single-machine observation of host API overhead, without queue submission or GPU execution;
 it is not a portable performance claim and does not establish transfer thresholds or other fast-path
 benefits. Re-run the command above on the target system before using these figures for a decision.
 
-The same local Release run compared the transfer paths. Values below are median/p95 microseconds for
-1,000 samples after 50 warm-ups; the upload/download cases use a persistently mapped device-local,
-host-visible buffer, and the copy cases use a raw Vulkan fence baseline versus `TransferEngine::copy()`:
+The same local Release run compared the transfer paths on enumeration index 0. Values below are
+median/p95 microseconds for 1,000 samples after 50 warm-ups; the upload/download cases use a
+persistently mapped device-local, host-visible buffer, and the copy cases use a raw Vulkan fence
+baseline versus `TransferEngine::copy()`:
 
 | Size | Direct upload | Staged upload | Direct download | Staged download | Raw Vulkan copy | KORA copy |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4 KiB | 60.542 / 103.417 | 197.208 / 347.000 | 41.750 / 65.417 | 183.334 / 234.917 | 177.792 / 295.625 | 194.500 / 290.167 |
-| 64 KiB | 44.334 / 62.708 | 199.750 / 291.208 | 43.333 / 59.583 | 236.500 / 367.167 | 189.958 / 277.083 | 206.167 / 300.834 |
-| 1 MiB | 71.083 / 97.792 | 292.833 / 401.833 | 68.708 / 80.917 | 392.834 / 498.500 | 226.000 / 351.959 | 254.125 / 331.792 |
+| 4 KiB | 42.125 / 49.375 | 185.292 / 285.084 | 44.792 / 68.167 | 188.125 / 277.583 | 183.875 / 291.709 | 191.208 / 284.708 |
+| 64 KiB | 41.292 / 45.209 | 192.792 / 237.083 | 41.625 / 46.625 | 206.625 / 237.917 | 186.500 / 196.500 | 197.375 / 217.625 |
+| 1 MiB | 63.709 / 83.458 | 340.708 / 470.625 | 64.875 / 70.375 | 404.750 / 584.584 | 261.583 / 330.625 | 321.208 / 400.625 |
 
 These are end-to-end host-observed latency measurements on one local system, not device-memory
 bandwidth claims. The direct path is explicitly selected as a controlled comparison and should not be
