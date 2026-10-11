@@ -45,6 +45,7 @@ internals/spirv
 internals/pipelines
 internals/aliasing
 internals/performance-db
+scheduler
 cpu-executor
 device-selection
 memory-model
