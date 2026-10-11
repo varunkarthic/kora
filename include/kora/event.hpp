@@ -3,6 +3,7 @@
 /// Copyable completion handle for asynchronous runtime work.
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <span>
 #include <utility>
@@ -28,6 +29,12 @@ public:
     Status wait_for(std::chrono::nanoseconds timeout) const;
     /// Returns Timeout while pending, otherwise the operation's completion status.
     Status status() const;
+    /// Registers a completion callback. If already complete, it runs synchronously before return.
+    Status on_complete(std::function<void(Status)> callback) const;
+    /// Creates an event completed after this event; callback failures are returned by the chained event.
+    Result<Event> then(std::function<Status(Status)> callback) const;
+    /// Completes after every input event, returning the first failure in input order.
+    static Result<Event> when_all(std::span<const Event> events);
 
 private:
     friend class detail::EventPromise;
