@@ -17,6 +17,13 @@ valid only for the owning Runtime's lifetime. `device_info(id)` returns the immu
 snapshot for that selected device. `memory_stats(id)` rejects IDs not owned by the Runtime with
 `InvalidArgument`.
 
+After an event reports `DeviceLost`, `Runtime::recover()` transactionally creates replacement logical
+devices with the Runtime's resolved options. Existing host-backed `BufferHandle`s remain valid, and
+authoritative host contents upload lazily on their next use. Outputs of in-flight writes return
+`DataLoss` until replaced with a complete `write_bytes()` call. Existing `Kernel` values are bound to
+the old Runtime and must be loaded again. Recovery drains old queue callbacks before returning; if
+replacement creation fails, the original failed Runtime remains intact.
+
 ## Memory snapshots
 
 `MemoryStats` is Vulkan-header-free. Its pool byte counters are checked sums over tracked pools;

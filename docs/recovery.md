@@ -15,10 +15,18 @@ read-only or partial mappings then return `ErrorCode::DataLoss` rather than expo
 stale shadow. A complete `BufferHandle::write_bytes()` replaces the entire host shadow and restores
 host readability. A host shadow that remained authoritative for work that was never submitted is
 left readable. Errors include the raw `VkResult` and state that device recreation is unavailable;
-applications must discard the failed Runtime and create a new one. Runtime-scoped queues, pipelines,
-descriptors, synchronization objects, and device replicas are not recreated in place, and automatic
-task rescheduling is not attempted because the runtime cannot prove arbitrary tasks are idempotent or
-their outputs complete.
+applications may call `Runtime::recover()` after a loss is observed. Recovery creates a replacement
+set of logical devices with the original resolved options, retains existing host-backed buffer
+handles, and restores ordinary authoritative contents lazily through normal uploads. Device-lost
+outputs remain marked `DataLoss`; recovery does not invent their values. Existing `Kernel` objects are
+runtime-bound and invalidated, so applications must reload them. CPU fallback registrations are
+retained. Recovery is transactional: if replacement Runtime creation fails, the original failed
+Runtime remains available for diagnostics or explicit teardown. Old queue callbacks are drained
+before `recover()` returns.
+
+Automatic task rescheduling is not attempted because the runtime cannot prove arbitrary tasks are
+idempotent or their outputs complete. Applications should resubmit only work whose inputs remain
+authoritative and whose semantics permit retry.
 
 The current fault state retains the result code but does not yet query `VK_EXT_device_fault` records or
 emit vendor-specific fault addresses. The extension is optional and those diagnostics must remain
@@ -31,7 +39,8 @@ authoritative-host-buffer restoration without changing this fail-closed behavior
 | `DeviceFaultState::healthy()` | False after the first observed `VK_ERROR_DEVICE_LOST`; state is shared across a Runtime device's queues. |
 | `DeviceFaultState::last_result()` | Returns the Vulkan result associated with the recorded loss. |
 | `QueueContext::submit()` | Rejects work on a lost device before submission; already queued work completes with `DeviceLost`. |
-| Device-loss `Error` | Preserves `vk_result` and directs callers to create a new Runtime; no same-device retry is claimed. |
+| Device-loss `Error` | Preserves `vk_result` and directs callers to `Runtime::recover()`; no same-device retry is claimed. |
+| `Runtime::recover()` | Requires an observed loss, builds replacement devices transactionally, retains host buffer handles and CPU fallbacks, invalidates old kernels, and drains the old queues before returning. |
 
 Fault-injection coverage blocks the first submit, injects device loss, queues later work, and verifies
 deterministic failure without a completion-thread wait or deadlock. A sibling queue sharing the same

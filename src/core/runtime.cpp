@@ -912,7 +912,8 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }  // namespace
 
 Runtime::Runtime() = default;
-Runtime::Runtime(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+Runtime::Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options)
+    : impl_(std::move(impl)), options_(std::move(options)) {}
 Runtime::~Runtime() = default;
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
@@ -1197,7 +1198,49 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         entry->dispatch->performance_database_path = impl->performance_database_path;
         impl->devices.push_back(std::move(entry));
     }
-    return Runtime(std::move(impl));
+    RuntimeOptions effective_options;
+    effective_options.enable_validation = resolved.enable_validation;
+    effective_options.device_policy = resolved.device_policy;
+    effective_options.device_index = resolved.device_index;
+    effective_options.device_uuid = resolved.device_uuid;
+    effective_options.memory_budget_fraction = resolved.memory_budget_fraction;
+    effective_options.telemetry = resolved.telemetry;
+    effective_options.log_level = resolved.log_level;
+    effective_options.cache_dir = resolved.cache_dir;
+    effective_options.deterministic = resolved.deterministic;
+    effective_options.shutdown_mode = resolved.shutdown_mode;
+    effective_options.disable_autotune = resolved.disable_autotune;
+    effective_options.disable_multi_queue = resolved.disable_multi_queue;
+    effective_options.disable_cpu_backend = resolved.disable_cpu_backend;
+    effective_options.force_legacy_sync = resolved.force_legacy_sync;
+    effective_options.trace = options.trace;
+    effective_options.enable_startup_calibration = resolved.enable_startup_calibration;
+    effective_options.calibration_budget_ms = resolved.calibration_budget_ms;
+    return Runtime(std::move(impl), std::move(effective_options));
+}
+
+Status Runtime::recover() {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const bool device_lost = std::any_of(impl_->devices.begin(), impl_->devices.end(), [](const auto& entry) {
+        return entry->fault_state && !entry->fault_state->healthy();
+    });
+    if (!device_lost)
+        return Error(ErrorCode::InvalidArgument, "runtime recovery requires an observed device loss");
+
+    auto created = Runtime::create(options_);
+    if (!created) return Status(std::move(created).error());
+    auto replacement = std::move(created).value();
+    {
+        std::scoped_lock lock(impl_->cpu_mutex, replacement.impl_->cpu_mutex);
+        replacement.impl_->cpu_fallbacks = impl_->cpu_fallbacks;
+    }
+    replacement.buffers_ = std::move(buffers_);
+    impl_.swap(replacement.impl_);
+    buffers_ = std::move(replacement.buffers_);
+    options_ = std::move(replacement.options_);
+    // `replacement` now owns the failed implementation; its destructor drains old queue callbacks
+    // before this method returns. Host-backed BufferHandles remain backed by the retained state.
+    return {};
 }
 
 std::vector<DeviceId> Runtime::devices() const {

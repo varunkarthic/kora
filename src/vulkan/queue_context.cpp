@@ -19,7 +19,7 @@ Status vk_error(const char* operation, VkResult result) {
         Error(result == VK_ERROR_DEVICE_LOST ? ErrorCode::DeviceLost : ErrorCode::TransferFailed, operation);
     error.with_vk(result);
     if (result == VK_ERROR_DEVICE_LOST)
-        error.with_recovery("logical device recreation is unavailable; create a new Runtime");
+        error.with_recovery("call Runtime::recover() after observing device loss");
     return error;
 }
 

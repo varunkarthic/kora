@@ -92,6 +92,7 @@ TEST(Runtime, OwnsSelectedDeviceAndExposesMemoryStats) {
 
     EXPECT_EQ(runtime.value().memory_stats(kora::DeviceId{UINT32_MAX, {}}).error().code,
               kora::ErrorCode::InvalidArgument);
+    EXPECT_EQ(runtime.value().recover().error().code, kora::ErrorCode::InvalidArgument);
 }
 
 TEST(Runtime, HonorsExplicitDeviceIndexSelection) {

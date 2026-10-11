@@ -40,6 +40,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   queues, fail queued work deterministically, and preserve raw Vulkan failure diagnostics.
 - Return `DataLoss` instead of stale host bytes for outputs of in-flight work lost with a Vulkan
   device; restore host readability only after a complete host rewrite.
+- Add transactional `Runtime::recover()` to rebuild logical devices after observed loss while
+  retaining host-backed buffer handles and CPU fallback registrations; loaded kernels must be reloaded.
 
 ## [0.1.44] - 2026-10-11
 

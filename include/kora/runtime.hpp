@@ -149,6 +149,10 @@ public:
     Result<RuntimeTransferStats> transfer_stats() const;
     /// Returns completed GPU timestamp samples observed so far; does not wait for pending work.
     Result<RuntimeProfilingStats> profiling_stats(const DeviceId& device) const;
+    /// Recreate all logical devices after observed device loss, retaining host-backed buffer handles.
+    /// Previously loaded kernels are invalidated and must be loaded again. Buffers marked DataLoss
+    /// require a complete host rewrite before they can be read or uploaded.
+    Status recover();
     Result<BufferHandle> create_buffer(std::uint64_t size_bytes, BufferUsage usage = BufferUsage::Storage);
     template <class T>
     Result<Buffer<T>> create_buffer(std::uint64_t count, BufferUsage usage = BufferUsage::Storage) {
@@ -184,9 +188,10 @@ public:
 
 private:
     struct Impl;
-    explicit Runtime(std::unique_ptr<Impl> impl);
+    explicit Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options);
     std::unique_ptr<Impl> impl_;
     BufferManager buffers_;
+    RuntimeOptions options_;
 };
 
 }  // namespace kora
