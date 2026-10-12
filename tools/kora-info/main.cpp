@@ -138,7 +138,6 @@ void print_json_device(std::size_t index, const kora::vk::PhysicalDeviceInfo& ra
     std::cout << ",\"driver_name\":";
     json_string(std::cout, raw.vulkan12_properties.driverName);
     std::cout << ",\"portability_subset\":" << f.portability_subset << ",\"moltenvk\":" << is_moltenvk(raw)
-              << ",\"cache_state\":\"not_initialized\""
               << ",\"memory_topology\":";
     json_string(std::cout, topology_name(device.memory_topology()));
     std::cout << ",\"memory_topology_needs_benchmark\":" << device.memory_topology_needs_benchmark()
@@ -210,20 +209,20 @@ int main(int argc, char** argv) {
     if (!devices) return report_error("unable to enumerate physical devices", devices.error());
 
     if (json) {
-        std::cout << "{\"schema_version\":1,\"kora_version\":";
+        std::cout << "{\"schema_version\":2,\"kora_version\":";
         json_string(std::cout, kora::version_string());
         std::cout << ",\"loader_api_version\":";
         json_string(std::cout, version_string(loader.value().supported_api_version()));
         std::cout << ",\"instance_api_version\":";
         json_string(std::cout, version_string(instance.value().api_version()));
-        std::cout << ",\"devices\":[";
+        std::cout << ",\"pipeline_cache_state\":\"not_queried\",\"devices\":[";
     } else {
         std::cout << "KORA version: " << kora::version_string() << '\n'
                   << "Vulkan loader API version: " << version_string(loader.value().supported_api_version())
                   << '\n'
                   << "Vulkan instance API version: " << version_string(instance.value().api_version()) << '\n'
                   << "Physical devices: " << devices.value().size() << '\n'
-                  << "Cache state: not initialized (kernel cache is not implemented yet)\n";
+                  << "Pipeline cache state: not queried (kora-info does not initialize a Runtime)\n";
     }
     for (std::size_t index = 0; index < devices.value().size(); ++index) {
         const auto& raw = devices.value()[index];

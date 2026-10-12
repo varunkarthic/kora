@@ -13,24 +13,29 @@ cmake --build --preset debug --parallel
 The command uses KORA's runtime-loaded Vulkan path and does not link the Vulkan loader directly.
 Human and JSON reports include queue-family classifications, memory heaps and types, optional heap
 budget/usage, memory topology and benchmark-needed state, subgroup properties, synchronization and
-buffer-address capabilities, descriptor indexing, portability-subset and MoltenVK detection, and
-the current cache state. Cache state is explicitly `not_initialized` until a kernel cache exists.
+buffer-address capabilities, descriptor indexing, portability-subset and MoltenVK detection.
+`kora-info` does not initialize a KORA `Runtime`, so it cannot observe a runtime pipeline cache. Human
+output states `Pipeline cache state: not queried`; JSON reports the same fact at the root as
+`pipeline_cache_state: "not_queried"`. This is not evidence that caching is absent or uninitialized.
 
 Reports deliberately omit device UUIDs, vendor IDs, device IDs, and other serial identifiers.
 
 ## JSON contract
 
-The root `schema_version` is `1`. Root fields contain KORA, loader, and instance versions. `devices`
+The root `schema_version` is `2`. Root fields contain KORA, loader, and instance versions, plus
+`pipeline_cache_state`, which is always `not_queried` because this device-only command does not create
+a Runtime. Schema version 2 removes the misleading per-device `cache_state` field from version 1.
+`devices`
 contains one object per physical device with:
 
 - public name, Vulkan API version, and driver name;
 - `features` and `subgroup` capability objects;
 - `queue_families`, including counts, flags, timestamp bits, and dedicated classifications;
 - `memory.heaps` and `memory.types`, with budget fields only when `VK_EXT_memory_budget` exists;
-- memory topology, portability, MoltenVK, benchmark-needed, and cache-state fields.
+- memory topology, portability, MoltenVK, and benchmark-needed fields.
 
 The dependency-free writer escapes JSON strings and emits native JSON booleans and integers. Field
-additions remain compatible within schema version 1; incompatible changes require incrementing the
+additions remain compatible within a schema version; incompatible changes require incrementing the
 schema version.
 
 ## Data sources and invariants
