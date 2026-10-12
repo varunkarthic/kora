@@ -1,9 +1,11 @@
 # Benchmarking
 
-`kora-bench` is a reproducible microbenchmark runner for KORA's CPU-side runtime policies. It emits
-one JSON document to standard output, uses `std::chrono::steady_clock`, performs warm-up iterations,
-and retains each measured sample. The report contains nearest-rank median and p95 values in
-nanoseconds as well as raw samples, so downstream analysis can recompute summaries.
+`kora-bench` measures CPU-side runtime policies and, optionally, CPU arithmetic, KORA-on-Vulkan,
+and raw Vulkan paths. It emits one JSON document to standard output, uses
+`std::chrono::steady_clock` for host-observed measurements, performs warm-ups, and retains every
+measured sample. The report contains nearest-rank median and p95 values in nanoseconds plus the OS,
+architecture, compiler, build type, logical CPU count, and (for GPU runs) Vulkan device class and
+driver/API identity.
 
 ## Build and run
 
@@ -17,7 +19,7 @@ build/release/tools/kora-bench --iterations 1000 --warmup 50 > kora-bench.json
 checks the installed CPU smoke report; when shader tooling is available, the optional GPU fixtures are
 installed under `share/kora/benchmarks` for `--gpu`.
 
-Expected result: the command exits successfully and writes valid JSON with schema version `2`. The
+Expected result: the command exits successfully and writes valid JSON with schema version `3`. The
 report is intentionally written to stdout; redirect it to a new or intentionally replaceable path.
 `--smoke` runs three measured samples and one warm-up per workload, and is used by CTest without
 requiring a Vulkan device:
@@ -74,16 +76,18 @@ or kernel performance.
 | `allocator_allocate_free_256` | Allocate and free 256 aligned suballocations. | Includes allocator creation and invariant validation. |
 | `allocator_fragmentation_128` | Allocate 128 varied blocks, free alternating blocks, and query stats. | Confirms nonzero external fragmentation and valid allocator invariants. |
 | `host_allocation_4k` | Allocate and initialize a 4 KiB host vector. | Standard-library allocation baseline. |
-| `cpu_vector_add_N` | Add two uint32 arrays for `N` in 1, 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240. | Arithmetic-only CPU baseline; arrays are initialized outside the timed loop. |
+| `cpu_vector_add_N` | Add two uint32 arrays for `N` in 1, 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240. | Arithmetic-only single-thread host baseline; arrays are initialized outside the timed loop. |
 | `gpu_tiny_dispatch_1` | Submit one vector-add work item on Vulkan and wait for completion. | Warm steady-state host latency with buffers and pipeline resident. |
 | `gpu_tiny_dispatch_batch_10` | Submit 10 one-work-item vector-add dispatches sequentially, waiting for each event. | Measures repeated small-dispatch scheduling and completion latency; output correctness is checked before timing. |
 | `gpu_vector_add_N_dispatch_wait` | Dispatch N vector-add work items for N in 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240, then wait. | Inputs and pipeline are made resident before timing; output correctness is checked outside the timed loop. |
+| `gpu_vector_add_N_deferred_readback_dispatch_wait` | Run the same vector-add workload with `DispatchBuilder::defer_readback()`. | Matched more closely to raw Vulkan's device-resident output; output contents are validated before timing. |
+| `gpu_vector_add_N_gpu_execution` / `raw_vulkan_vector_add_N_gpu_execution` | Read a device timestamp interval around the matched dispatch. | Emitted only for element counts with valid timestamp results; exact sizes are listed in `gpu_measurements`. |
 | `gpu_saxpy_4096_upload_dispatch_wait` | Reset the host input, dispatch 4096 SAXPY elements, and wait. | Includes upload and dispatch wait; correctness is checked before timing. |
 | `gpu_reduction_4096_dispatch_wait` | Reduce 4096 float values into 64 workgroup sums and wait. | Inputs are resident; each 64-value tile is validated before timing. |
 | `gpu_tiled_scan_4096_dispatch_wait` | Inclusive scan each 64-value workgroup tile and wait. | Inputs are resident; tile prefixes are validated before timing. |
 | `gpu_tiled_matmul_64_dispatch_wait` | Multiply two 64×64 matrices using 8×8 shared-memory tiles and wait. | Inputs are resident; every output is checked before timing. |
 | `gpu_stencil_4096_dispatch_wait` | Apply a three-point 1D stencil to 4096 values and wait. | Inputs are resident; boundaries and interior are checked before timing. |
-| `raw_vulkan_vector_add_4096_dispatch_wait` | Reuse a Vulkan compute pipeline, descriptor set, and command buffer to dispatch 4096 vector-add elements and wait on a fence. | Same vector-add SPIR-V fixture and size as the KORA GPU case; excludes setup, upload, and readback. |
+| `raw_vulkan_vector_add_N_dispatch_wait` | Reuse a Vulkan compute pipeline, descriptor set, and command buffer to dispatch N vector-add elements and wait on a fence for N in 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240. | Same shader, operation, and element count as the corresponding KORA GPU case; excludes setup, upload, and readback. |
 | `command_pool_reuse_steady_state` | Begin, end, and reset a command buffer from a persistent bounded ring. | Host-side Vulkan API overhead; no queue submit or GPU execution. |
 | `command_pool_cold_create_record_destroy` | Create a one-slot pool, record/reset one buffer, and destroy it. | Cold setup comparison for the reuse path; no queue submit or GPU execution. |
 | `transfer_direct_upload_N` / `transfer_direct_download_N` | Transfer N bytes through a persistently mapped device-local, host-visible Vulkan buffer without a staging ring. | Includes KORA queue submission and completion; the direct-mapped policy is explicitly selected for this controlled comparison. |
@@ -93,12 +97,17 @@ or kernel performance.
 
 ## Report contract
 
-The root object has `schema_version: 2`, `clock`, `iterations`, `warmup`, and `results`. Each result has
-a stable `name`, `unit`, `median`, `p95`, and `samples` array. Transfer results also report
+The root object has `schema_version: 3`, `clock`, `iterations`, `warmup`, `environment`, and `results`.
+`environment` records OS, architecture, compiler, CMake build configuration, and logical CPU count.
+Each result has a stable `name`, `unit`, `timing_domain`, `median`, `p95`, and `samples` array. Transfer results also report
 `bytes_transferred` and `throughput_bytes_per_second`, derived from transferred bytes and median
 latency. GPU reports add a `gpu_measurements` object with backend, selected enumeration index,
-sanitized device name, Vulkan API version, driver name, compute queue-family index, matched-device
-assertion, and compared paths. Every GPU result identifies its path and selected device index. No
+sanitized device name, Vulkan API version, driver name, broad device class (`cpu_vulkan`, integrated,
+discrete, virtual, or other), compute queue-family index, matched-device assertion, compared paths,
+and the exact vector sizes with valid KORA/raw Vulkan timestamp samples. Timestamp support is per
+workload; unsupported or unreadable samples are omitted, never substituted with host timing. The
+report lists timestamp availability and supported element counts in `gpu_measurements`. Every
+GPU result identifies its path, timing domain, and selected device index. No
 UUID, vendor ID, or device ID is emitted. Percentiles use nearest-rank ordering: the rank is
 `ceil(p * N)`. Timing values naturally vary with host load and compiler, so compare reports only when
 the machine, build type, compiler, and workload parameters are recorded alongside them.
@@ -107,9 +116,17 @@ the machine, build type, compiler, and workload parameters are recorded alongsid
 
 CPU-side measurements are always available. Optional GPU cases cover tiny dispatch and size-swept
 vector-add/SAXPY, reduction, tiled scan, tiled matmul, stencil, transfer sizes, and raw Vulkan
-copy/vector-add dispatch baselines. Transfer results measure end-to-end API latency for the configured
-memory path; compute results include KORA runtime scheduling and should not be interpreted as
-kernel-only times. Python callback overhead is measured separately as documented above. Scheduler
+copy/vector-add dispatch baselines. `host_cpu_execution` is single-thread host arithmetic;
+`host_submit_completion` includes command preparation, submit, and completion wait;
+`host_transfer_completion` includes the transfer API and wait; `host_api_only` excludes queue submit
+and GPU execution; `gpu_execution_timestamp` is the device timestamp interval between command-stream
+timestamps around the dispatch. KORA and raw Vulkan vector-add report these intervals when supported;
+the report lists exact workload sizes with samples and omits unavailable samples rather than
+substituting host time. This interval is not a promise of shader-only active cycles. `cpu_vulkan`
+identifies a software Vulkan implementation (for example, lavapipe) so it cannot be mistaken for a
+hardware GPU result. CPU arithmetic and GPU dispatch use different timing domains and must not be
+ranked as interchangeable implementations. Transfer results measure end-to-end API latency for the
+configured memory path. Python callback overhead is measured separately as documented above. Scheduler
 results do not include end-to-end Runtime device selection because the candidate cost model is not yet
 wired into `Runtime::dispatch()`.
 
@@ -120,7 +137,8 @@ interpretable, not to predict another system. KORA and raw Vulkan use the physic
 `Runtime::devices()[0]`. The benchmark resolves that stable enumeration index against the Vulkan
 instance's physical-device list and fails the GPU comparison if it cannot find the exact device. Raw
 dispatch and transfer helpers create their Vulkan device from that same physical-device record. Set
-`KORA_DEVICE` to pin selection when reproducing results. The JSON report records the sanitized device
+`KORA_DEVICE` to pin selection when reproducing results. On PowerShell, use `$env:KORA_DEVICE = "2"`
+and `build\release\tools\kora-bench.exe`. The JSON report records the sanitized device
 name, API and driver names, selected index, compute queue family, and measurement path for each GPU
 result; UUIDs and vendor/device IDs are omitted. Runtime and raw helpers share the selected physical
 device, while their host orchestration, resource setup, and timing boundaries remain intentionally
@@ -128,49 +146,73 @@ different.
 
 | Environment field | Value |
 | --- | --- |
-| Operating system | macOS 27.0 (build 26A428), arm64 |
-| CPU/device | Apple M4 |
-| KORA and raw Vulkan selection | Runtime-selected index 0 via `KORA_DEVICE=0`, Apple M4 via KosmicKrisp, Vulkan 1.3.354 |
-| Compiler | AppleClang 21.0.0 |
-| Build | CMake `release` preset, 64-bit |
-| CMake / Ninja | CMake 4.4.2; repository preset uses Ninja |
-| Python (callback run) | CPython 3.14.7 |
-| Shader compiler | glslang 16.6.0 |
-| Samples | 1,000 measured iterations; 50 warm-ups unless a separate command states otherwise |
+| Operating system / architecture | macOS, arm64 |
+| CPU / selected Vulkan device | Apple M4 / Apple M4 integrated GPU via MoltenVK |
+| Vulkan API / driver | 1.3.357 / MoltenVK |
+| Compiler / build | AppleClang 21.0.0 / Release |
+| Logical CPUs | 10 |
+| Samples | 100 measured iterations; 10 warm-ups |
 
 Reproduce CPU/GPU results with:
 
 ```sh
 cmake --preset release
 cmake --build --preset release --parallel
-KORA_DEVICE=0 build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 > kora-bench.json
+KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 100 --warmup 10 > kora-bench.json
 ```
 
 The prepared-plan Python result uses the separate command in the Python callback measurement section above.
-The numbers below are medians and nearest-rank p95 values. GPU timings include host-side runtime,
-submission, and completion-wait costs; they are not kernel-only duration.
+The rows below are medians and nearest-rank p95 values from a fresh Apple M4 Release run. Host
+submit-to-completion and GPU timestamp intervals are separate. The timestamp interval is measured
+around dispatch on the device, not a guarantee of shader-only active cycles. Raw Vulkan deliberately
+avoids KORA's runtime orchestration and is a lower-level baseline, not an equivalent API surface.
 
 | Workload | Median | p95 | Interpretation |
 | --- | ---: | ---: | --- |
-| C++ replay, prepared 64-task plan | 0.292 µs | 0.292 µs | Native replay and counter callback |
-| Python replay, same plan/callback | 24.333 µs | 24.750 µs | Includes interpreter and Python callback crossings |
-| CPU vector add, 4,096 elements | 0.375 µs | 0.542 µs | Host arithmetic only; arrays initialized outside timing |
-| KORA vector add, 4,096 elements | 4,783.917 µs | 8,184.458 µs | Warm resident buffers; dispatch and Event completion |
-| Raw Vulkan vector add, 4,096 elements | 199.208 µs | 275.334 µs | Same selected device; reused pipeline, descriptors, and buffers |
+| CPU vector add, 4,096 elements | 0.375 µs | 0.375 µs | Single-thread host arithmetic |
+| KORA default readback, 4,096 elements | 2.259 ms | 3.668 ms | Submit, completion, and default writable-output readback |
+| KORA deferred readback, 4,096 elements | 595.208 µs | 652.208 µs | Submit/completion with output device-resident |
+| Raw Vulkan, 4,096 elements | 404.667 µs | 449.417 µs | Same device/shader; reused pipeline and buffers |
+| KORA GPU timestamp, 4,096 elements | 14.041 µs | 18.458 µs | Device timestamp interval around dispatch |
+| Raw Vulkan GPU timestamp, 4,096 elements | 21.334 µs | 25.208 µs | Same queue/device; timestamp interval around dispatch |
+| CPU vector add, 1,048,576 elements | 224.375 µs | 249.791 µs | Single-thread host arithmetic |
+| KORA default readback, 1,048,576 elements | 2.517 ms | 5.543 ms | Submit, completion, and default writable-output readback |
+| KORA deferred readback, 1,048,576 elements | 799.750 µs | 871.083 µs | Submit/completion with output device-resident |
+| Raw Vulkan, 1,048,576 elements | 996 µs | 1.251 ms | Same device/shader; reused pipeline and buffers |
+| KORA GPU timestamp, 1,048,576 elements | unavailable | unavailable | Timer sample unavailable at this size |
+| Raw Vulkan GPU timestamp, 1,048,576 elements | 359.125 µs | 404.583 µs | Same queue/device; timestamp interval around dispatch |
+| CPU vector add, 4,194,240 elements | 984.125 µs | 1.215 ms | Single-thread host arithmetic |
+| KORA default readback, 4,194,240 elements | 2.942 ms | 3.799 ms | Submit, completion, and default writable-output readback |
+| KORA deferred readback, 4,194,240 elements | 2.349 ms | 2.981 ms | Submit/completion with output device-resident |
+| Raw Vulkan, 4,194,240 elements | 1.964 ms | 2.112 ms | Same device/shader; reused pipeline and buffers |
+| KORA GPU timestamp, 4,194,240 elements | unavailable | unavailable | Timer sample unavailable at this size |
+| Raw Vulkan GPU timestamp, 4,194,240 elements | 1.315 ms | 1.398 ms | Same queue/device; timestamp interval around dispatch |
 
-This local sample has no CPU/GPU crossover within the documented vector-add sizes. The large KORA
-versus raw dispatch gap is evidence to investigate this device/driver path, not a portable performance
-ratio or product guarantee. Re-run before making design decisions, and preserve the JSON report.
+This local sample is evidence about one macOS/MoltenVK-backed configuration only. It separates KORA's
+default output readback from the deferred-readback host path; raw Vulkan is closest to the latter.
+Timestamp support is reported per workload size. The end-to-end KORA/raw difference is being
+investigated in [#196](https://github.com/varunkarthic/kora/issues/196). This Apple
+device cannot establish CUDA parity. Re-run on every target OS/device before making design decisions.
+The full 100-sample report is [retained as JSON](../benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json).
+An alternate M4/KosmicKrisp report is [also retained](../benchmarks/results/macos-arm64-apple-m4-kosmic-100x10.json);
+that Vulkan path reports timestamp measurements unavailable, illustrating why availability is
+recorded per selected device/driver rather than assumed from the OS or GPU model.
 
-| Vector elements | CPU median | CPU p95 | KORA median | KORA p95 |
-| ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 0.375 µs | 0.542 µs | 4,783.917 µs | 8,184.458 µs |
-| 1,048,576 | 206.750 µs | 234.209 µs | 5,701.500 µs | 9,517.708 µs |
-| 4,194,240 | 1,119.875 µs | 4,144.625 µs | 7,253.500 µs | 11,967.208 µs |
+| Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | KORA GPU median | KORA GPU p95 | Raw GPU median | Raw GPU p95 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4096 | 375 ns | 375 ns | 2.259 ms | 3.668 ms | 595.208 µs | 652.208 µs | 404.667 µs | 449.417 µs | 14.041 µs | 18.458 µs | 21.334 µs | 25.208 µs |
+| 1048576 | 224.375 µs | 249.791 µs | 2.517 ms | 5.543 ms | 799.750 µs | 871.083 µs | 996.000 µs | 1.251 ms | unavailable | unavailable | 359.125 µs | 404.583 µs |
+| 4194240 | 984.125 µs | 1.215 ms | 2.942 ms | 3.799 ms | 2.349 ms | 2.981 ms | 1.964 ms | 2.112 ms | unavailable | unavailable | 1.315 ms | 1.398 ms |
+
+Regenerate the comparison rows from the retained raw report with:
+
+```sh
+python3 tools/kora-bench/render_comparison.py benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json
+```
 
 ### Local command-pool sample
 
-The reference Release run (`KORA_DEVICE=0`, `--gpu --iterations 1000 --warmup 50`) recorded 1,000
+The earlier KosmicKrisp Release run (`KORA_DEVICE=0`, `--gpu --iterations 1000 --warmup 50`) recorded 1,000
 host-side samples per command-pool case: persistent-ring reuse had a nearest-rank median of 750 ns
 and p95 of 875 ns; creating and destroying a one-slot pool per operation had a median of 1,542 ns
 and p95 of 1,583 ns.

@@ -63,6 +63,10 @@ if(TARGET kora-bench)
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_kora_bench_json.py"
       $<TARGET_FILE:kora-bench>)
   set_tests_properties(KoraBench.Smoke PROPERTIES LABELS integration TIMEOUT 30)
+  add_test(NAME KoraBench.ComparisonTable
+    COMMAND ${Python3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/tools/kora-bench/render_comparison.py"
+      "${PROJECT_SOURCE_DIR}/benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json")
+  set_tests_properties(KoraBench.ComparisonTable PROPERTIES LABELS integration TIMEOUT 10)
   # TSan's instrumentation around host queue waits and external Vulkan drivers makes the GPU
   # microbenchmark exceed a practical test timeout; the CPU JSON smoke still runs under TSan.
   if(NOT KORA_SANITIZE_THREAD)
