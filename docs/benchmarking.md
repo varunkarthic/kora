@@ -46,6 +46,83 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+## Optional external CUDA reference
+
+KORA has no CUDA runtime dependency and does not build a CUDA runner. A separate benchmark producer
+may emit the version-1 JSON contract accepted by `render_comparison.py`; this keeps CUDA compilation,
+execution, and hardware requirements outside the KORA library, default presets, correctness tests,
+CI, and release artifacts. The producer must check numerical correctness before timing, retain raw
+samples, and verify that the CUDA and Vulkan device UUIDs identify the same physical GPU. It records
+that verification method without publishing either raw identifier.
+
+Minimal contract example (four illustrative samples):
+
+```json
+{
+  "schema_version": 1,
+  "backend": "cuda",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "compiler": "nvcc 13.0",
+    "build_type": "Release",
+    "source_revision": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "device": {
+    "name": "NVIDIA GPU",
+    "driver_version": "600.1",
+    "runtime_version": "13.0"
+  },
+  "device_match": {
+    "same_physical_device_as_kora_vulkan": true,
+    "verification_method": "cuda_uuid_equals_vk_device_uuid"
+  },
+  "results": [{
+    "workload_id": "vector_add",
+    "size": 4096,
+    "precision": "fp32",
+    "semantic_contract": "kora-bench.vector-add.f32.v1",
+    "comparison_class": "algorithm_matched",
+    "implementation": "one-thread-per-element",
+    "measurement_boundary": "kernel_dispatch",
+    "kora_result_name": "gpu_vector_add_4096_gpu_execution",
+    "raw_vulkan_result_name": "raw_vulkan_vector_add_4096_gpu_execution",
+    "correctness_method": "elementwise comparison before timed iterations",
+    "correctness_checked": true,
+    "correctness_passed": true,
+    "timing_domain": "gpu_execution_event",
+    "unit": "ns",
+    "warmup": 50,
+    "iterations": 4,
+    "samples": [100, 200, 300, 400],
+    "median": 200,
+    "p95": 400
+  }]
+}
+```
+
+Required fields are validated, including a same-physical-device UUID-match assertion, timing boundary,
+correctness status, commit hash, sample count, and nearest-rank median/p95 recomputed from raw samples.
+CUDA event time is kept separate from host-submit/completion latency. Algorithm-matched kernels and
+best-in-class CUDA libraries use distinct `comparison_class` values and must not be conflated. Workload
+semantics, size, precision, and result names must match the KORA and raw Vulkan references; the external
+producer owns the implementation review behind `semantic_contract`.
+
+Render the normal KORA/raw table plus the optional CUDA table with:
+
+```sh
+python3 tools/kora-bench/render_comparison.py kora-gpu-bench.json \
+  --cuda-report cuda-reference.json \
+  --kora-revision "$(git rev-parse HEAD)"
+```
+
+`--kora-revision` is required because schema-3 KORA reports predate the source-revision field; the
+rendered comparison prints both exact commits, and the CUDA report carries its producer commit. The
+CUDA table is emitted only after validation. If a matching KORA or raw Vulkan timestamp is absent,
+it prints `unavailable` and does not derive a ratio. The checked-in Apple M4 reports have no CUDA
+reference and are not CUDA evidence. A real NVIDIA run is still required to assess the 10% parity
+objective and to close the hardware-validation portion of [issue #197](https://github.com/varunkarthic/kora/issues/197).
+
 For a diagnostic phase profile on a host with valid Vulkan device timestamps, run:
 
 ```sh

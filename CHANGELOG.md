@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add an opt-in external CUDA reference report contract and same-device comparison table without adding a CUDA build/runtime dependency.
+
 ## [0.2.14] - 2026-10-12
 
 ### Added
