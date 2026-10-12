@@ -115,8 +115,10 @@ are not kernel-only GPU times; rerun on each target OS, compiler, driver, device
 [benchmark guide](docs/benchmarking.md) includes the methodology and limitations.
 
 These generated charts use separate panels for CPU arithmetic, host completion, and device
-timestamps. Dots show the median and whiskers extend to p95 on a logarithmic vertical scale. This
-single Apple M4/MoltenVK sample is not CUDA or cross-platform performance evidence.
+timestamps. Lines and dots show p50; whiskers extend to p95. Each panel uses a logarithmic latency
+axis with units selected for its range. Missing device timestamps remain visibly unavailable rather
+than being estimated. This single Apple M4/MoltenVK sample is not CUDA or cross-platform performance
+evidence.
 
 ![CPU arithmetic benchmark chart](benchmarks/charts/cpu-arithmetic.svg)
 

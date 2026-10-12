@@ -94,8 +94,8 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
     if not points:
         raise ValueError("cannot render a chart without measurements")
 
-    width, height = 920, 470
-    left, right, top, bottom = 100, 32, 70, 105
+    width, height = 1040, 660
+    left, right, top, bottom = 112, 44, 112, 180
     plot_width, plot_height = width - left - right, height - top - bottom
     minimum = min(point["median"] for point in points)
     maximum = max(point["p95"] for point in points)
@@ -105,6 +105,7 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
         min_exp -= 1
         max_exp += 1
     lower, upper = 10.0**min_exp, 10.0**max_exp
+    unit_scale, unit = (1_000_000.0, "ms") if maximum >= 1_000_000 else (1_000.0, "µs") if maximum >= 1_000 else (1.0, "ns")
 
     def y(value: float) -> float:
         fraction = (math.log10(value) - math.log10(lower)) / (math.log10(upper) - math.log10(lower))
@@ -112,48 +113,72 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
 
     escaped_title = html.escape(title)
     escaped_description = html.escape(description)
+    heading, separator, detail = title.partition(" — ")
+    heading = html.escape(heading)
+    detail = html.escape(detail if separator else "")
+    timing_label = "DEVICE TIMESTAMP" if "timestamp" in title.lower() else "HOST SUBMIT + COMPLETION" if "completion" in title.lower() else "CPU HOST EXECUTION"
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">',
         f'<title id="title">{escaped_title}</title><desc id="desc">{escaped_description}</desc>',
-        '<style>text{font-family:Arial,Helvetica,sans-serif;fill:#1f2937}.muted{fill:#4b5563}.grid{stroke:#d1d5db;stroke-width:1}.axis{stroke:#374151;stroke-width:1.4}.whisker{stroke-width:2}.median{stroke:#fff;stroke-width:1.5}</style>',
-        f'<text x="{left}" y="30" font-size="20" font-weight="700">{escaped_title}</text>',
+        '<style>text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#17243b}.muted{fill:#607089}.grid{stroke:#dbe3ef;stroke-width:1}.axis{stroke:#8b9bb1;stroke-width:1.25}.whisker{stroke-width:2.5;stroke-linecap:round}.median{stroke:#fff;stroke-width:2}.series-line{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;opacity:.72}.card{fill:#fff;stroke:#dce5f1;stroke-width:1.3}.plot-bg{fill:#f8fafd}.pill{fill:#eaf0f8}.tick{font-variant-numeric:tabular-nums}</style>',
+        f'<rect x="1" y="1" width="{width-2}" height="{height-2}" rx="18" fill="#f2f6fb" stroke="#dce5f1"/>',
+        f'<rect class="card" x="18" y="18" width="{width-36}" height="{height-36}" rx="14"/>',
+        f'<text x="{left}" y="55" font-size="27" font-weight="700">{heading}</text>',
+        f'<text class="muted" x="{left}" y="82" font-size="15">{detail}</text>',
+        f'<rect class="pill" x="{width-316}" y="37" width="{width- left - (width-316) + 0}" height="30" rx="15"/>',
+        f'<text x="{width-300}" y="57" font-size="11" font-weight="700" letter-spacing="1.1">{timing_label} · P50 / P95</text>',
+        f'<rect class="plot-bg" x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" rx="8"/>',
     ]
     for exponent in range(min_exp, max_exp + 1):
         value = 10.0**exponent
         y_pos = y(value)
         parts.append(f'<line class="grid" x1="{left}" y1="{y_pos:.1f}" x2="{width-right}" y2="{y_pos:.1f}"/>')
-        parts.append(f'<text class="muted" x="{left-12}" y="{y_pos+5:.1f}" text-anchor="end" font-size="12">{value:g}</text>')
+        parts.append(f'<text class="muted tick" x="{left-14}" y="{y_pos+5:.1f}" text-anchor="end" font-size="13">{value/unit_scale:g}</text>')
     parts.extend(
         [
             f'<line class="axis" x1="{left}" y1="{top}" x2="{left}" y2="{height-bottom}"/>',
             f'<line class="axis" x1="{left}" y1="{height-bottom}" x2="{width-right}" y2="{height-bottom}"/>',
-            f'<text class="muted" x="24" y="{top + plot_height/2:.1f}" transform="rotate(-90 24 {top + plot_height/2:.1f})" text-anchor="middle" font-size="13">Latency (ns, log scale)</text>',
-            f'<text class="muted" x="{left + plot_width/2:.1f}" y="{height-18}" text-anchor="middle" font-size="13">Vector elements</text>',
+            f'<text class="muted" x="29" y="{top + plot_height/2:.1f}" transform="rotate(-90 29 {top + plot_height/2:.1f})" text-anchor="middle" font-size="13">Latency ({unit}, logarithmic scale)</text>',
+            f'<text class="muted" x="{left + plot_width/2:.1f}" y="{height-bottom+57}" text-anchor="middle" font-size="13">Vector elements · problem size</text>',
         ]
     )
 
     centers = {size: left + plot_width * (index + 0.5) / len(sizes) for index, size in enumerate(sizes)}
     group_width = plot_width / max(1, len(sizes))
     for size in sizes:
-        parts.append(f'<text class="muted" x="{centers[size]:.1f}" y="{height-bottom+24}" text-anchor="middle" font-size="12">{_size_label(size)}</text>')
+        parts.append(f'<text class="muted tick" x="{centers[size]:.1f}" y="{height-bottom+26}" text-anchor="middle" font-size="13">{_size_label(size)}</text>')
     for series_index, item in enumerate(series):
         count = len(series)
         offset = (series_index - (count - 1) / 2) * min(20, group_width / max(2, count + 1))
-        for point in item["points"]:
+        ordered = sorted(item["points"], key=lambda point: point["size"])
+        size_indices = {size: index for index, size in enumerate(sizes)}
+        commands = []
+        previous_index = None
+        for point in ordered:
+            current_index = size_indices[point["size"]]
+            command = "L" if previous_index is not None and current_index == previous_index + 1 else "M"
+            commands.append(command + f" {centers[point['size']] + offset:.1f} {y(point['median']):.1f}")
+            previous_index = current_index
+        line_path = " ".join(commands)
+        if len(ordered) > 1:
+            parts.append(f'<path class="series-line" stroke="{item["color"]}" d="{line_path}"/>')
+        for point in ordered:
             x_pos = centers[point["size"]] + offset
             median_y, p95_y = y(point["median"]), y(point["p95"])
             parts.append(f'<line class="whisker" stroke="{item["color"]}" x1="{x_pos:.1f}" y1="{p95_y:.1f}" x2="{x_pos:.1f}" y2="{median_y:.1f}"/>')
-            parts.append(f'<line class="whisker" stroke="{item["color"]}" x1="{x_pos-5:.1f}" y1="{p95_y:.1f}" x2="{x_pos+5:.1f}" y2="{p95_y:.1f}"/>')
-            parts.append(f'<circle class="median" fill="{item["color"]}" cx="{x_pos:.1f}" cy="{median_y:.1f}" r="6"><title>{html.escape(item["label"])}: median {point["median"]:g} ns, p95 {point["p95"]:g} ns at {_size_label(point["size"])} elements</title></circle>')
+            parts.append(f'<line class="whisker" stroke="{item["color"]}" x1="{x_pos-6:.1f}" y1="{p95_y:.1f}" x2="{x_pos+6:.1f}" y2="{p95_y:.1f}"/>')
+            parts.append(f'<circle class="median" fill="{item["color"]}" cx="{x_pos:.1f}" cy="{median_y:.1f}" r="7"><title>{html.escape(item["label"])}: median {point["median"]:g} ns, p95 {point["p95"]:g} ns at {_size_label(point["size"])} elements</title></circle>')
 
-    legend_y = height - 55
-    total_width = min(plot_width, 210 * len(series))
-    start_x = left + max(0, (plot_width - total_width) / 2)
+    legend_y = height - 79
+    total_width = plot_width
+    start_x = left
     for index, item in enumerate(series):
         x_pos = start_x + index * (total_width / max(1, len(series)))
-        parts.append(f'<circle fill="{item["color"]}" cx="{x_pos:.1f}" cy="{legend_y}" r="5"/>')
-        parts.append(f'<text x="{x_pos+12:.1f}" y="{legend_y+4}" font-size="12">{html.escape(item["label"])}</text>')
-    parts.append(f'<text class="muted" x="{left}" y="{height-20}" font-size="11">Dots: median (p50); whiskers extend to p95. Logarithmic vertical axis.</text>')
+        parts.append(f'<line stroke="{item["color"]}" stroke-width="3" x1="{x_pos:.1f}" y1="{legend_y}" x2="{x_pos+20:.1f}" y2="{legend_y}"/>')
+        parts.append(f'<circle fill="{item["color"]}" stroke="#fff" stroke-width="1.5" cx="{x_pos+10:.1f}" cy="{legend_y}" r="5"/>')
+        parts.append(f'<text x="{x_pos+30:.1f}" y="{legend_y+5}" font-size="13" font-weight="600">{html.escape(item["label"])}</text>')
+    parts.append(f'<text class="muted" x="{left}" y="{height-53}" font-size="12">Line + dot: median (p50) · whisker: p95 · missing points: timer unavailable</text>')
+    parts.append(f'<text class="muted" x="{left}" y="{height-32}" font-size="12">Log scale; lower is faster. Compare only within this timing domain and the same recorded configuration.</text>')
     parts.append('</svg>')
     return '\n'.join(parts) + '\n'
 

@@ -55,7 +55,19 @@ class BenchmarkChartTests(unittest.TestCase):
         self.assertNotIn("at 1,048,576 elements", svg)
         self.assertIn("role=\"img\"", svg)
         self.assertIn("median 1000 ns, p95 1500 ns", svg)
+        self.assertIn("Latency (µs, logarithmic scale)", svg)
+        self.assertIn("Line + dot: median (p50) · whisker: p95", svg)
+        self.assertIn("series-line", svg)
         ElementTree.fromstring(svg)
+
+    def test_chart_does_not_connect_across_an_unavailable_sample(self):
+        data = report()
+        data["results"].append(
+            result("gpu_vector_add_4194240_gpu_execution", "gpu_execution_timestamp", 1200, 1600)
+        )
+        series = charts.report_series(data, "gpu", (4096, 1048576, 4194240))
+        svg = charts.render_svg("Device timestamps", "Middle size is unavailable.", series, (4096, 1048576, 4194240))
+        self.assertRegex(svg, r'stroke="#7c3aed" d="M [^"]+ M [^"]+"')
 
     def test_domain_mismatch_fails_instead_of_mixing_timings(self):
         bad = report([result("gpu_vector_add_4096_dispatch_wait", "gpu_execution_timestamp")])
@@ -89,7 +101,10 @@ class BenchmarkChartTests(unittest.TestCase):
             for path_a, path_b in zip(paths_a, paths_b):
                 self.assertEqual(path_a.read_bytes(), path_b.read_bytes())
             self.assertEqual({path.name for path in paths_a}, {"cpu-arithmetic.svg", "host-latency.svg", "gpu-timestamps.svg"})
-            self.assertIn("Apple M4 / MoltenVK", (Path(first) / "gpu-timestamps.svg").read_text())
+            chart = (Path(first) / "gpu-timestamps.svg").read_text()
+            self.assertIn("Apple M4 / MoltenVK", chart)
+            self.assertIn("DEVICE TIMESTAMP · P50 / P95", chart)
+            self.assertIn("Vector elements · problem size", chart)
 
 
 if __name__ == "__main__":
