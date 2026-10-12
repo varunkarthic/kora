@@ -67,9 +67,9 @@ nanoseconds. The full raw-sample reports are retained below.
 | Dense / 0 | 42 / 83 | 42 / 83 | 0% |
 | Dense / 8 | 83 / 84 | 42 / 84 | -49.4% |
 | Dense / 32 | 250 / 250 | 125 / 125 | -50.0% |
-| Dense / 128 | 833 / 875 | 333 / 375 | -60.0% |
+| Dense / 128 | 833 / 875 | 333 / 334 | -60.0% |
 | Dense / 512 | 3,000 / 3,041 | 917 / 959 | -69.4% |
-| Fragmented / 128 | 833 / 834 | 333 / 334 | -60.0% |
+| Fragmented / 128 | 833 / 834 | 334 / 375 | -59.9% |
 | Fragmented / 512 | 3,000 / 3,042 | 917 / 958 | -69.4% |
 
 At 0–8 live ranges the observed p50 is flat or lower (quantized timer samples make small differences
@@ -79,7 +79,7 @@ not end-to-end transfer improvement; the remaining scan and ordered-vector inser
 the number of live ranges. Re-run the GPU suite on target devices before extrapolating these values.
 
 - Before: [issue #215 baseline report](../benchmarks/results/issue215-before-411eb93.json)
-- After: [issue #215 optimized report](../benchmarks/results/issue215-after-local.json)
+- After: [issue #215 optimized report](../benchmarks/results/issue215-after-b10bdc1.json)
 
 ## Optional external CUDA reference
 
