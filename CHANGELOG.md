@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-12
+
 ### Fixed
 - Make `kora-info` report that runtime pipeline-cache state was not queried, rather than implying the cache is absent or uninitialized.
 
@@ -355,7 +357,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/varunkarthic/kora/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/varunkarthic/kora/releases/tag/v0.2.0
 [0.1.53]: https://github.com/varunkarthic/kora/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/varunkarthic/kora/compare/v0.1.51...v0.1.52
