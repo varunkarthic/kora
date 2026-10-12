@@ -99,6 +99,10 @@ struct PendingPerformanceObservation {
     std::uint64_t submission_nanoseconds = 0;
     std::uint64_t transfer_nanoseconds = 0;
     std::uint64_t completion_elapsed_nanoseconds = 0;
+    std::uint64_t completion_worker_delay_nanoseconds = 0;
+    std::uint64_t device_completion_wait_nanoseconds = 0;
+    std::uint64_t timestamp_collection_nanoseconds = 0;
+    std::uint64_t completion_callback_nanoseconds = 0;
     std::uint64_t dispatch_validation_nanoseconds = 0;
     std::uint64_t binding_preflight_nanoseconds = 0;
     std::uint64_t pipeline_lookup_nanoseconds = 0;
@@ -426,6 +430,9 @@ struct Runtime::Impl {
 #endif
             vk::QueueContext::CoalescingOptions coalescing;
             coalescing.enabled = true;
+            // Coalesce work already queued together, but don't delay an isolated dispatch in
+            // anticipation of a future peer submission.
+            coalescing.maximum_wait_ns = 0;
             auto queue_result =
                 vk::QueueContext::create(device.api(), device.handle(), device.compute_queue(),
                                          force_legacy_sync, coalescing, fault_state);
@@ -1275,10 +1282,19 @@ Result<Event> DispatchBuilder::submit() {
                 }
             }
         };
+    if (ctx->phase_profile_enabled) {
+        submission.on_completion_profile = [work](std::uint64_t worker_delay, std::uint64_t device_wait) {
+            work->observation.completion_worker_delay_nanoseconds = worker_delay;
+            work->observation.device_completion_wait_nanoseconds = device_wait;
+        };
+    }
     submission.on_complete = [promise, ctx, work, pipeline_ref, allocated_descriptors, bound_buffers,
                               bound_handles = buffers_, accesses = accesses_, written_buffers,
                               bound_host_versions,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
+        const auto completion_callback_started = ctx->phase_profile_enabled
+                                                     ? std::chrono::steady_clock::now()
+                                                     : std::chrono::steady_clock::time_point{};
         (void)pipeline_ref;
         if (!status && status.error().code == ErrorCode::DeviceLost && compute_value != 0) {
             for (std::size_t index = 0; index < accesses.size(); ++index)
@@ -1303,7 +1319,17 @@ Result<Event> DispatchBuilder::submit() {
             }
         }
         if (ctx->timestamps && status) {
+            const auto timestamp_collection_started = ctx->phase_profile_enabled
+                                                          ? std::chrono::steady_clock::now()
+                                                          : std::chrono::steady_clock::time_point{};
             auto samples = ctx->timestamps->collect(compute_value);
+            if (ctx->phase_profile_enabled) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - timestamp_collection_started)
+                                         .count();
+                if (elapsed > 0)
+                    work->observation.timestamp_collection_nanoseconds = static_cast<std::uint64_t>(elapsed);
+            }
             if (samples)
                 detail::observe_autotune_samples(ctx, samples.value(), ctx->performance_database,
                                                  ctx->performance_database_path);
@@ -1329,6 +1355,17 @@ Result<Event> DispatchBuilder::submit() {
                 ctx->pending_autotune.erase(pending);
             }
         }
+        const auto publish_completion_callback_profile = [&] {
+            if (!ctx->phase_profile_enabled) return;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - completion_callback_started)
+                                     .count();
+            if (elapsed > 0)
+                work->observation.completion_callback_nanoseconds = static_cast<std::uint64_t>(elapsed);
+            std::lock_guard lock(ctx->submit_mutex);
+            if (ctx->latest_profile_submission_id == work->submission_id)
+                ctx->latest_profile_observation = work->observation;
+        };
         for (const auto descriptor : *allocated_descriptors)
             (void)ctx->pipelines->free_descriptor_set(descriptor);
         if (status && !defer_readback) {
@@ -1357,6 +1394,7 @@ Result<Event> DispatchBuilder::submit() {
             if (status && !readbacks.empty()) {
                 auto aggregate = Event::when_all(readbacks);
                 if (!aggregate) {
+                    publish_completion_callback_profile();
                     promise->complete(Status(std::move(aggregate).error()));
                     return;
                 }
@@ -1395,6 +1433,7 @@ Result<Event> DispatchBuilder::submit() {
                 ctx->device_newer_buffers.erase(id);
             }
         }
+        publish_completion_callback_profile();
         promise->complete(std::move(status));
     };
     {
@@ -2381,6 +2420,10 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
             stats.last_descriptor_setup_nanoseconds = observation.descriptor_setup_nanoseconds;
             stats.last_command_recording_nanoseconds = observation.command_recording_nanoseconds;
             stats.last_queue_completion_nanoseconds = observation.completion_elapsed_nanoseconds;
+            stats.last_completion_worker_delay_nanoseconds = observation.completion_worker_delay_nanoseconds;
+            stats.last_device_completion_wait_nanoseconds = observation.device_completion_wait_nanoseconds;
+            stats.last_timestamp_collection_nanoseconds = observation.timestamp_collection_nanoseconds;
+            stats.last_completion_callback_nanoseconds = observation.completion_callback_nanoseconds;
         }
     }
     return stats;

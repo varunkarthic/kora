@@ -106,7 +106,9 @@ previously validated pipeline directly. A cache miss still runs SPIR-V reflectio
 `LocalSizeId` specialization also retains full validation because specialization affects the resolved
 pipeline key.
 Queue completion is measured from the pre-enqueue point until the completion callback (so it includes
-queue enqueue) and excludes default output readback performed after GPU completion. Builder
+queue enqueue) and excludes default output readback performed after GPU completion. Additional
+completion diagnostics separate completion-worker wake delay, the Vulkan timeline/fence wait,
+timestamp-query collection, and Runtime callback work. Builder
 construction can be timed by the caller around `Runtime::dispatch()` and builder configuration.
 Calling the API may collect ready samples but does not wait for pending
 submissions. When phase profiling is enabled but the device cannot provide GPU timestamps, the method

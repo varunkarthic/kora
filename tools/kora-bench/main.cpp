@@ -1241,7 +1241,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
             return sample;
         };
 
-        std::array<std::vector<std::uint64_t>, 14> phase_samples;
+        std::array<std::vector<std::uint64_t>, 18> phase_samples;
         const auto append_sample = [&](const PhaseSample& sample, bool retain) {
             if (!retain) return;
             phase_samples[0].push_back(sample.builder_setup);
@@ -1258,6 +1258,10 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
             phase_samples[11].push_back(sample.runtime.last_descriptor_setup_nanoseconds);
             phase_samples[12].push_back(sample.runtime.last_command_recording_nanoseconds);
             phase_samples[13].push_back(sample.runtime.last_queue_completion_nanoseconds);
+            phase_samples[14].push_back(sample.runtime.last_completion_worker_delay_nanoseconds);
+            phase_samples[15].push_back(sample.runtime.last_device_completion_wait_nanoseconds);
+            phase_samples[16].push_back(sample.runtime.last_timestamp_collection_nanoseconds);
+            phase_samples[17].push_back(sample.runtime.last_completion_callback_nanoseconds);
         };
         bool profile_available = true;
         for (std::size_t iteration = 0; iteration < options.warmup; ++iteration) {
@@ -1278,7 +1282,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                 append_sample(*sample, true);
             }
         }
-        constexpr std::array<std::string_view, 14> phase_names{"builder_setup",
+        constexpr std::array<std::string_view, 18> phase_names{"builder_setup",
                                                                "submit_call",
                                                                "event_wait",
                                                                "dispatch_validation",
@@ -1291,7 +1295,11 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                                                "command_buffer_acquire",
                                                                "descriptor_setup",
                                                                "command_recording",
-                                                               "queue_completion"};
+                                                               "queue_completion",
+                                                               "completion_worker_delay",
+                                                               "device_completion_wait",
+                                                               "timestamp_collection",
+                                                               "completion_callback"};
         if (profile_available) {
             for (std::size_t phase = 0; phase < phase_samples.size(); ++phase) {
                 auto& samples = phase_samples[phase];

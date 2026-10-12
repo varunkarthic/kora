@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -22,6 +23,8 @@ public:
     struct CoalescingOptions {
         bool enabled = false;
         uint32_t maximum_batch_size = 8;
+        /// Maximum time to wait for additional compatible submissions; zero batches only those
+        /// already waiting when the submission worker selects the first item.
         uint64_t maximum_wait_ns = 100'000;
     };
 
@@ -47,6 +50,9 @@ public:
         std::function<Status(uint64_t, std::vector<VkCommandBuffer>&)> record_commands;
         std::function<void(uint64_t, Status)> on_submitted;
         std::function<void(uint64_t, Status)> on_complete;
+        /// Optional diagnostic hook: time from completion-record enqueue to worker wake, then
+        /// time spent inside the Vulkan completion wait. Installed only by profiling runs.
+        std::function<void(uint64_t, uint64_t)> on_completion_profile;
     };
 
     static Result<std::unique_ptr<QueueContext>> create(Api api, VkDevice device, VkQueue queue,
@@ -87,6 +93,8 @@ private:
         std::function<void(uint64_t, Status)> callback;
         VkFence fence = VK_NULL_HANDLE;
         bool pooled_fence = false;
+        std::function<void(uint64_t, uint64_t)> on_completion_profile;
+        std::chrono::steady_clock::time_point enqueued_at;
     };
 
     QueueContext(Api api, VkDevice device, VkQueue queue, VkSemaphore timeline, bool use_timeline,

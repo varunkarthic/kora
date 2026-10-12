@@ -439,6 +439,9 @@ TEST(QueueContext, RecordsOnSubmissionThreadAndReportsTimelineAcrossCallbacks) {
     std::atomic<uint64_t> recorded_value{0};
     std::atomic<uint64_t> submitted_value{0};
     std::atomic<uint64_t> completed_id{0};
+    std::atomic<uint64_t> completion_worker_delay{0};
+    std::atomic<uint64_t> device_wait_duration{0};
+    std::atomic<uint32_t> profile_calls{0};
     std::atomic<bool> submit_succeeded{false};
     QueueContext::Submission submission;
     submission.record_commands = [&](uint64_t value, std::vector<VkCommandBuffer>& commands) {
@@ -454,6 +457,11 @@ TEST(QueueContext, RecordsOnSubmissionThreadAndReportsTimelineAcrossCallbacks) {
         completed_id.store(id);
         EXPECT_TRUE(status);
     };
+    submission.on_completion_profile = [&](uint64_t worker_delay, uint64_t wait_duration) {
+        completion_worker_delay.store(worker_delay);
+        device_wait_duration.store(wait_duration);
+        ++profile_calls;
+    };
     auto id = context->submit(std::move(submission));
     ASSERT_TRUE(id);
     ASSERT_TRUE(context->shutdown());
@@ -461,6 +469,8 @@ TEST(QueueContext, RecordsOnSubmissionThreadAndReportsTimelineAcrossCallbacks) {
     EXPECT_EQ(submitted_value.load(), 1U);
     EXPECT_TRUE(submit_succeeded.load());
     EXPECT_EQ(completed_id.load(), id.value());
+    EXPECT_EQ(profile_calls.load(), 1U);
+    EXPECT_GT(completion_worker_delay.load(), 0U);
     EXPECT_EQ(mock.submit_calls.load(), 1U);
 }
 

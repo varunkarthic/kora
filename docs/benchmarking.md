@@ -140,6 +140,11 @@ the corresponding device-time result is omitted. This mode adds profiling work; 
 ordinary benchmark rows as the Release performance baseline or feed the report to the comparison
 table or chart generators.
 
+The completion diagnostics further split completion-worker wake delay, the Vulkan timeline/fence
+wait, timestamp-query collection, and Runtime completion-callback work. These phases explain where
+the caller-visible Event latency is spent; they are measured only in diagnostic mode and are not
+themselves an optimization target or a substitute for the ordinary KORA/raw Vulkan comparison.
+
 Phase profiling identified repeated SPIR-V reflection as avoidable work on ordinary pipeline-cache
 hits. Static-local-size dispatches now perform an exact cache-key lookup first and only run reflection
 when a pipeline is not already cached. `LocalSizeId` dispatches retain the full validation path because
@@ -490,6 +495,47 @@ inferred to be faster on other memory topologies. Devices without device-local h
 cannot run this direct/staged comparison, so the optional GPU suite reports unavailable there. The raw
 comparison covers buffer copies and one vector-add dispatch, not all KORA compute workloads. Re-run on
 each target; do not use these single-host values to set a universal staging threshold.
+
+### Issue #214: eager submission coalescing and completion latency
+
+The completion-phase diagnostic isolated the dominant avoidable delay before the Vulkan queue submit:
+Runtime compute queues held a lone, otherwise-ready dispatch for a 100 µs coalescing collection window.
+The completion worker's Vulkan timeline wait was still substantial, but timestamp-query collection and
+Runtime callback work each measured only a few microseconds. Runtime coalescing now batches compatible
+submissions that are already queued together, without waiting for additional future submissions.
+
+The before/after gate used five interleaved Release runs per variant, each with 50 warm-ups and 1,000
+timed samples, on the same Apple M4/MoltenVK device (device index 2, Vulkan 1.3.357). Both variants
+ran the same shader and input sizes; output correctness checks occur before timed intervals. KORA and
+raw Vulkan were explicitly confirmed to use the same physical device. The before binary was built
+from `f854b911f9d447488e305c717af67d119427b6e6` and the after binary from
+`32c0cb133fc47e5508a3b907b1591cc60c68206f`; both used AppleClang 21.0.0, Release `-O3 -DNDEBUG`.
+Each table entry is the median of five run medians; p95 is the median of the five per-run p95s.
+These are host submit/completion measurements, not GPU kernel times. KORA device timestamps were
+unavailable on this MoltenVK queue, so no KORA-vs-raw GPU execution ratio is inferred.
+
+| Elements | KORA before p50 / p95 | KORA after p50 / p95 | p50 change | Matched raw Vulkan p50 before / after |
+| ---: | ---: | ---: | ---: | ---: |
+| 4,096 | 547.875 / 612.000 µs | 380.958 / 444.083 µs | −30.5% | 409.500 / 408.042 µs |
+| 65,536 | 537.583 / 618.125 µs | 391.583 / 448.792 µs | −27.2% | — |
+| 262,144 | 610.750 / 678.834 µs | 432.875 / 541.791 µs | −29.1% | — |
+| 1,048,576 | 1.331 / 1.554 ms | 1.093 / 1.314 ms | −17.9% | — |
+| 4,194,240 | 2.124 / 2.348 ms | 1.917 / 2.291 ms | −9.7% | — |
+
+At 4K, the KORA/raw median host-latency ratio moved from 1.34× to 0.93× in these five paired
+runs. The five-run median of per-run p95s improved by 27.4%; the largest workload showed no
+regression in either p50 or p95. The improvement is consistent with removing the idle collection
+delay; residual latency is dominated by host/driver queue-completion behavior (diagnostic Vulkan wait
+was roughly 316–345 µs), not buffer residency or KORA's completion callback. This M4 result is a
+local host-latency comparison only; it does not establish CUDA parity or Linux/Windows hardware-GPU
+performance.
+
+All raw samples and environment/device assertions are retained in the five interleaved pairs:
+[pair 1 before](../benchmarks/results/issue214-before-f854b91-pair-1.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-1.json),
+[pair 2 before](../benchmarks/results/issue214-before-f854b91-pair-2.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-2.json),
+[pair 3 before](../benchmarks/results/issue214-before-f854b91-pair-3.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-3.json),
+[pair 4 before](../benchmarks/results/issue214-before-f854b91-pair-4.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-4.json), and
+[pair 5 before](../benchmarks/results/issue214-before-f854b91-pair-5.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-5.json).
 
 ### Optimization decisions and limits
 

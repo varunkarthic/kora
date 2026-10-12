@@ -171,6 +171,10 @@ struct RuntimeProfilingStats {
     std::uint64_t last_descriptor_setup_nanoseconds = 0;
     std::uint64_t last_command_recording_nanoseconds = 0;
     std::uint64_t last_queue_completion_nanoseconds = 0;
+    std::uint64_t last_completion_worker_delay_nanoseconds = 0;
+    std::uint64_t last_device_completion_wait_nanoseconds = 0;
+    std::uint64_t last_timestamp_collection_nanoseconds = 0;
+    std::uint64_t last_completion_callback_nanoseconds = 0;
 };
 
 /// Best-effort, optional Vulkan device-fault details captured after device loss. Address values are

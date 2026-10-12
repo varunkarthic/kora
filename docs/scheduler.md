@@ -197,8 +197,9 @@ fallback. Ordinary dispatch is unchanged.
 
 ## Small-dispatch coalescing
 
-Runtime compute queues enable a bounded queue-level coalescing window (100 microseconds, at most eight
-dispatch records). Dispatches are eligible only when they share the exact cached pipeline/layout key,
+Runtime compute queues enable eager queue-level coalescing (at most eight dispatch records), with no
+intentional collection delay: only compatible records already queued together are batched. Dispatches
+are eligible only when they share the exact cached pipeline/layout key,
 declare no explicit dependencies, have identical external semaphore waits, and have no cross-dispatch
 read/write conflict on a generation-aware buffer identity. Identical waits avoid delaying an otherwise
 independent dispatch behind a later transfer prerequisite. Compatible command buffers are recorded
@@ -206,8 +207,7 @@ independently and submitted in one Vulkan queue-submit call with a shared comple
 every dispatch still receives its own Event completion callback. Read/read sharing is allowed, while
 any shared write forces separate submissions.
 
-High and real-time-hint priorities bypass the waiting window and are never merged. Low/normal work may
-wait up to the bounded window for compatible peers; an incompatible or elevated-priority queue head
+High and real-time-hint priorities are never merged. An incompatible or elevated-priority queue head
 ends collection. Fence-only queue contexts disable coalescing because dispatch Events rely on a shared
 timeline completion. The optimization does not delay work beyond the configured window and does not
 batch work with unresolved task dependencies.
