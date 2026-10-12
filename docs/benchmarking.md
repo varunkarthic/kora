@@ -65,20 +65,21 @@ nanoseconds. The full raw-sample reports are retained below.
 | Layout / live ranges | Before p50 / p95 (ns) | After p50 / p95 (ns) | p50 change |
 | --- | ---: | ---: | ---: |
 | Dense / 0 | 42 / 83 | 42 / 83 | 0% |
-| Dense / 8 | 83 / 84 | 42 / 84 | -49.4% |
+| Dense / 8 | 83 / 125 | 42 / 84 | -49.4% |
 | Dense / 32 | 250 / 250 | 125 / 125 | -50.0% |
-| Dense / 128 | 833 / 875 | 333 / 334 | -60.0% |
-| Dense / 512 | 3,000 / 3,041 | 917 / 959 | -69.4% |
-| Fragmented / 128 | 833 / 834 | 334 / 375 | -59.9% |
-| Fragmented / 512 | 3,000 / 3,042 | 917 / 958 | -69.4% |
+| Dense / 128 | 1,000 / 1,042 | 333 / 334 | -66.7% |
+| Dense / 512 | 3,250 / 3,958 | 917 / 958 | -71.8% |
+| Fragmented / 128 | 1,000 / 1,041 | 334 / 375 | -66.6% |
+| Fragmented / 512 | 3,958 / 4,083 | 917 / 958 | -76.8% |
 
 At 0–8 live ranges the observed p50 is flat or lower (quantized timer samples make small differences
-coarse); at 128+ ranges p50 falls by 60–69%. The comparison is local evidence from one device and
-one run per revision, not a cross-platform guarantee. It establishes reservation-search improvement,
-not end-to-end transfer improvement; the remaining scan and ordered-vector insertion are linear in
-the number of live ranges. Re-run the GPU suite on target devices before extrapolating these values.
+coarse); at 128+ ranges p50 falls by 66–77%. The comparison is local evidence from one device and
+one 1,000-sample run per revision, not a cross-platform guarantee or repeated-run confidence interval.
+It establishes reservation-search improvement, not end-to-end transfer improvement; the remaining
+scan and ordered-vector insertion are linear in the number of live ranges. Re-run the GPU suite on
+target devices before extrapolating these values.
 
-- Before: [issue #215 baseline report](../benchmarks/results/issue215-before-411eb93.json)
+- Before: [issue #215 baseline report at `a94bef0`](../benchmarks/results/issue215-before-a94bef0.json)
 - After: [issue #215 optimized report](../benchmarks/results/issue215-after-b10bdc1.json)
 
 ## Optional external CUDA reference
