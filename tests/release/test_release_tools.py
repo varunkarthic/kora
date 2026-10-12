@@ -78,6 +78,30 @@ class BranchFreshnessTests(unittest.TestCase):
 
 
 class ChangelogSectionTests(unittest.TestCase):
+    def test_user_visible_change_requires_new_unreleased_entry(self):
+        base = "# Changelog\n\n## [Unreleased]\n\n## [0.2.6] - 2026-10-12\n- Existing.\n"
+        with self.assertRaisesRegex(ValueError, r"must add a bullet under \[Unreleased\]"):
+            changelog_sections_module.validate(base, base, require_unreleased_entry=True)
+
+        changed = base.replace(
+            "## [Unreleased]\n\n",
+            "## [Unreleased]\n\n### Changed\n- Document benchmark JSON schema version 3.\n\n",
+        )
+        changelog_sections_module.validate(base, changed, require_unreleased_entry=True)
+
+    def test_unreleased_entry_must_be_categorized_and_new(self):
+        base = "# Changelog\n\n## [Unreleased]\n\n## [0.2.6]\n- Existing.\n"
+        uncategorized = base.replace("## [Unreleased]\n\n", "## [Unreleased]\n- Not categorized.\n\n")
+        with self.assertRaisesRegex(ValueError, r"must add a bullet under \[Unreleased\]"):
+            changelog_sections_module.validate(base, uncategorized, require_unreleased_entry=True)
+
+        same_entry = base.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n### Fixed\n- Existing.\n\n")
+        base_with_entry = base.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n### Fixed\n- Existing.\n\n")
+        with self.assertRaisesRegex(ValueError, r"must add a bullet under \[Unreleased\]"):
+            changelog_sections_module.validate(
+                base_with_entry, same_entry, require_unreleased_entry=True
+            )
+
     def test_issue_change_cannot_be_added_to_an_already_published_section(self):
         base = (
             "# Changelog\n\n## [Unreleased]\n\n"

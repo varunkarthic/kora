@@ -49,6 +49,8 @@ def main() -> None:
         "refs/pull/${PR_NUMBER}/head",
         "tools/ci/check_pr_branch_freshness.py",
         "tools/ci/check_changelog_sections.py",
+        "Require a new Unreleased changelog entry",
+        "--require-unreleased-entry",
         "--allow-version 0.2.5",
         "issue/176-changelog-tag-alignment",
     ):
