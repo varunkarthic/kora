@@ -152,6 +152,9 @@ changed from 1.95× to 1.29×. These sequential local runs show host-load variat
 CUDA parity; a second post-change sample measured KORA at 522.2 µs and raw Vulkan at 465.5 µs.
 Raw JSON, exact revisions, and the profiling breakdown are in
 [the dispatch-overhead study](docs/benchmarking.md#dispatch-overhead-case-study).
+An optional external CUDA report can be validated and rendered separately; no CUDA result is included
+until a same-device NVIDIA run is available. The report contract and invocation are in the
+[benchmark guide](docs/benchmarking.md#optional-external-cuda-reference).
 
 ## Documentation
 
