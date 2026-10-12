@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "kora/errors.hpp"
+#include "kora/version.hpp"
 
 namespace kora::detail::calibration {
 
@@ -15,7 +16,7 @@ struct Record {
     std::uint32_t schema = kSchemaVersion;
     std::string device_uuid;
     std::uint32_t driver_version = 0;
-    std::uint32_t kora_schema = 1;
+    std::uint32_t kora_schema = static_cast<std::uint32_t>(kora::kSchemaVersion);
     std::uint64_t submit_overhead_ns = 0;
     std::uint64_t tiny_dispatch_ns = 0;
     std::uint64_t h2d_bytes_per_second = 0;
