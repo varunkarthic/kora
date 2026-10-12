@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-10-12
+
 ### Changed
 - Redesign the docs landing and release guide around user tasks, installation, verification, and release maturity; improve generated benchmark SVG hierarchy while preserving timing-domain separation.
 
@@ -451,7 +453,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/varunkarthic/kora/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/varunkarthic/kora/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/varunkarthic/kora/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/varunkarthic/kora/compare/v0.2.9...v0.2.10
