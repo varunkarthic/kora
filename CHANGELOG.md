@@ -15,6 +15,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - Bound release CTest cases and package jobs so a stalled platform cannot indefinitely hold the
   release queue or publish an incomplete package set.
+- Synchronize CPU executor task-drain counter updates with the worker wait mutex so graceful shutdown
+  cannot lose the final wakeup and strand idle workers.
 
 ### Added
 - Embed a vendor-neutral compute calibration shader and record validated tiny-dispatch, streaming
