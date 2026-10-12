@@ -70,6 +70,12 @@ if "--gpu" in arguments:
     assert isinstance(gpu["raw_gpu_timestamps_available"], bool)
     assert gpu["kora_gpu_timestamps_available"] == bool(gpu["kora_gpu_timestamp_sizes"])
     assert gpu["raw_gpu_timestamps_available"] == bool(gpu["raw_gpu_timestamp_sizes"])
+    assert isinstance(gpu["kora_gpu_compute_timestamps_available"], bool)
+    assert isinstance(gpu["raw_gpu_compute_timestamps_available"], bool)
+    assert isinstance(gpu["kora_gpu_compute_timestamp_workloads"], list)
+    assert isinstance(gpu["raw_gpu_compute_timestamp_workloads"], list)
+    assert gpu["kora_gpu_compute_timestamps_available"] == bool(gpu["kora_gpu_compute_timestamp_workloads"])
+    assert gpu["raw_gpu_compute_timestamps_available"] == bool(gpu["raw_gpu_compute_timestamp_workloads"])
     assert set(gpu["paths"]) == {"kora_runtime", "kora_transfer_engine", "raw_vulkan"}
     assert not {"uuid", "device_uuid", "vendor_id", "device_id"}.intersection(gpu)
     expected_names |= {
@@ -105,15 +111,15 @@ if "--gpu" in arguments:
         "stencil_4096",
     }
     expected_names |= {f"raw_vulkan_{name}_dispatch_wait" for name in raw_compute_workloads}
+    expected_names |= set(gpu["kora_gpu_compute_timestamp_workloads"])
     expected_names |= {
-        "gpu_saxpy_4096_gpu_execution",
-        "gpu_reduction_4096_gpu_execution",
-        "gpu_tiled_scan_4096_gpu_execution",
-        "gpu_tiled_matmul_64_gpu_execution",
-        "gpu_stencil_4096_gpu_execution",
-    } if gpu["kora_gpu_timestamps_available"] else set()
-    if gpu["raw_gpu_timestamps_available"]:
-        expected_names |= {f"raw_vulkan_{name}_gpu_execution" for name in raw_compute_workloads}
+        "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait",
+        "gpu_reduction_4096_deferred_readback_dispatch_wait",
+        "gpu_tiled_scan_4096_deferred_readback_dispatch_wait",
+        "gpu_tiled_matmul_64_deferred_readback_dispatch_wait",
+        "gpu_stencil_4096_deferred_readback_dispatch_wait",
+    }
+    expected_names |= set(gpu["raw_gpu_compute_timestamp_workloads"])
     expected_names |= {
         f"gpu_vector_add_{count}_gpu_execution" for count in gpu["kora_gpu_timestamp_sizes"]
     }
@@ -129,7 +135,11 @@ if "--gpu" in arguments:
             f"raw_vulkan_copy_{count}",
             f"kora_transfer_copy_{count}",
         }
-assert {item["name"] for item in report["results"]} == expected_names
+actual_names = {item["name"] for item in report["results"]}
+assert actual_names == expected_names, (
+    f"benchmark result contract mismatch; missing={sorted(expected_names - actual_names)}, "
+    f"unexpected={sorted(actual_names - expected_names)}"
+)
 for result in report["results"]:
     assert result["unit"] == "ns"
     assert result["timing_domain"]

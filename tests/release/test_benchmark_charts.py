@@ -118,6 +118,7 @@ class BenchmarkChartTests(unittest.TestCase):
             (
                 "SAXPY / 4,096",
                 "gpu_saxpy_4096_upload_dispatch_wait",
+                "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait",
                 "raw_vulkan_saxpy_4096_upload_dispatch_wait",
                 "gpu_saxpy_4096_gpu_execution",
                 "raw_vulkan_saxpy_4096_upload_gpu_execution",
@@ -125,6 +126,7 @@ class BenchmarkChartTests(unittest.TestCase):
             (
                 "Reduction / 4,096",
                 "gpu_reduction_4096_dispatch_wait",
+                "gpu_reduction_4096_deferred_readback_dispatch_wait",
                 "raw_vulkan_reduction_4096_dispatch_wait",
                 "gpu_reduction_4096_gpu_execution",
                 "raw_vulkan_reduction_4096_gpu_execution",
@@ -132,6 +134,7 @@ class BenchmarkChartTests(unittest.TestCase):
             (
                 "Scan / 4,096",
                 "gpu_tiled_scan_4096_dispatch_wait",
+                "gpu_tiled_scan_4096_deferred_readback_dispatch_wait",
                 "raw_vulkan_tiled_scan_4096_dispatch_wait",
                 "gpu_tiled_scan_4096_gpu_execution",
                 "raw_vulkan_tiled_scan_4096_gpu_execution",
@@ -139,6 +142,7 @@ class BenchmarkChartTests(unittest.TestCase):
             (
                 "Tiled matmul / 64×64",
                 "gpu_tiled_matmul_64_dispatch_wait",
+                "gpu_tiled_matmul_64_deferred_readback_dispatch_wait",
                 "raw_vulkan_tiled_matmul_64_dispatch_wait",
                 "gpu_tiled_matmul_64_gpu_execution",
                 "raw_vulkan_tiled_matmul_64_gpu_execution",
@@ -146,13 +150,17 @@ class BenchmarkChartTests(unittest.TestCase):
             (
                 "Stencil / 4,096",
                 "gpu_stencil_4096_dispatch_wait",
+                "gpu_stencil_4096_deferred_readback_dispatch_wait",
                 "raw_vulkan_stencil_4096_dispatch_wait",
                 "gpu_stencil_4096_gpu_execution",
                 "raw_vulkan_stencil_4096_gpu_execution",
             ),
         )
-        for index, (label, kora_name, raw_name, kora_gpu_name, raw_gpu_name) in enumerate(workloads):
+        for index, (label, kora_name, deferred_name, raw_name, kora_gpu_name, raw_gpu_name) in enumerate(workloads):
             data["results"].append(result(kora_name, "host_submit_completion", 2000 + index, 2500 + index))
+            data["results"].append(
+                result(deferred_name, "host_submit_completion", 1600 + index, 1900 + index)
+            )
             data["results"].append(result(raw_name, "host_submit_completion", 1000 + index, 1500 + index))
             data["results"].append(
                 result(kora_gpu_name, "gpu_execution_timestamp", 100 + index, 150 + index)
@@ -180,8 +188,10 @@ class BenchmarkChartTests(unittest.TestCase):
         self.assertIn("Matched same-device Vulkan compute workloads", rendered.stdout)
         self.assertIn("SAXPY / 4,096", rendered.stdout)
         self.assertIn("Tiled matmul / 64×64", rendered.stdout)
+        self.assertIn("KORA deferred p50", rendered.stdout)
+        self.assertIn("KORA default includes writable-output readback", rendered.stdout)
         self.assertIn("unavailable", rendered.stdout)
-        self.assertIn("Raw Vulkan uses persistent host-visible buffers", rendered.stdout)
+        self.assertIn("raw Vulkan uses persistent host-visible buffers", rendered.stdout)
 
     def test_generation_is_deterministic_and_separates_domains(self):
         data = report()
