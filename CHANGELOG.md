@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Cache the immutable duplicate-verification device set per Runtime instead of allocating and
+  scanning it for every ordinary dispatch; verification still checks current quarantine state at
+  submission time.
+
 ## [0.2.8] - 2026-10-12
 
 ### Changed
