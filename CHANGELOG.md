@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-12
+
 ### Fixed
 - Bound release CTest cases and package jobs so a stalled platform cannot indefinitely hold the
   release queue or publish an incomplete package set.
@@ -400,7 +402,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/varunkarthic/kora/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/varunkarthic/kora/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/varunkarthic/kora/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/varunkarthic/kora/compare/v0.2.1...v0.2.2
