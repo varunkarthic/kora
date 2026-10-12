@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-10-12
+
 ### Added
 - Expand `kora-bench` CPU compute coverage with single-thread and four-worker vector-add, SAXPY, reduction, stencil, and tiled matrix multiplication cases; validate full outputs outside timed intervals and record CPU model, build flags, source revision, and worker count.
 - Split diagnostic GPU completion profiling into completion-worker delay, Vulkan wait, timestamp collection, and Runtime callback phases.
@@ -471,7 +473,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.15...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.16...HEAD
+[0.2.16]: https://github.com/varunkarthic/kora/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/varunkarthic/kora/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/varunkarthic/kora/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/varunkarthic/kora/compare/v0.2.12...v0.2.13
