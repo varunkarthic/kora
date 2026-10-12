@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Preserve indented continuation lines when generating release highlights from wrapped changelog
+  bullets.
+
 ### Changed
 - Organize generated GitHub release notes into a version overview, platform downloads, highlights,
   install steps, and grouped release-validation gates.

@@ -154,6 +154,39 @@ class ChangelogSectionTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_release_highlights_preserve_wrapped_lines_and_stop_at_boundaries(self):
+        changelog = """## [0.2.10]
+
+### Added
+- First highlight with context
+  continued on the next line.
+- Second highlight.
+
+### Fixed
+- Third highlight.
+- Fourth highlight.
+"""
+        highlights = render_module.release_highlights(changelog)
+        self.assertEqual(
+            highlights,
+            [
+                "First highlight with context continued on the next line.",
+                "Second highlight.",
+                "Third highlight.",
+            ],
+        )
+        self.assertEqual(render_module.release_highlights(changelog, 2), highlights[:2])
+        self.assertEqual(render_module.release_highlights(changelog, 0), [])
+
+    def test_v0210_release_highlight_includes_wrapped_continuation(self):
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        section = render_module.release_changelog(changelog, "0.2.10")
+        self.assertIn(
+            "Generate deterministic, timing-domain-separated benchmark SVG charts from retained schema-3 "
+            "reports and document their methodology and limitations.",
+            render_module.release_highlights(section)[0],
+        )
+
     def test_release_page_contains_versioned_platform_downloads_and_source_summary(self):
         changelog = """## [0.2.10] - 2026-10-12
 
