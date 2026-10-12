@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "core/calibration.hpp"
+#include "core/calibration_spv.hpp"
 #include "core/device_caps.hpp"
 #include "core/device_initialization.hpp"
 #include "core/event_state.hpp"
@@ -28,6 +29,7 @@
 #include "core/runtime_test_access.hpp"
 #include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
+#include "kernel/spirv.hpp"
 #include "memory/eviction.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
@@ -423,15 +425,22 @@ struct Runtime::Impl {
             try {
                 const auto started = std::chrono::steady_clock::now();
                 const auto hard_deadline = started + std::chrono::milliseconds(budget_ms);
+                calibration_deadline = hard_deadline;
                 const auto write_reserve =
                     std::min(std::chrono::milliseconds(10), std::chrono::milliseconds(budget_ms / 5));
-                const auto deadline = hard_deadline - write_reserve;
+                const auto compute_reserve =
+                    std::min(std::chrono::milliseconds(150), std::chrono::milliseconds(budget_ms / 2));
+                calibration_deadline = hard_deadline - write_reserve;
+                const auto deadline = calibration_deadline - compute_reserve;
                 const auto key = id.uuid.empty() ? std::to_string(id.index) : id.uuid;
                 const auto path = directory / "calibration" / (key + ".json");
                 detail::calibration::Record cached;
                 if (id.uuid.empty()) return;
                 if (!force && detail::calibration::read(path, id.uuid, driver_version, cached)) {
                     calibration_record = cached;
+                    compute_calibration_pending = cached.tiny_dispatch_ns == 0 ||
+                                                  cached.streaming_bytes_per_second == 0 ||
+                                                  cached.alu_operations_per_second == 0;
                     return;
                 }
                 detail::calibration::Record record;
@@ -597,11 +606,11 @@ struct Runtime::Impl {
                         }
                     }
                 }
-                // Tiny dispatch, streaming kernel and ALU fields remain zero unless a validated
-                // shader probe is available; zero means unmeasured, never infinite performance.
+                // Leave a compute window after queue/transfer probes and before record publication.
                 if (std::chrono::steady_clock::now() >= hard_deadline) return;
-                auto status = detail::calibration::write_atomic(path, record);
-                if (status && std::chrono::steady_clock::now() <= hard_deadline) calibration_record = record;
+                calibration_record = record;
+                compute_calibration_pending = true;
+                (void)detail::calibration::write_atomic(path, record);
             } catch (...) {
                 // Calibration is best-effort; it must never prevent Runtime creation.
             }
@@ -642,6 +651,8 @@ struct Runtime::Impl {
         std::vector<VkTimeDomainKHR> calibrated_time_domains;
         std::uint32_t driver_version = 0;
         detail::calibration::Record calibration_record;
+        std::chrono::steady_clock::time_point calibration_deadline{};
+        bool compute_calibration_pending = false;
         ShutdownMode shutdown_mode = ShutdownMode::Graceful;
         bool stopped = false;
     };
@@ -1719,7 +1730,9 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
     effective_options.trace = options.trace;
     effective_options.enable_startup_calibration = resolved.enable_startup_calibration;
     effective_options.calibration_budget_ms = resolved.calibration_budget_ms;
-    return Runtime(std::move(impl), std::move(effective_options));
+    Runtime runtime(std::move(impl), std::move(effective_options));
+    if (resolved.enable_startup_calibration) runtime.calibrate_compute_probes();
+    return runtime;
 }
 
 Status Runtime::recover() {
@@ -1860,7 +1873,144 @@ Status Runtime::calibrate() {
     if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
     for (auto& device : impl_->devices)
         if (device) device->calibrate(impl_->calibration_directory, impl_->calibration_budget_ms, true);
+    calibrate_compute_probes();
     return ok_status();
+}
+
+void Runtime::calibrate_compute_probes() noexcept {
+    if (!impl_) return;
+    for (auto& device_ptr : impl_->devices) {
+        if (!device_ptr || !device_ptr->compute_calibration_pending) continue;
+        auto& device = *device_ptr;
+        try {
+            if (std::chrono::steady_clock::now() >= device.calibration_deadline) continue;
+            KernelMetadata metadata;
+            metadata.kernel_id = "kora.internal.calibration-probe.v1";
+            metadata.bindings = {
+                {0, 0, "input_values", KernelBindingKind::StorageBuffer, KernelAccess::Read},
+                {0, 1, "output_values", KernelBindingKind::StorageBuffer, KernelAccess::Write},
+            };
+            metadata.push_constant_size = 16;
+            metadata.push_constants = {{"count", "u32", 0, 4},
+                                       {"iterations", "u32", 4, 4},
+                                       {"mode", "u32", 8, 4},
+                                       {"seed", "u32", 12, 4}};
+            metadata.local_size = {64, 1, 1};
+            auto metadata_status = validate_kernel_metadata(metadata);
+            if (!metadata_status) continue;
+            const auto words = std::span<const std::uint32_t>(detail::calibration::kProbeShaderSpv);
+            auto reflection = detail::spirv::validate_and_reflect(
+                words, metadata, detail::spirv::capabilities_from(device.info), "main");
+            if (!reflection) continue;
+
+            auto state = std::make_shared<detail::KernelState>();
+            state->entry_point = "main";
+            state->metadata = metadata;
+            state->words.assign(words.begin(), words.end());
+            state->runtime_id = impl_->runtime_id;
+            state->device_index = device.id.index;
+            const Kernel probe(std::move(state));
+
+            constexpr std::uint32_t count = 16U * 1024U;
+            auto input_result = buffers_.create<std::uint32_t>(count, BufferUsage::Storage);
+            auto output_result = buffers_.create<std::uint32_t>(count, BufferUsage::Storage);
+            if (!input_result || !output_result) continue;
+            auto input = std::move(input_result).value();
+            auto output = std::move(output_result).value();
+            std::vector<std::uint32_t> input_values(count);
+            for (std::uint32_t i = 0; i < count; ++i) input_values[i] = i * 747796405U + 2891336453U;
+            if (!input.write(input_values)) continue;
+
+            struct Parameters {
+                std::uint32_t count;
+                std::uint32_t iterations;
+                std::uint32_t mode;
+                std::uint32_t seed;
+            };
+            const auto run = [&](std::uint32_t elements, std::uint32_t iterations, std::uint32_t mode,
+                                 std::uint32_t seed) -> std::optional<std::uint64_t> {
+                if (std::chrono::steady_clock::now() >= device.calibration_deadline) return {};
+                const auto started = std::chrono::steady_clock::now();
+                auto event = dispatch(probe)
+                                 .global(elements)
+                                 .read(input.handle())
+                                 .write(output.handle())
+                                 .push(Parameters{elements, iterations, mode, seed})
+                                 .submit();
+                if (!event) return {};
+                auto remaining = device.calibration_deadline - std::chrono::steady_clock::now();
+                if (remaining <= std::chrono::steady_clock::duration::zero() ||
+                    !event.value().wait_for(std::chrono::duration_cast<std::chrono::nanoseconds>(remaining)))
+                    return {};
+                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - started)
+                                         .count();
+                if (elapsed <= 0) return {};
+                return static_cast<std::uint64_t>(elapsed);
+            };
+            const auto verify = [&](std::uint32_t elements, std::uint32_t iterations, std::uint32_t mode,
+                                    std::uint32_t seed) {
+                auto values = output.read();
+                if (!values || values.value().size() < elements) return false;
+                for (std::uint32_t i = 0; i < elements; ++i) {
+                    auto expected = input_values[i];
+                    if (mode == 0) expected ^= seed;
+                    if (mode == 2) {
+                        for (std::uint32_t n = 0; n < iterations; ++n) {
+                            expected = expected * 1664525U + 1013904223U;
+                            expected ^= expected >> 13U;
+                        }
+                    }
+                    if (values.value()[i] != expected) return false;
+                }
+                return true;
+            };
+
+            constexpr std::uint32_t seed = 0x9e3779b9U;
+            (void)run(1, 0, 0, seed);  // Warm pipeline and the smallest dispatch path.
+            std::array<std::uint64_t, 3> tiny_samples{};
+            std::size_t tiny_count = 0;
+            for (auto& sample : tiny_samples) {
+                auto elapsed = run(1, 0, 0, seed);
+                if (!elapsed || !verify(1, 0, 0, seed)) break;
+                sample = *elapsed;
+                ++tiny_count;
+            }
+            if (tiny_count != 0) {
+                std::sort(tiny_samples.begin(), tiny_samples.begin() + tiny_count);
+                device.calibration_record.tiny_dispatch_ns = tiny_samples[tiny_count / 2];
+            }
+
+            (void)run(count, 0, 1, seed);
+            if (auto elapsed = run(count, 0, 1, seed); elapsed && verify(count, 0, 1, seed)) {
+                const auto bytes = static_cast<std::uint64_t>(count) * sizeof(std::uint32_t) * 2U;
+                device.calibration_record.streaming_bytes_per_second = static_cast<std::uint64_t>(
+                    static_cast<long double>(bytes) * 1'000'000'000.0L / static_cast<long double>(*elapsed));
+            }
+
+            constexpr std::uint32_t iterations = 256;
+            (void)run(count, iterations, 2, seed);
+            if (auto elapsed = run(count, iterations, 2, seed);
+                elapsed && verify(count, iterations, 2, seed)) {
+                const auto operations = static_cast<std::uint64_t>(count) * iterations * 4U;
+                device.calibration_record.alu_operations_per_second =
+                    static_cast<std::uint64_t>(static_cast<long double>(operations) * 1'000'000'000.0L /
+                                               static_cast<long double>(*elapsed));
+            }
+
+            if (std::chrono::steady_clock::now() < device.calibration_deadline) {
+                const auto key = device.id.uuid.empty() ? std::to_string(device.id.index) : device.id.uuid;
+                const auto path = impl_->calibration_directory / "calibration" / (key + ".json");
+                if (detail::calibration::write_atomic(path, device.calibration_record))
+                    device.compute_calibration_pending =
+                        device.calibration_record.tiny_dispatch_ns == 0 ||
+                        device.calibration_record.streaming_bytes_per_second == 0 ||
+                        device.calibration_record.alu_operations_per_second == 0;
+            }
+        } catch (...) {
+            // Compute calibration is diagnostic and cannot make Runtime creation fail.
+        }
+    }
 }
 
 Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {

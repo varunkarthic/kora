@@ -234,6 +234,7 @@ private:
     friend struct detail::RuntimeTestAccess;
     struct Impl;
     explicit Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options);
+    void calibrate_compute_probes() noexcept;
     std::unique_ptr<Impl> impl_;
     BufferManager buffers_;
     RuntimeOptions options_;

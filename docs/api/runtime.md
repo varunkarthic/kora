@@ -142,10 +142,11 @@ for (const auto& device : runtime.value().devices()) {
   `Runtime::readback()` before reading that buffer on the host. Device-resident copies are cached
   separately per selected device and are discarded with that Runtime. Cross-device movement is
   explicit host staging; no peer/external-memory fast path is enabled.
-- Startup calibration currently records bounded queue-submit/completion and private-scratch H2D,
-  D2H, and device-copy measurements when those probes complete within budget. Tiny-dispatch,
-  streaming-kernel, and ALU measurements remain unavailable; calibration records are diagnostic and
-  do not influence device selection. See [Startup calibration](../calibration.md).
+- Startup calibration records bounded queue-submit/completion and private-scratch H2D, D2H, and
+  device-copy measurements, plus correctness-checked tiny-dispatch, streaming, and integer-ALU probes
+  when supported and completed within budget. Results are host-observed diagnostics, not pure
+  hardware counters, and do not yet influence device selection. See
+  [Startup calibration](../calibration.md).
 
 For caller-defined range-aware work, see [multiple Vulkan devices](../multi-gpu.md) and
 `kora/task_partition.hpp`. `DynamicPartitioner` returns device-specific contiguous ranges; the

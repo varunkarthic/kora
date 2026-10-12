@@ -4,6 +4,8 @@
 #include <fstream>
 
 #include "core/calibration.hpp"
+#include "core/calibration_spv.hpp"
+#include "kernel/spirv.hpp"
 #include "kora/version.hpp"
 
 namespace kora::detail::calibration {
@@ -48,8 +50,8 @@ TEST(CalibrationRecord, RejectsCorruptionAndIdentityOrSchemaMismatch) {
     EXPECT_FALSE(decode(bytes, "ffeeddccbbaa99887766554433221100", record.driver_version));
     EXPECT_FALSE(decode(bytes, record.device_uuid, record.driver_version + 1));
     auto incompatible = bytes;
-    const std::string newer_schema = "\"schema\":2";
-    const auto old_schema = std::string("\"schema\":1");
+    const std::string newer_schema = "\"schema\":" + std::to_string(kSchemaVersion + 1U);
+    const auto old_schema = std::string("\"schema\":") + std::to_string(kSchemaVersion);
     std::string text(incompatible.begin(), incompatible.end());
     text.replace(text.find(old_schema), old_schema.size(), newer_schema);
     incompatible.assign(text.begin(), text.end());
@@ -81,6 +83,12 @@ TEST(CalibrationRecord, AtomicFileRoundTripAndCorruptFileAreCacheMisses) {
     }
     EXPECT_FALSE(read(path, record.device_uuid, record.driver_version, loaded));
     std::filesystem::remove_all(directory, ignored);
+}
+
+TEST(CalibrationShader, EmbeddedModuleHasValidStructure) {
+    ASSERT_FALSE(kProbeShaderSpv.empty());
+    EXPECT_EQ(kProbeShaderSpv.front(), 0x07230203U);
+    EXPECT_TRUE(spirv::validate_module_structure(kProbeShaderSpv));
 }
 
 }  // namespace

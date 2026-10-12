@@ -12,6 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Embed a vendor-neutral compute calibration shader and record validated tiny-dispatch, streaming
+  read/write, and integer ALU measurements when supported within the configured best-effort budget.
+
+### Changed
+- Bump the internal calibration-record schema to 2 so older records are recalibrated.
+
 ## [0.2.4] - 2026-10-12
 
 ### Fixed

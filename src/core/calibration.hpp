@@ -10,7 +10,7 @@
 
 namespace kora::detail::calibration {
 
-inline constexpr std::uint32_t kSchemaVersion = 1;
+inline constexpr std::uint32_t kSchemaVersion = 2;
 
 struct Record {
     std::uint32_t schema = kSchemaVersion;
