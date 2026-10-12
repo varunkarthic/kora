@@ -474,8 +474,18 @@ TEST(Runtime, CalibrationCanBeRequestedAndReplacesCorruptCache) {
     ASSERT_FALSE(devices.empty());
     if (devices.front().uuid.empty()) GTEST_SKIP() << "device does not expose a stable UUID";
 
+    auto application_buffer_result = runtime.value().create_buffer<std::uint32_t>(4);
+    ASSERT_TRUE(application_buffer_result);
+    auto application_buffer = std::move(application_buffer_result).value();
+    const std::array<std::uint32_t, 4> application_values{11, 22, 33, 44};
+    ASSERT_TRUE(application_buffer.write(application_values));
+
     const auto path = directory / "calibration" / (devices.front().uuid + ".json");
     ASSERT_TRUE(runtime.value().calibrate());
+    auto preserved_values = application_buffer.read();
+    ASSERT_TRUE(preserved_values);
+    EXPECT_EQ(preserved_values.value(),
+              std::vector<std::uint32_t>(application_values.begin(), application_values.end()));
     ASSERT_TRUE(std::filesystem::exists(path));
     {
         std::ifstream calibration(path, std::ios::binary);

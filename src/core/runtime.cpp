@@ -1914,12 +1914,18 @@ void Runtime::calibrate_compute_probes() noexcept {
             constexpr std::uint32_t count = 16U * 1024U;
             auto input_result = buffers_.create<std::uint32_t>(count, BufferUsage::Storage);
             auto output_result = buffers_.create<std::uint32_t>(count, BufferUsage::Storage);
-            if (!input_result || !output_result) continue;
+            auto tiny_input_result = buffers_.create<std::uint32_t>(1, BufferUsage::Storage);
+            auto tiny_output_result = buffers_.create<std::uint32_t>(1, BufferUsage::Storage);
+            if (!input_result || !output_result || !tiny_input_result || !tiny_output_result) continue;
             auto input = std::move(input_result).value();
             auto output = std::move(output_result).value();
+            auto tiny_input = std::move(tiny_input_result).value();
+            auto tiny_output = std::move(tiny_output_result).value();
             std::vector<std::uint32_t> input_values(count);
             for (std::uint32_t i = 0; i < count; ++i) input_values[i] = i * 747796405U + 2891336453U;
-            if (!input.write(input_values)) continue;
+            if (!input.write(input_values) ||
+                !tiny_input.write(std::span<const std::uint32_t>(input_values.data(), 1)))
+                continue;
 
             struct Parameters {
                 std::uint32_t count;
@@ -1931,10 +1937,12 @@ void Runtime::calibrate_compute_probes() noexcept {
                                  std::uint32_t seed) -> std::optional<std::uint64_t> {
                 if (std::chrono::steady_clock::now() >= device.calibration_deadline) return {};
                 const auto started = std::chrono::steady_clock::now();
+                const auto& source = elements == 1 ? tiny_input : input;
+                const auto& destination = elements == 1 ? tiny_output : output;
                 auto event = dispatch(probe)
                                  .global(elements)
-                                 .read(input.handle())
-                                 .write(output.handle())
+                                 .read(source.handle())
+                                 .write(destination.handle())
                                  .push(Parameters{elements, iterations, mode, seed})
                                  .submit();
                 if (!event) return {};
@@ -1950,7 +1958,8 @@ void Runtime::calibrate_compute_probes() noexcept {
             };
             const auto verify = [&](std::uint32_t elements, std::uint32_t iterations, std::uint32_t mode,
                                     std::uint32_t seed) {
-                auto values = output.read();
+                const auto& source = elements == 1 ? tiny_output : output;
+                auto values = source.read();
                 if (!values || values.value().size() < elements) return false;
                 for (std::uint32_t i = 0; i < elements; ++i) {
                     auto expected = input_values[i];
