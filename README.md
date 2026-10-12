@@ -109,24 +109,29 @@ options and build presets are in [Building](docs/building.md).
 
 ## Performance snapshot
 
-These are captured local Release measurements, not portable promises. They show both the low cost of
-replaying a prepared CPU plan and the current overhead of the complete GPU dispatch path. Always
-rerun on the target compiler, driver, device, and workload; the [benchmark guide](docs/benchmarking.md)
-includes commands, workload definitions, full data, and interpretation limits.
+These are captured local Release measurements, not portable promises. The comparison separates
+single-thread CPU arithmetic from KORA-on-Vulkan and raw Vulkan host-submit/completion times. These
+are not kernel-only GPU times; rerun on each target OS, compiler, driver, device, and workload. The
+[benchmark guide](docs/benchmarking.md) includes the methodology and limitations.
 
-| Workload | Median | p95 | What is timed |
-| --- | ---: | ---: | --- |
-| C++ replay of prepared 64-task plan | 0.292 µs | 0.292 µs | Native plan replay and counter callback |
-| Python callback replay of same plan | 24.333 µs | 24.750 µs | End-to-end replay including Python callback crossings |
-| CPU vector add, 4,096 elements | 0.375 µs | 0.542 µs | Arithmetic only; initialized data outside timing |
-| KORA Vulkan vector add, 4,096 elements | 4,783.917 µs | 8,184.458 µs | Warm dispatch and completion wait; resident inputs |
-| Raw Vulkan vector add, 4,096 elements | 199.208 µs | 275.334 µs | Same selected device; reused pipeline/descriptors/buffers |
+| Elements | CPU median | KORA default | KORA deferred | Raw Vulkan | KORA GPU | Raw GPU |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4096 | 375 ns | 2.259 ms | 595.208 µs | 404.667 µs | 14.041 µs | 21.334 µs |
+| 1048576 | 224.375 µs | 2.517 ms | 799.750 µs | 996 µs | unavailable | 359.125 µs |
+| 4194240 | 984.125 µs | 2.942 ms | 2.349 ms | 1.964 ms | unavailable | 1.315 ms |
 
-Benchmark sample: 1,000 measured iterations after 50 warm-ups, on an Apple M4 running macOS 27.0;
-the GPU cases were pinned to device 0 (KosmicKrisp, Vulkan 1.3.354). The C++/Python replay is not
-comparable to GPU time. The GPU rows expose a local dispatch-overhead gap, not a general KORA versus
-Vulkan ratio, and no CPU/GPU crossover was observed in the tested vector-add sizes. Full environment
-metadata, commands, transfer results, and caveats are in [Benchmarking](docs/benchmarking.md).
+Benchmark sample: 100 measured iterations after 10 warm-ups on macOS arm64 / Apple M4, AppleClang 21
+Release; GPU paths were pinned to device 2 (MoltenVK, Vulkan 1.3.357). KORA default includes output
+readback, while deferred KORA and raw Vulkan keep outputs device-resident. CPU arithmetic, host
+submit/completion, and GPU timestamp columns are different timing domains; timestamp results are
+unavailable for two KORA sizes on this device. No CUDA comparison is available from this non-CUDA
+device. Full workload definitions and caveats are in
+[Benchmarking](docs/benchmarking.md).
+
+The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are
+build/test targets, but CI smoke coverage is not a cross-OS performance study; no Linux/Windows
+hardware-GPU or CUDA result is claimed. The benchmark guide explains how to distinguish CPU
+arithmetic, software Vulkan, hardware-GPU timestamps, and KORA host overhead.
 
 ## Documentation
 

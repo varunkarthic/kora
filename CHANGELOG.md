@@ -12,6 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Expand `kora-bench` JSON to schema 3 with platform/compiler/build metadata and explicit timing
+  domains; add matched size-swept raw Vulkan vector-add results beside CPU and KORA results, including
+  separately labeled default/deferred readback and GPU timestamp measurements when supported.
+- Clarify that software Vulkan devices are not hardware-GPU measurements and document the cross-OS
+  benchmark smoke coverage.
+
 ## [0.2.7] - 2026-10-12
 
 ### Fixed

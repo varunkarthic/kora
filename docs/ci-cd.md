@@ -31,6 +31,18 @@ Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These 
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete
 platform gate that precedes a release.
 
+The benchmark JSON smoke is part of CTest on Linux/GCC, macOS/AppleClang, and Windows/MSVC. This
+checks CPU-only schema and timing labels on each host platform; GPU smoke is skipped where no usable
+Vulkan implementation is available. These CI jobs do not constitute equivalent GPU performance
+hardware. Compare performance only from retained Release reports on matched devices and workloads.
+
+`KoraBench.Smoke` runs on all three CI operating systems and validates the CPU-only JSON contract,
+including OS/architecture/compiler/build metadata and timing-domain labels. `KoraBench.GpuSmoke` runs
+when the platform has a usable Vulkan implementation and is reported as skipped when Vulkan is not
+available. CI runners are correctness environments, not a matched cross-vendor performance lab;
+their timings must not be combined as GPU speed claims. For comparable hardware results, run the same
+Release binary configuration and workload on each target OS/device and retain each raw JSON report.
+
 The Windows job initializes the Visual Studio developer environment before CMake runs and then
 checks `CMakeCache.txt` for `cl.exe`. This assertion prevents a runner image's unrelated MinGW tools
 from silently changing the compiler behind the **Windows / MSVC** label. When Vulkan-Headers is

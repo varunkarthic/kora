@@ -3,6 +3,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -55,8 +57,66 @@ struct GpuDeviceReport {
     std::string name;
     std::string api_version;
     std::string driver_name;
+    std::string device_kind;
     std::uint32_t compute_queue_family = 0;
+    std::vector<std::uint32_t> kora_gpu_timestamp_sizes;
+    std::vector<std::uint32_t> raw_gpu_timestamp_sizes;
 };
+
+std::string_view operating_system() {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
+
+std::string_view architecture() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
+std::string compiler_name() {
+#if defined(_MSC_VER)
+    return "MSVC " + std::to_string(_MSC_VER);
+#elif defined(__clang__)
+#if defined(__apple_build_version__)
+    return "AppleClang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__) + "." +
+           std::to_string(__clang_patchlevel__);
+#else
+    return "Clang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__) + "." +
+           std::to_string(__clang_patchlevel__);
+#endif
+#elif defined(__GNUC__)
+    return "GCC " + std::to_string(__GNUC__) + "." + std::to_string(__GNUC_MINOR__) + "." +
+           std::to_string(__GNUC_PATCHLEVEL__);
+#else
+    return "unknown";
+#endif
+}
+
+std::string_view measurement_domain(std::string_view name) {
+    if (name.ends_with("_gpu_execution")) return "gpu_execution_timestamp";
+    if (name.starts_with("cpu_")) return "host_cpu_execution";
+    if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_vector_add_"))
+        return "host_submit_completion";
+    if (name.starts_with("transfer_") || name.starts_with("raw_vulkan_copy_") ||
+        name.starts_with("kora_transfer_copy_"))
+        return "host_transfer_completion";
+    if (name.starts_with("command_pool_")) return "host_api_only";
+    return "host_operation";
+}
 
 void json_string(std::ostream& out, std::string_view value) {
     out << '"';
@@ -169,6 +229,23 @@ Result run(std::string name, const std::function<void()>& operation, const Optio
         const auto end = Clock::now();
         result.samples_ns.push_back(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count()));
+    }
+    result.median_ns = percentile(result.samples_ns, 50);
+    result.p95_ns = percentile(result.samples_ns, 95);
+    return result;
+}
+
+std::optional<Result> run_timestamps(std::string name,
+                                     const std::function<std::optional<std::uint64_t>()>& operation,
+                                     const Options& options) {
+    for (std::size_t index = 0; index < options.warmup; ++index)
+        if (!operation()) return std::nullopt;
+    Result result{std::move(name), {}, 0, 0};
+    result.samples_ns.reserve(options.iterations);
+    for (std::size_t index = 0; index < options.iterations; ++index) {
+        const auto sample = operation();
+        if (!sample) return std::nullopt;
+        result.samples_ns.push_back(*sample);
     }
     result.median_ns = percentile(result.samples_ns, 50);
     result.p95_ns = percentile(result.samples_ns, 95);
@@ -525,10 +602,10 @@ bool add_transfer_benchmarks(std::vector<Result>& results, const Options& option
 
 bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& options,
                                   const kora::vk::PhysicalDeviceInfo& physical,
-                                  const kora::vk::Device& device, const std::filesystem::path& shader_path) {
+                                  const kora::vk::Device& device, const std::filesystem::path& shader_path,
+                                  std::uint32_t count, GpuDeviceReport& device_report) {
     const auto info = kora::detail::DeviceCaps::from_vulkan(physical).to_device_info();
-    constexpr std::uint32_t count = 4096;
-    constexpr VkDeviceSize bytes = count * sizeof(std::uint32_t);
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(count) * sizeof(std::uint32_t);
     auto input_a = make_host_transfer_buffer(device, info, bytes);
     auto input_b = make_host_transfer_buffer(device, info, bytes);
     auto output = make_host_transfer_buffer(device, info, bytes);
@@ -559,7 +636,9 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
+        VkQueryPool query_pool = VK_NULL_HANDLE;
         ~RawComputeGuard() {
+            if (query_pool != VK_NULL_HANDLE) api.destroy_query_pool(device, query_pool, nullptr);
             if (fence != VK_NULL_HANDLE) api.destroy_fence(device, fence, nullptr);
             if (command_pool != VK_NULL_HANDLE) api.destroy_command_pool(device, command_pool, nullptr);
             if (descriptor_pool != VK_NULL_HANDLE)
@@ -670,7 +749,21 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     if (api.create_fence(device.handle(), &fence_info, nullptr, &guard.fence) != VK_SUCCESS) return false;
 
-    const auto raw_dispatch = [&] {
+    const auto timestamp_bits =
+        physical.queue_family_properties[device.compute_queue_family()].timestampValidBits;
+    const bool timestamp_supported =
+        timestamp_bits != 0 && api.cmd_write_timestamp != nullptr && api.cmd_reset_query_pool != nullptr &&
+        api.create_query_pool != nullptr && static_cast<bool>(api.get_query_pool_results);
+    if (timestamp_supported) {
+        VkQueryPoolCreateInfo query_info{};
+        query_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        query_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        query_info.queryCount = 2;
+        if (api.create_query_pool(device.handle(), &query_info, nullptr, &guard.query_pool) != VK_SUCCESS)
+            guard.query_pool = VK_NULL_HANDLE;
+    }
+
+    const auto raw_dispatch_profiled = [&]() -> std::optional<std::uint64_t> {
         if (api.reset_command_buffer(command, 0) != VK_SUCCESS)
             throw std::runtime_error("raw Vulkan dispatch command reset failed");
         VkCommandBufferBeginInfo begin{};
@@ -678,6 +771,10 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         if (api.begin_command_buffer(command, &begin) != VK_SUCCESS)
             throw std::runtime_error("raw Vulkan dispatch command begin failed");
+        if (guard.query_pool != VK_NULL_HANDLE) {
+            api.cmd_reset_query_pool(command, guard.query_pool, 0, 2);
+            api.cmd_write_timestamp(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, guard.query_pool, 0);
+        }
         VkMemoryBarrier host_barrier{};
         host_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         host_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -690,6 +787,8 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
         api.cmd_push_constants(command, guard.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(count),
                                &count);
         api.cmd_dispatch(command, (count + 63U) / 64U, 1, 1);
+        if (guard.query_pool != VK_NULL_HANDLE)
+            api.cmd_write_timestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, guard.query_pool, 1);
         VkMemoryBarrier host_read_barrier{};
         host_read_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         host_read_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -706,13 +805,31 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
             api.wait_for_fences(device.handle(), 1, &guard.fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS ||
             api.reset_fences(device.handle(), 1, &guard.fence) != VK_SUCCESS)
             throw std::runtime_error("raw Vulkan dispatch submit/wait failed");
+        if (guard.query_pool == VK_NULL_HANDLE) return std::nullopt;
+        std::array<std::uint64_t, 2> timestamps{};
+        if (api.get_query_pool_results(device.handle(), guard.query_pool, 0, 2, sizeof(timestamps),
+                                       timestamps.data(), sizeof(std::uint64_t),
+                                       VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+            return std::nullopt;
+        auto ticks = timestamps[1] - timestamps[0];
+        if (timestamp_bits < 64) ticks &= (std::uint64_t{1} << timestamp_bits) - 1;
+        return static_cast<std::uint64_t>(
+            std::llround(static_cast<double>(ticks) * physical.properties.limits.timestampPeriod));
     };
+    const auto raw_dispatch = [&] { (void)raw_dispatch_profiled(); };
     raw_dispatch();
     synchronize_mapped_buffer(device, *output, false);
     const auto* output_values = reinterpret_cast<const std::uint32_t*>(output->mapped);
     if (!std::all_of(output_values, output_values + count, [](std::uint32_t value) { return value == 10; }))
         return false;
-    results.push_back(run("raw_vulkan_vector_add_4096_dispatch_wait", raw_dispatch, options));
+    results.push_back(
+        run("raw_vulkan_vector_add_" + std::to_string(count) + "_dispatch_wait", raw_dispatch, options));
+    const auto gpu_execution = run_timestamps(
+        "raw_vulkan_vector_add_" + std::to_string(count) + "_gpu_execution", raw_dispatch_profiled, options);
+    if (gpu_execution) {
+        device_report.raw_gpu_timestamp_sizes.push_back(count);
+        results.push_back(std::move(*gpu_execution));
+    }
     return true;
 }
 
@@ -763,14 +880,15 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     auto b = runtime.create_buffer<std::uint32_t>(vector_count);
     auto output = runtime.create_buffer<std::uint32_t>(vector_count);
     if (!a || !b || !output || !a.value().write(input_a) || !b.value().write(input_b)) return false;
-    const auto dispatch = [&](std::uint32_t count) {
-        auto event = runtime.dispatch(kernel.value())
-                         .global(count)
-                         .read(a.value())
-                         .read(b.value())
-                         .write(output.value())
-                         .push(count)
-                         .submit();
+    const auto dispatch = [&](std::uint32_t count, bool defer_readback = false) {
+        auto builder = runtime.dispatch(kernel.value())
+                           .global(count)
+                           .read(a.value())
+                           .read(b.value())
+                           .write(output.value())
+                           .push(count);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan dispatch failed");
     };
     results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
@@ -794,6 +912,25 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
             return false;
         const auto name = "gpu_vector_add_" + std::to_string(count) + "_dispatch_wait";
         results.push_back(run(name, [&, count] { dispatch(count); }, options));
+        const auto deferred_name =
+            "gpu_vector_add_" + std::to_string(count) + "_deferred_readback_dispatch_wait";
+        results.push_back(run(deferred_name, [&, count] { dispatch(count, true); }, options));
+        const auto gpu_execution = run_timestamps(
+            "gpu_vector_add_" + std::to_string(count) + "_gpu_execution",
+            [&, count]() -> std::optional<std::uint64_t> {
+                auto before = runtime.profiling_stats(selected_devices.front());
+                if (!before) return std::nullopt;
+                dispatch(count, true);
+                auto after = runtime.profiling_stats(selected_devices.front());
+                if (!after || after.value().last_submission_id == before.value().last_submission_id)
+                    return std::nullopt;
+                return after.value().last_duration_nanoseconds;
+            },
+            options);
+        if (gpu_execution) {
+            device_report.kora_gpu_timestamp_sizes.push_back(count);
+            results.push_back(std::move(*gpu_execution));
+        }
     }
 
     kora::KernelMetadata saxpy_metadata;
@@ -1029,13 +1166,32 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     if (!device) return false;
     device_report.index = selected_index;
     device_report.name = selected_physical.properties.deviceName;
+    switch (selected_physical.properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            device_report.device_kind = "discrete_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            device_report.device_kind = "integrated_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            device_report.device_kind = "virtual_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            device_report.device_kind = "cpu_vulkan";
+            break;
+        default:
+            device_report.device_kind = "other";
+            break;
+    }
     device_report.api_version = version_string(selected_physical.properties.apiVersion);
     device_report.driver_name = selected_physical.vulkan12_properties.driverName;
     if (device_report.driver_name.empty()) device_report.driver_name = "unreported";
     device_report.compute_queue_family = device.value().compute_queue_family();
     if (!add_transfer_benchmarks(results, options, selected_physical, device.value())) return false;
-    if (!add_raw_vector_add_benchmark(results, options, selected_physical, device.value(), fixture))
-        return false;
+    for (const auto count : {64U, 256U, 1024U, 4096U, 65536U, 262144U, 1048576U, 4194240U})
+        if (!add_raw_vector_add_benchmark(results, options, selected_physical, device.value(), fixture, count,
+                                          device_report))
+            return false;
     kora::vk::CommandPoolSet::Options pool_options;
     pool_options.queue_family = device.value().compute_queue_family();
     pool_options.ring_size = 16;
@@ -1134,8 +1290,21 @@ int main(int argc, char** argv) {
         return 3;
 #endif
     }
-    std::cout << "{\"schema_version\":2,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
+    std::cout << "{\"schema_version\":3,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
               << ",\"warmup\":" << options.warmup;
+    std::cout << ",\"environment\":{\"os\":";
+    json_string(std::cout, operating_system());
+    std::cout << ",\"architecture\":";
+    json_string(std::cout, architecture());
+    std::cout << ",\"compiler\":";
+    json_string(std::cout, compiler_name());
+    std::cout << ",\"build_type\":";
+#ifdef KORA_BENCH_BUILD_TYPE
+    json_string(std::cout, KORA_BENCH_BUILD_TYPE);
+#else
+    json_string(std::cout, "unknown");
+#endif
+    std::cout << ",\"logical_cpu_count\":" << std::thread::hardware_concurrency() << '}';
     if (options.gpu) {
         std::cout << ",\"gpu_measurements\":{\"backend\":\"vulkan\",\"device_index\":" << gpu_device.index
                   << ",\"device_name\":";
@@ -1144,16 +1313,33 @@ int main(int argc, char** argv) {
         json_string(std::cout, gpu_device.api_version);
         std::cout << ",\"driver_name\":";
         json_string(std::cout, gpu_device.driver_name);
+        std::cout << ",\"device_kind\":";
+        json_string(std::cout, gpu_device.device_kind);
         std::cout << ",\"compute_queue_family\":" << gpu_device.compute_queue_family
                   << ",\"same_physical_device_for_kora_and_raw_vulkan\":true"
-                     ",\"paths\":[\"kora_runtime\",\"kora_transfer_engine\",\"raw_vulkan\"]}";
+                     ",\"kora_gpu_timestamps_available\":"
+                  << (!gpu_device.kora_gpu_timestamp_sizes.empty() ? "true" : "false")
+                  << ",\"raw_gpu_timestamps_available\":"
+                  << (!gpu_device.raw_gpu_timestamp_sizes.empty() ? "true" : "false")
+                  << ",\"kora_gpu_timestamp_sizes\":[";
+        for (std::size_t index = 0; index < gpu_device.kora_gpu_timestamp_sizes.size(); ++index) {
+            if (index != 0) std::cout << ',';
+            std::cout << gpu_device.kora_gpu_timestamp_sizes[index];
+        }
+        std::cout << "],\"raw_gpu_timestamp_sizes\":[";
+        for (std::size_t index = 0; index < gpu_device.raw_gpu_timestamp_sizes.size(); ++index) {
+            if (index != 0) std::cout << ',';
+            std::cout << gpu_device.raw_gpu_timestamp_sizes[index];
+        }
+        std::cout << "],\"paths\":[\"kora_runtime\",\"kora_transfer_engine\",\"raw_vulkan\"]}";
     }
     std::cout << ",\"results\":[";
     for (std::size_t index = 0; index < results.size(); ++index) {
         const auto& result = results[index];
         if (index != 0) std::cout << ',';
         std::cout << "{\"name\":\"" << result.name << "\",\"unit\":\"ns\",\"median\":" << result.median_ns
-                  << ",\"p95\":" << result.p95_ns;
+                  << ",\"p95\":" << result.p95_ns << ",\"timing_domain\":";
+        json_string(std::cout, measurement_domain(result.name));
         if (options.gpu) {
             const auto path = gpu_path(result.name);
             if (!path.empty()) {
