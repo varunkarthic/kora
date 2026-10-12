@@ -18,6 +18,7 @@ jobs:
   prepare:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -74,6 +75,8 @@ jobs:
             artifact: windows-x86_64
             extension: zip
     runs-on: ${{ matrix.os }}
+    # A runner-level stall must not hold the serialized release queue indefinitely.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,7 +96,8 @@ jobs:
       - name: Build
         run: cmake --build --preset release --parallel
       - name: Test
-        run: ctest --preset release --output-on-failure
+        # Fail with the name/output of a stuck test before the package-job ceiling.
+        run: ctest --preset release --output-on-failure --timeout 900
       - name: Install
         run: cmake --install build/release --prefix stage
       - name: Create package
@@ -113,7 +117,9 @@ jobs:
 
   publish:
     needs: [prepare, package]
+    if: ${{ needs.package.result == 'success' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

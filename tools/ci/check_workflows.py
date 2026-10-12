@@ -27,6 +27,21 @@ def main() -> None:
             raise SystemExit(f"release workflow is missing Windows package contract: {contract}")
     print("validated Windows release package compiler contract")
 
+    release_document = yaml.safe_load(release)
+    package_job = release_document["jobs"].get("package", {})
+    if package_job.get("timeout-minutes") != 180:
+        raise SystemExit("release package jobs must have a 180-minute job timeout")
+    test_steps = [step for step in package_job.get("steps", []) if step.get("name") == "Test"]
+    if len(test_steps) != 1 or "ctest --preset release --output-on-failure --timeout 900" not in test_steps[0].get(
+        "run", ""
+    ):
+        raise SystemExit("release CTest must set a 900-second per-test timeout")
+    publish_job = release_document["jobs"].get("publish", {})
+    publish_condition = "${{ needs.package.result == 'success' }}"
+    if "package" not in publish_job.get("needs", []) or publish_job.get("if") != publish_condition:
+        raise SystemExit("release publishing must require success from the complete package matrix")
+    print("validated bounded release tests and all-platform publication gate")
+
     ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     for contract in (
         "fetch-depth: 0",
