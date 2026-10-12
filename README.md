@@ -128,16 +128,17 @@ evidence.
 
 | Elements | CPU median | KORA default | KORA deferred | Raw Vulkan | KORA GPU | Raw GPU |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 375 ns | 2.259 ms | 595.208 µs | 404.667 µs | 14.041 µs | 21.334 µs |
-| 1048576 | 224.375 µs | 2.517 ms | 799.750 µs | 996 µs | unavailable | 359.125 µs |
-| 4194240 | 984.125 µs | 2.942 ms | 2.349 ms | 1.964 ms | unavailable | 1.315 ms |
+| 4096 | 2.084 µs | 4.404 ms | 526.291 µs | 402.500 µs | unavailable | 20.375 µs |
+| 1048576 | 562.500 µs | 5.008 ms | 1.343 ms | 920.250 µs | unavailable | 388.042 µs |
+| 4194240 | 2.312 ms | 5.627 ms | 1.031 ms | 1.859 ms | unavailable | 1.260 ms |
 
 Benchmark sample: 100 measured iterations after 10 warm-ups on macOS arm64 / Apple M4, AppleClang 21
 Release; GPU paths were pinned to device 2 (MoltenVK, Vulkan 1.3.357). KORA default includes output
 readback, while deferred KORA and raw Vulkan keep outputs device-resident. CPU arithmetic, host
-submit/completion, and GPU timestamp columns are different timing domains; timestamp results are
-unavailable for two KORA sizes on this device. No CUDA comparison is available from this non-CUDA
-device. Full workload definitions and caveats are in
+submit/completion, and GPU timestamp columns are different timing domains; KORA device timestamps
+were unavailable on this run. The benchmarking guide also reports separate single-thread and
+four-worker CPU baselines for SAXPY, reduction, stencil, and matrix multiplication. No CUDA comparison
+is available from this non-CUDA device. Full workload definitions and caveats are in
 [Benchmarking](docs/benchmarking.md).
 
 The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are

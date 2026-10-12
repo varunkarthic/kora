@@ -206,7 +206,9 @@ or kernel performance.
 | `allocator_allocate_free_256` | Allocate and free 256 aligned suballocations. | Includes allocator creation and invariant validation. |
 | `allocator_fragmentation_128` | Allocate 128 varied blocks, free alternating blocks, and query stats. | Confirms nonzero external fragmentation and valid allocator invariants. |
 | `host_allocation_4k` | Allocate and initialize a 4 KiB host vector. | Standard-library allocation baseline. |
-| `cpu_vector_add_N` | Add two uint32 arrays for `N` in 1, 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240. | Arithmetic-only single-thread host baseline; arrays are initialized outside the timed loop. |
+| `cpu_vector_add_N` | Add two uint32 arrays for `N` in 1, 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240. | Single-thread C++ host baseline; fixed input arrays are reused. |
+| `cpu_saxpy_N`, `cpu_reduction_N`, `cpu_stencil_N`, `cpu_tiled_matmul_N` | Run each operation for three small/medium/large sizes; matrix dimensions are 16, 64, and 128, and vector workloads use 4096, 65536, and 1048576 elements. | Single-thread C++ implementations; reduction emits one sum per 64-value tile to match the Vulkan fixture, and matrix multiplication uses 32×32 cache tiles. Deterministic inputs are initialized before timing, and every output is checked against its reference after each timed sample. |
+| `cpu_<workload>_parallel_N` | Four-worker CPU-executor variants of vector add, SAXPY, reduction, and stencil at 4096, 65536, and 1048576 elements; `cpu_tiled_matmul_parallel_N` uses dimensions 16, 64, and 128. | Reports `thread_count: 4`. Worker creation is outside timing; submission, scheduling, execution, and completion wait are inside the host timing interval. All outputs are validated outside the interval. |
 | `gpu_tiny_dispatch_1` | Submit one vector-add work item on Vulkan and wait for completion. | Warm steady-state host latency with buffers and pipeline resident. |
 | `gpu_tiny_dispatch_batch_10` | Submit 10 one-work-item vector-add dispatches sequentially, waiting for each event. | Measures repeated small-dispatch scheduling and completion latency; output correctness is checked before timing. |
 | `gpu_vector_add_N_dispatch_wait` | Dispatch N vector-add work items for N in 64, 256, 1024, 4096, 65536, 262144, 1048576, and 4194240, then wait. | Inputs and pipeline are made resident before timing; output correctness is checked outside the timed loop. |
@@ -225,11 +227,49 @@ or kernel performance.
 | `raw_vulkan_copy_N` | Record `vkCmdCopyBuffer`, submit it with a Vulkan fence, and wait for completion. | Raw API baseline using the same device-local source/destination buffers and transfer queue. |
 | `kora_transfer_copy_N` | Copy between the same buffers using `TransferEngine::copy()` and wait for its event. | Includes KORA queue submission, completion, and transfer bookkeeping. |
 
+## CPU compute reference results
+
+The following Release baseline was collected on an Apple M4 (macOS arm64, AppleClang 21.0.0,
+`-O3 -DNDEBUG`) with 10 warm-ups and 100 timed samples per workload. Five independent process runs
+are retained as `cpu-compute-baseline-macos-arm64-apple-m4-release-run-{1..5}.json` under
+`benchmarks/results/`. Values below are the median of the five per-run medians; the range shows the
+minimum and maximum of those five medians. These portable C++ references are not a claim of
+best-in-class CPU performance, and are not directly rankable against GPU device timestamps.
+Single-thread values time the compute loop. Four-thread values include KORA CPU-executor task
+submission, scheduling, execution, and wait; the worker pool is created before timing. No
+before/after speedup is claimed for adding benchmark coverage.
+
+| Workload | Size | Median of run medians | Run-median range |
+| --- | ---: | ---: | ---: |
+| Vector add (`uint32`) | 4,096 elements | 2.084 µs | 2.083–2.084 µs |
+| Vector add (`uint32`) | 1,048,576 elements | 563.458 µs | 562.000–566.584 µs |
+| Vector add (`uint32`) | 4,194,240 elements | 2.253 ms | 2.242–2.293 ms |
+| SAXPY (`float32`) | 1,048,576 elements | 204.500 µs | 202.083–321.125 µs |
+| Reduction (`float32`, 64-value tile outputs) | 1,048,576 elements | 223.333 µs | 223.250–227.458 µs |
+| Three-point stencil (`float32`) | 1,048,576 elements | 659.042 µs | 656.958–661.167 µs |
+| Tiled matrix multiply (`float32`) | 128×128 | 439.500 µs | 439.000–441.334 µs |
+| Vector add (`uint32`, four threads) | 1,048,576 elements | 78.708 µs | 68.333–321.375 µs |
+| SAXPY (`float32`, four threads) | 1,048,576 elements | 72.833 µs | 68.750–75.750 µs |
+| Reduction (`float32`, four threads) | 1,048,576 elements | 80.833 µs | 74.291–134.292 µs |
+| Three-point stencil (`float32`, four threads) | 1,048,576 elements | 216.834 µs | 209.542–317.875 µs |
+| Tiled matrix multiply (`float32`, four threads) | 128×128 | 128.959 µs | 128.000–147.916 µs |
+
+Reproduce with `cmake --preset release`, `cmake --build --preset release --parallel`, then run
+`build/release/tools/kora-bench --iterations 100 --warmup 10` five times, saving each stdout JSON
+report. Reports include the CPU model, OS, architecture, compiler, build type, exact CMake flags,
+source revision, and logical CPU count.
+The reports retain every sample; the table is only a compact summary. Small-workload pool overhead is
+visible (the four-worker 4096-element cases are slower than their single-thread counterparts), and
+this host comparison does not include vendor math libraries or matched raw Vulkan implementations
+for SAXPY/reduction/stencil/matmul; those limitations must be resolved before broad CPU-vs-GPU conclusions.
+
 ## Report contract
 
 The root object has `schema_version: 3`, `clock`, `iterations`, `warmup`, `environment`, and `results`.
-`environment` records OS, architecture, compiler, CMake build configuration, and logical CPU count.
-Each result has a stable `name`, `unit`, `timing_domain`, `median`, `p95`, and `samples` array. Transfer results also report
+`environment` records OS, architecture, CPU model, compiler, CMake build configuration and flags,
+source revision, and logical CPU count. If Git metadata or build flags are unavailable, the report
+records `unknown` or an empty flag string instead of implying a value.
+Each result has a stable `name`, `unit`, `timing_domain`, `median`, `p95`, and `samples` array. Parallel CPU results also record `thread_count`. Transfer results also report
 `bytes_transferred` and `throughput_bytes_per_second`, derived from transferred bytes and median
 latency. GPU reports add a `gpu_measurements` object with backend, selected enumeration index,
 sanitized device name, Vulkan API version, driver name, broad device class (`cpu_vulkan`, integrated,
@@ -244,8 +284,14 @@ the machine, build type, compiler, and workload parameters are recorded alongsid
 
 ## Scope and interpretation
 
-CPU-side measurements are always available. Optional GPU cases cover tiny dispatch and size-swept
-vector-add/SAXPY, reduction, tiled scan, tiled matmul, stencil, transfer sizes, and raw Vulkan
+CPU-side measurements are always available. CPU compute cases use deterministic, initialized data,
+warm-up iterations, and the same host clock/sample policy as other benchmark cases. Correctness
+validation runs after (and outside) each timed sample, and scans the full output rather than relying
+on one element. CPU implementations are portable C++ and may benefit from compiler auto-vectorization.
+Single-thread rows measure the compute loop; parallel rows additionally include KORA CPU-executor
+submission, scheduling, and wait overhead for four workers. Neither claims to be a fastest-available
+vendor math library. Optional GPU cases cover tiny dispatch and size-swept vector-add/SAXPY, reduction, tiled
+scan, tiled matmul, stencil, transfer sizes, and raw Vulkan
 copy/vector-add dispatch baselines. `host_cpu_execution` is single-thread host arithmetic;
 `host_submit_completion` includes command preparation, submit, and completion wait;
 `host_transfer_completion` includes the transfer API and wait; `host_api_only` excludes queue submit

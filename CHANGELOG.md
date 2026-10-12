@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Expand `kora-bench` CPU compute coverage with single-thread and four-worker vector-add, SAXPY, reduction, stencil, and tiled matrix multiplication cases; validate full outputs outside timed intervals and record CPU model, build flags, source revision, and worker count.
+
 ## [0.2.15] - 2026-10-12
 
 ### Added
