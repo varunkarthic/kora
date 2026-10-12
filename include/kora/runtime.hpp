@@ -29,6 +29,7 @@ namespace detail {
 struct KernelState;
 struct DispatchContext;
 struct VerificationTargetSet;
+struct AdaptiveDispatchState;
 struct RuntimeTestAccess;
 }  // namespace detail
 
@@ -117,7 +118,8 @@ public:
         return push(std::as_bytes(std::span<const T>(&value, 1)));
     }
     Result<Event> submit();
-    /// Device selected when the builder was created; empty for a default/invalid builder.
+    /// Current target device. Adaptive submissions may return to the kernel-bound device to keep
+    /// device-newer inputs local; inspect this value again after submit(). Empty for invalid builders.
     const std::optional<DeviceId>& selected_device() const noexcept { return selected_device_; }
 
 private:
@@ -138,6 +140,7 @@ private:
     std::optional<VerificationPolicy> verification_policy_;
     VerificationDataType verification_type_ = VerificationDataType::Float32;
     std::optional<DeviceId> selected_device_;
+    std::shared_ptr<detail::AdaptiveDispatchState> adaptive_state_;
     friend class Runtime;
 };
 

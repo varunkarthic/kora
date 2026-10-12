@@ -161,7 +161,11 @@ and dispatch validation still applies after selection.
 
 `Runtime::dispatch_adaptive(kernel, workload)` returns a normal `DispatchBuilder` already bound to the
 selected device. Cross-device candidates require an explicit `DevicePolicy::AllEligible` Runtime.
-Call `DispatchBuilder::selected_device()` to inspect the chosen target before submission.
+Call `DispatchBuilder::selected_device()` to inspect the provisional target. At submission, device-newer
+inputs on the kernel-bound device cause a locality-preserving fallback; if newer inputs are on another
+device or split across devices, submission returns `UnsupportedFeature` and requires explicit readback
+before migration. Inspect the selected device again after submission for the effective target. Adaptive
+dispatch does not support duplicate verification.
 Workload kind (`TinyDispatch`, `StreamingBytes`, or `AluOperations`) is explicit and is never inferred
 from vendor, device name, or kernel identifier. `LocalSizeId` autotuned kernels currently remain on
 their original device because their per-device tuning state is not interchangeable.

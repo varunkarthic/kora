@@ -109,8 +109,13 @@ schema; if any eligible record is absent or stale, the kernel's original device 
 workload declares transfer byte totals, a kernel class and class-specific work count, and a conservative
 device-memory requirement. The returned builder is ordinary and device-bound; buffers, push constants,
 and invocation extents are still validated at submit time. Inspect `DispatchBuilder::selected_device()`
-to observe the chosen target. `LocalSizeId` autotuned kernels stay on their original device. This API
-is deterministic and never changes the behavior of `dispatch()`.
+to observe the chosen target. At submission, if an input has a newer device-side copy on the
+kernel-bound device, the builder returns to that device to avoid silently reading a stale host shadow.
+If newer inputs reside on another device or are split across devices, submission returns
+`UnsupportedFeature`; explicitly read them back before migration. Inspect `selected_device()` again
+after submission to see the effective target. Adaptive dispatch cannot be combined with duplicate
+verification. `LocalSizeId` autotuned kernels stay on their original device. This API is deterministic
+and never changes the behavior of `dispatch()`.
 
 Compute submissions with the same cached kernel pipeline may be coalesced by the Runtime for up to
 100 microseconds (maximum batch of eight) when their buffer accesses are independent. Each dispatch
