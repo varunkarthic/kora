@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-10-12
+
 ### Fixed
 - Keep CPU-only `kora-bench` builds compiling when optional GLSL shader tooling is unavailable.
 
@@ -494,7 +496,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.18...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.19...HEAD
+[0.2.19]: https://github.com/varunkarthic/kora/compare/v0.2.18...v0.2.19
 [0.2.18]: https://github.com/varunkarthic/kora/compare/v0.2.17...v0.2.18
 [0.2.17]: https://github.com/varunkarthic/kora/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/varunkarthic/kora/compare/v0.2.15...v0.2.16
