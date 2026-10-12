@@ -289,9 +289,9 @@ Result run_checked(std::string name, const std::function<void()>& operation,
         const auto begin = Clock::now();
         operation();
         const auto end = Clock::now();
-        if (!validate()) throw std::runtime_error("benchmark correctness check failed: " + result.name);
         result.samples_ns.push_back(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count()));
+        if (!validate()) throw std::runtime_error("benchmark correctness check failed: " + result.name);
     }
     result.median_ns = percentile(result.samples_ns, 50);
     result.p95_ns = percentile(result.samples_ns, 95);
