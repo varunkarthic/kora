@@ -228,6 +228,41 @@ An alternate M4/KosmicKrisp report is [also retained](../benchmarks/results/maco
 that Vulkan path reports timestamp measurements unavailable, illustrating why availability is
 recorded per selected device/driver rather than assumed from the OS or GPU model.
 
+### Visual comparison and methodology
+
+The following plots are generated from the same retained JSON file as the table below; they are not
+hand-transcribed. The vertical axis is logarithmic so small and large workloads remain visible in the
+same panel. A dot is the median and a whisker extends to the nearest-rank p95. The raw samples remain
+in the linked JSON report. A missing KORA timestamp is a gap because that timer result is unavailable
+for the size; it is not zero and is not estimated from host time.
+
+CPU arithmetic is isolated from GPU API latency. Host submit/completion is separate from GPU device
+timestamps, so the plots do not merge incompatible timing domains. The host chart deliberately labels
+KORA's default-readback path separately from deferred KORA and raw Vulkan, whose output stays on the
+device. Those latency paths therefore have different synchronization and transfer costs; the raw
+Vulkan result is a lower-level baseline, not an equivalent API surface.
+
+![CPU arithmetic timings, Apple M4/MoltenVK](../benchmarks/charts/cpu-arithmetic.svg)
+
+![Host-observed dispatch completion timings, Apple M4/MoltenVK](../benchmarks/charts/host-latency.svg)
+
+![GPU timestamp dispatch intervals, Apple M4/MoltenVK](../benchmarks/charts/gpu-timestamps.svg)
+
+Regenerate the visualizations from the checked-in 100-sample report (10 warm-ups) with:
+
+```sh
+python3 tools/kora-bench/render_charts.py \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json \
+  --output-dir benchmarks/charts
+```
+
+The generator requires schema 3, retained finite samples, timing-domain labels, and an explicit
+same-physical-device assertion for KORA/raw Vulkan. It uses only Python's standard library. The plots
+show results for one Apple M4/MoltenVK Release configuration; they cannot establish CUDA parity,
+hardware results on Linux or Windows, or a general cross-device ranking. The methodology still
+requires matching device, operation, input and precision, setup/readback boundaries, warm-up and
+sample count before comparing implementations.
+
 | Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | KORA GPU median | KORA GPU p95 | Raw GPU median | Raw GPU p95 |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4096 | 375 ns | 375 ns | 2.259 ms | 3.668 ms | 595.208 µs | 652.208 µs | 404.667 µs | 449.417 µs | 14.041 µs | 18.458 µs | 21.334 µs | 25.208 µs |

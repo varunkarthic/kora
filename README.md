@@ -114,6 +114,16 @@ single-thread CPU arithmetic from KORA-on-Vulkan and raw Vulkan host-submit/comp
 are not kernel-only GPU times; rerun on each target OS, compiler, driver, device, and workload. The
 [benchmark guide](docs/benchmarking.md) includes the methodology and limitations.
 
+These generated charts use separate panels for CPU arithmetic, host completion, and device
+timestamps. Dots show the median and whiskers extend to p95 on a logarithmic vertical scale. This
+single Apple M4/MoltenVK sample is not CUDA or cross-platform performance evidence.
+
+![CPU arithmetic benchmark chart](benchmarks/charts/cpu-arithmetic.svg)
+
+![KORA and raw Vulkan host-latency chart](benchmarks/charts/host-latency.svg)
+
+![KORA and raw Vulkan device-timestamp chart](benchmarks/charts/gpu-timestamps.svg)
+
 | Elements | CPU median | KORA default | KORA deferred | Raw Vulkan | KORA GPU | Raw GPU |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4096 | 375 ns | 2.259 ms | 595.208 µs | 404.667 µs | 14.041 µs | 21.334 µs |
