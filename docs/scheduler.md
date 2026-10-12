@@ -5,6 +5,12 @@ and scheduling decisions. It is a policy/model component only: Runtime dispatch 
 and callers must not interpret an unmeasured path as free. An estimate for a path with no observations
 returns `InvalidArgument`.
 
+`estimate_calibration_cost()` adapts a complete, identity-matched startup calibration record into
+separate workload-sized nanosecond components. It is an optional input adapter, not a selector: it
+does not mutate `SchedulerCostInput`, `TransferModelSet`, queue state, or Runtime placement. A caller
+may use its values when constructing candidate costs and must retain its static/online estimates when
+`complete_record` is false. Runtime auto-placement remains tracked separately by #185.
+
 ## Logarithmic size buckets
 
 `transfer_size_bucket(bytes)` uses `floor(log2(bytes))`, with zero and one byte in bucket zero. Bucket
@@ -40,6 +46,36 @@ vendor identity, or topology labels. It is not currently auto-calibrated.
 | `model(path)` | Returns the current observation count, fitted latency, and nanoseconds per byte. |
 | `bucket_stats(path, bucket)` | Returns the bucket count and EWMA byte/time pair; an empty bucket returns zero statistics. |
 | `set_uma_direct_penalty(value)` | Sets a finite multiplier of at least one for UMA-direct byte cost. |
+
+## Calibration-to-cost adapter
+
+The adapter accepts only a record whose calibration schema, public KORA schema, device UUID, and
+driver version exactly match the requested device. Its conservative completeness threshold requires
+every current calibration metric to be nonzero; any absent metric returns `complete_record == false`
+and empty estimate optionals, which callers must treat as “use fallback,” not as free work. KORA's
+calibration writer accepts compute metrics only after output verification. This gate is a completeness
+and identity check, not a statistical confidence interval: the calibration format does not persist a
+variance estimate.
+
+Input/output/device-copy byte counts map only to their corresponding transfer fields. Kernel work is
+explicitly classified as tiny dispatch count, total streaming bytes (read plus write), or ALU operation
+count; ambiguous/zero kernel work is rejected. The returned terms remain separate so callers can
+choose an appropriate model. In particular, `submit_completion_ns` overlaps with host-observed transfer
+and kernel timings; it is populated only for a submit-only workload and is empty when any transfer or
+kernel work was requested, preventing accidental double counting.
+
+| Workload input | Calibration metric | Returned unit |
+| --- | --- | --- |
+| `input_bytes` | H2D bytes/second | nanoseconds |
+| `output_bytes` | D2H bytes/second | nanoseconds |
+| `device_copy_bytes` | device-copy bytes/second | nanoseconds |
+| tiny dispatch count | tiny-dispatch nanoseconds/dispatch | nanoseconds |
+| total streaming bytes | streaming bytes/second | nanoseconds |
+| ALU operation count | ALU operations/second | nanoseconds |
+| one standalone submission | submit/completion nanoseconds | nanoseconds |
+
+This adapter does not establish cross-device confidence or select a device. Runtime placement continues
+to honor the loaded kernel's device; P9 issue #185 owns any future automatic-placement integration.
 
 Unit tests cover all bucket boundaries, separate per-path models, fitting, monotonicity from zero through
 `UINT64_MAX`, EWMA aggregation, direct penalty behavior, and invalid inputs. The model is not yet wired

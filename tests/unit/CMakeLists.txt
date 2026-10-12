@@ -14,6 +14,7 @@ kora_add_test(kora_unit_tests unit
     test_device_initialization.cpp
     test_options.cpp
     test_calibration.cpp
+    test_calibration_cost.cpp
     test_performance_db.cpp
     test_transfer_model.cpp
     test_scheduler_cost.cpp
