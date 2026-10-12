@@ -1397,6 +1397,7 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
     return true;
 }
 
+#ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
 bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const Options& options,
                                            const kora::vk::PhysicalDeviceInfo& physical,
                                            const kora::vk::Device& device,
@@ -1539,6 +1540,7 @@ bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const O
         });
     return true;
 }
+#endif
 
 #ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
 bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path,
