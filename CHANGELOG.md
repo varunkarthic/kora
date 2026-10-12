@@ -19,6 +19,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep live staging-ring ranges ordered by buffer offset, removing per-reservation scratch allocation and sorting; add dense and fragmented reserve-only occupancy benchmarks.
 - Exclude per-sample correctness scans from CPU and raw Vulkan benchmark timing while still validating every measured output.
 
+## [0.2.18] - 2026-10-12
+
+### Changed
+- Keep live staging-ring ranges ordered by buffer offset, removing per-reservation scratch allocation and sorting; add dense and fragmented reserve-only occupancy benchmarks.
+
 ## [0.2.17] - 2026-10-12
 
 ### Added
@@ -486,7 +491,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.17...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.18...HEAD
+[0.2.18]: https://github.com/varunkarthic/kora/compare/v0.2.17...v0.2.18
 [0.2.17]: https://github.com/varunkarthic/kora/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/varunkarthic/kora/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/varunkarthic/kora/compare/v0.2.14...v0.2.15
