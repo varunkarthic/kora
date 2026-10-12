@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Keep live staging-ring ranges ordered by buffer offset, removing per-reservation scratch allocation and sorting; add dense and fragmented reserve-only occupancy benchmarks.
+
 ## [0.2.17] - 2026-10-12
 
 ### Added

@@ -103,6 +103,38 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
     ASSERT_TRUE(reusable) << reusable.error().describe();
     EXPECT_TRUE(ring.cancel(reusable.value()));
 
+    // Exercise offset-ordered insertion after wrapping back to a newly freed low-address gap.
+    ASSERT_TRUE(ring.reclaim_completed(std::numeric_limits<std::uint64_t>::max()));
+    ring_result.value().reset();
+    options.initial_capacity = 4096;
+    options.maximum_capacity = 4096;
+    auto ordered_ring_result = StagingRing::create(device.value(), *pool_result.value(), options);
+    ASSERT_TRUE(ordered_ring_result) << ordered_ring_result.error().describe();
+    auto& ordered_ring = *ordered_ring_result.value();
+    std::vector<StagingSlice> ordered_live;
+    for (int index = 0; index < 4; ++index) {
+        auto slice = ordered_ring.reserve(256, 1, 0, {});
+        ASSERT_TRUE(slice) << slice.error().describe();
+        ordered_live.push_back(slice.value());
+    }
+    ASSERT_TRUE(ordered_ring.cancel(ordered_live.front()));
+    auto tail_range = ordered_ring.reserve(4096 - 4 * 256, 1, 0, {});
+    ASSERT_TRUE(tail_range) << tail_range.error().describe();
+    EXPECT_EQ(tail_range.value().offset, 4 * 256);
+    auto wrapped_range = ordered_ring.reserve(128, 1, 0, {});
+    ASSERT_TRUE(wrapped_range) << wrapped_range.error().describe();
+    EXPECT_EQ(wrapped_range.value().offset, 0);
+    for (std::size_t index = 1; index < ordered_live.size(); ++index) {
+        EXPECT_TRUE(wrapped_range.value().offset + wrapped_range.value().reserved_size <=
+                        ordered_live[index].offset ||
+                    ordered_live[index].offset + ordered_live[index].reserved_size <=
+                        wrapped_range.value().offset);
+    }
+    for (std::size_t index = 1; index < ordered_live.size(); ++index)
+        ASSERT_TRUE(ordered_ring.cancel(ordered_live[index]));
+    ASSERT_TRUE(ordered_ring.cancel(tail_range.value()));
+    ASSERT_TRUE(ordered_ring.cancel(wrapped_range.value()));
+
     options.direction = StagingDirection::Readback;
     auto readback_result = StagingRing::create(device.value(), *pool_result.value(), options);
     ASSERT_TRUE(readback_result) << readback_result.error().describe();

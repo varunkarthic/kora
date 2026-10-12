@@ -29,6 +29,7 @@ struct StagingRing::Block {
     PoolAllocation allocation;
     VkDeviceSize capacity = 0;
     VkDeviceSize cursor = 0;
+    // Kept in offset order so reserve() can scan live ranges without per-call scratch allocation/sort.
     std::vector<Segment> segments;
 };
 
@@ -153,13 +154,15 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
                 auto aligned = checked::align_up(begin, alignment);
                 if (!aligned || *aligned > block.capacity || *reserved_size > block.capacity - *aligned)
                     return std::nullopt;
-                std::vector<std::pair<VkDeviceSize, VkDeviceSize>> occupied;
-                occupied.reserve(block.segments.size());
-                for (const auto& segment : block.segments)
-                    occupied.emplace_back(segment.offset, segment.offset + segment.reserved_size);
-                std::sort(occupied.begin(), occupied.end());
                 auto candidate = *aligned;
-                for (const auto& [start, end] : occupied) {
+                const auto first =
+                    std::lower_bound(block.segments.begin(), block.segments.end(), candidate,
+                                     [](const Segment& segment, VkDeviceSize offset) {
+                                         return segment.offset + segment.reserved_size <= offset;
+                                     });
+                for (auto segment = first; segment != block.segments.end(); ++segment) {
+                    const auto start = segment->offset;
+                    const auto end = start + segment->reserved_size;
                     if (candidate <= start && *reserved_size <= start - candidate) return candidate;
                     if (candidate < end) {
                         auto next = checked::align_up(end, alignment);
@@ -177,7 +180,11 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
                 if (next_reservation_ == std::numeric_limits<std::uint64_t>::max())
                     return Error(ErrorCode::Overflow, "staging reservation ID space is exhausted");
                 const auto id = next_reservation_++;
-                block.segments.push_back(Segment{id, *offset, size, *reserved_size, std::nullopt});
+                const Segment reservation{id, *offset, size, *reserved_size, std::nullopt};
+                const auto insertion = std::lower_bound(
+                    block.segments.begin(), block.segments.end(), *offset,
+                    [](const Segment& segment, VkDeviceSize offset) { return segment.offset < offset; });
+                block.segments.insert(insertion, reservation);
                 block.cursor = (*offset + *reserved_size) % block.capacity;
                 auto* mapped = static_cast<std::byte*>(block.allocation.mapped_data);
                 if (mapped == nullptr)
