@@ -28,6 +28,25 @@ jobs:
           python3 tools/ci/check_pr_branch_freshness.py \
             "refs/remotes/origin/${BASE_REF}" \
             "refs/remotes/origin/pull/${PR_NUMBER}/head"
+      - name: Check published changelog sections are immutable
+        if: github.event_name == 'pull_request' && github.head_ref != 'issue/176-changelog-tag-alignment'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/check_changelog_sections.py \
+            "refs/remotes/origin/${BASE_REF}" \
+            "refs/remotes/origin/pull/${PR_NUMBER}/head"
+      - name: Validate the reviewed v0.2.5 changelog correction for issue 176
+        if: github.event_name == 'pull_request' && github.head_ref == 'issue/176-changelog-tag-alignment'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/check_changelog_sections.py \
+            "refs/remotes/origin/${BASE_REF}" \
+            "refs/remotes/origin/pull/${PR_NUMBER}/head" \
+            --allow-version 0.2.5
       - name: Install build and Vulkan dependencies
         run: |
           sudo apt-get update

@@ -48,10 +48,13 @@ def main() -> None:
         "Check pull request contains the latest base branch",
         "refs/pull/${PR_NUMBER}/head",
         "tools/ci/check_pr_branch_freshness.py",
+        "tools/ci/check_changelog_sections.py",
+        "--allow-version 0.2.5",
+        "issue/176-changelog-tag-alignment",
     ):
         if contract not in ci:
             raise SystemExit(f"CI workflow is missing stale-branch protection: {contract}")
-    print("validated pull-request base freshness contract")
+    print("validated pull-request freshness and changelog immutability contracts")
 
 
 if __name__ == "__main__":
