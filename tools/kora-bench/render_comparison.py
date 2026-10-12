@@ -160,6 +160,7 @@ def main() -> int:
         parser.error("KORA and raw Vulkan must identify the same physical device")
     results = {item["name"]: item for item in report["results"]}
 
+    print("# Benchmark comparison\n")
     print(
         "| Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | "
         "KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | "

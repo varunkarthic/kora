@@ -110,6 +110,7 @@ calibration
 autotuning
 scheduler
 benchmarking
+benchmark-compute-results
 debugging
 recovery
 ```

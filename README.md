@@ -141,6 +141,15 @@ four-worker CPU baselines for SAXPY, reduction, stencil, and matrix multiplicati
 is available from this non-CUDA device. Full workload definitions and caveats are in
 [Benchmarking](docs/benchmarking.md).
 
+The same device also runs matched raw-Vulkan compute fixtures for SAXPY, reduction, scan, tiled
+matrix multiplication, and stencil. At 4,096 elements, device-time medians were within 3.5% of raw
+Vulkan for the four KORA timestamp workloads that completed; host completion was about 2.1–3.3× the
+raw path. This separates near-parity in shader execution from remaining host-side overhead. One KORA
+stencil timestamp was unavailable, and a single M4/MoltenVK run is not cross-platform or CUDA evidence.
+See the [matched compute methodology](docs/benchmarking.md#matched-raw-vulkan-compute-workloads),
+[generated comparison tables](docs/benchmark-compute-results.md),
+and [raw sample report](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-ec51125.json).
+
 The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are
 build/test targets, but CI smoke coverage is not a cross-OS performance study; no Linux/Windows
 hardware-GPU or CUDA result is claimed. The benchmark guide explains how to distinguish CPU
