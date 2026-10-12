@@ -27,6 +27,7 @@
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
 #include "core/runtime_test_access.hpp"
+#include "core/scheduler_placement.hpp"
 #include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "kernel/spirv.hpp"
@@ -145,6 +146,13 @@ struct VerificationTargetSet {
     };
     std::vector<Target> targets;
     std::shared_ptr<DeviceQuarantineRegistry> quarantine;
+};
+
+struct AdaptiveDispatchState {
+    DeviceId original_id;
+    std::shared_ptr<DispatchContext> original_context;
+    std::shared_ptr<const KernelState> original_kernel;
+    std::vector<std::shared_ptr<DispatchContext>> contexts;
 };
 
 void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
@@ -691,6 +699,35 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }
 
 Result<Event> DispatchBuilder::submit() {
+    if (adaptive_state_) {
+        if (verification_policy_)
+            return Error(ErrorCode::UnsupportedFeature,
+                         "adaptive dispatch cannot be combined with duplicate verification");
+        if (buffers_.size() == accesses_.size()) {
+            std::unordered_set<std::size_t> input_sources;
+            for (std::size_t index = 0; index < buffers_.size(); ++index) {
+                if (accesses_[index] == KernelAccess::Write) continue;
+                for (const auto& candidate : adaptive_state_->contexts) {
+                    std::lock_guard lock(candidate->submit_mutex);
+                    if (candidate->device_newer_buffers.contains(buffers_[index].id()))
+                        input_sources.insert(candidate->device_index);
+                }
+            }
+            if (input_sources.size() > 1)
+                return Error(
+                    ErrorCode::UnsupportedFeature,
+                    "adaptive dispatch inputs have newer copies on multiple devices; read them back first");
+            if (!input_sources.empty() && *input_sources.begin() != context_->device_index) {
+                if (*input_sources.begin() != adaptive_state_->original_id.index)
+                    return Error(
+                        ErrorCode::UnsupportedFeature,
+                        "adaptive dispatch input is newer on another device; read it back before migration");
+                context_ = adaptive_state_->original_context;
+                kernel_ = adaptive_state_->original_kernel;
+                selected_device_ = adaptive_state_->original_id;
+            }
+        }
+    }
     if (verification_policy_) return submit_verified();
     if (!context_ || !context_->accepting_work.load(std::memory_order_acquire) || !kernel_ ||
         !context_->pipelines || !context_->queue || !context_->device)
@@ -1247,7 +1284,7 @@ Result<Event> DispatchBuilder::submit_verified() {
     for (std::size_t index = 0; index < targets.size(); ++index) {
         const auto& target = targets[index];
         const auto& target_kernel = kernels[index];
-        DispatchBuilder duplicate(target.context, target_kernel);
+        DispatchBuilder duplicate(target.context, target_kernel, target.id);
         duplicate.global_size_ = global_size_;
         duplicate.buffers_ = buffers_;
         duplicate.accesses_ = accesses_;
@@ -1446,8 +1483,11 @@ Result<BufferHandle> Runtime::create_buffer(std::uint64_t size_bytes, BufferUsag
 }
 
 DispatchBuilder::DispatchBuilder(std::shared_ptr<detail::DispatchContext> context,
-                                 std::shared_ptr<const detail::KernelState> kernel)
-    : context_(std::move(context)), kernel_(std::move(kernel)) {}
+                                 std::shared_ptr<const detail::KernelState> kernel,
+                                 std::optional<DeviceId> selected_device)
+    : context_(std::move(context)),
+      kernel_(std::move(kernel)),
+      selected_device_(std::move(selected_device)) {}
 
 DispatchBuilder& DispatchBuilder::global(std::uint64_t x) {
     return global(x, 1, 1);
@@ -1581,8 +1621,10 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
     const auto selected_device =
         std::find_if(impl_->devices.begin(), impl_->devices.end(),
                      [&](const auto& device) { return device->id.index == kernel.state_->device_index; });
-    DispatchBuilder builder(selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr,
-                            kernel.state_);
+    DispatchBuilder builder(
+        selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr, kernel.state_,
+        selected_device != impl_->devices.end() ? std::optional<DeviceId>((*selected_device)->id)
+                                                : std::nullopt);
     if (selected_device != impl_->devices.end()) {
         auto targets = std::make_shared<detail::VerificationTargetSet>();
         targets->quarantine = impl_->quarantine;
@@ -1593,6 +1635,74 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
         }
         builder.verification_targets_ = std::move(targets);
     }
+    return builder;
+}
+
+Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
+                                                   const AdaptiveDispatchWorkload& workload) const {
+    if (!impl_ || !kernel.state_ || kernel.state_->runtime_id != impl_->runtime_id)
+        return Error(ErrorCode::InvalidArgument, "adaptive dispatch kernel does not belong to this runtime");
+    if (workload.kernel_work == 0 || static_cast<std::uint8_t>(workload.kernel_kind) >
+                                         static_cast<std::uint8_t>(AdaptiveKernelWorkKind::AluOperations))
+        return Error(ErrorCode::InvalidArgument, "adaptive dispatch workload is invalid");
+    const auto current = std::find_if(impl_->devices.begin(), impl_->devices.end(), [&](const auto& device) {
+        return device->id.index == kernel.state_->device_index;
+    });
+    if (current == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument,
+                     "adaptive dispatch kernel device is not owned by this runtime");
+
+    std::vector<detail::RuntimePlacementCandidate> candidates;
+    candidates.reserve(impl_->devices.size());
+    for (const auto& device : impl_->devices) {
+        if (device->dispatch->quarantined.load(std::memory_order_acquire) ||
+            !device->dispatch->accepting_work.load(std::memory_order_acquire))
+            continue;
+        auto reflection = detail::spirv::validate_and_reflect(kernel.state_->words, kernel.state_->metadata,
+                                                              detail::spirv::capabilities_from(device->info),
+                                                              kernel.state_->entry_point);
+        if (!reflection || (kernel.state_->autotuner && device.get() != current->get())) continue;
+        auto stats = memory_stats(device->id);
+        if (!stats) {
+            if (device.get() == current->get()) return dispatch(kernel);
+            continue;
+        }
+        std::uint64_t available_device_memory = 0;
+        for (const auto& heap : stats.value().heaps) {
+            if (heap.heap_index >= device->info.memory_heaps().size() ||
+                !device->info.memory_heaps()[heap.heap_index].device_local)
+                continue;
+            available_device_memory = std::max(available_device_memory, heap.available_bytes);
+        }
+        candidates.push_back(detail::RuntimePlacementCandidate{
+            .id = device->id,
+            .driver_version = device->driver_version,
+            .calibration_record = device->calibration_record,
+            .available_device_memory_bytes = available_device_memory,
+            .supported = true,
+            .healthy = true,
+            .allowed = true,
+        });
+    }
+    auto selected = detail::select_adaptive_device(candidates, (*current)->id, workload);
+    if (!selected) return std::move(selected).error();
+    if (selected.value() == (*current)->id) return dispatch(kernel);
+
+    const auto target = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                     [&](const auto& device) { return device->id == selected.value(); });
+    if (target == impl_->devices.end())
+        return Error(ErrorCode::InternalInvariantViolation, "adaptive scheduler selected an unknown device");
+    auto selected_kernel = std::make_shared<detail::KernelState>(*kernel.state_);
+    selected_kernel->device_index = (*target)->id.index;
+    selected_kernel->autotuner.reset();
+    selected_kernel->autotune_keys.clear();
+    DispatchBuilder builder((*target)->dispatch, std::move(selected_kernel), (*target)->id);
+    builder.adaptive_state_ = std::make_shared<detail::AdaptiveDispatchState>();
+    builder.adaptive_state_->original_id = (*current)->id;
+    builder.adaptive_state_->original_context = (*current)->dispatch;
+    builder.adaptive_state_->original_kernel = kernel.state_;
+    builder.adaptive_state_->contexts.reserve(impl_->devices.size());
+    for (const auto& device : impl_->devices) builder.adaptive_state_->contexts.push_back(device->dispatch);
     return builder;
 }
 
@@ -1776,6 +1886,20 @@ Status detail::RuntimeTestAccess::mark_device_lost(Runtime& runtime, const Devic
     if (found == runtime.impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     (*found)->fault_state->mark_lost(VK_ERROR_DEVICE_LOST, false);
+    return {};
+}
+
+Status detail::RuntimeTestAccess::set_calibration_record(Runtime& runtime, const DeviceId& id,
+                                                         detail::calibration::Record record) {
+    if (!runtime.impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto found = std::find_if(runtime.impl_->devices.begin(), runtime.impl_->devices.end(),
+                                    [&](const auto& entry) { return entry->id == id; });
+    if (found == runtime.impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    record.device_uuid = (*found)->id.uuid;
+    record.driver_version = (*found)->driver_version;
+    record.kora_schema = static_cast<std::uint32_t>(kora::kSchemaVersion);
+    (*found)->calibration_record = std::move(record);
     return {};
 }
 

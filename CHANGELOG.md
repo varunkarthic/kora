@@ -15,11 +15,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 - Embed a vendor-neutral compute calibration shader and record validated tiny-dispatch, streaming
   read/write, and integer ALU measurements when supported within the configured best-effort budget.
+- Add an explicit adaptive-dispatch API that uses identity- and completeness-gated calibration costs;
+  ordinary dispatch remains device-bound and incomplete records retain the current device.
 
 ### Changed
 - Bump the internal calibration-record schema to 2 so older records are recalibrated.
-- Add an identity- and completeness-gated calibration cost adapter for scheduler callers; Runtime
-  placement remains explicit-device and is not changed by this adapter.
 
 ## [0.2.4] - 2026-10-12
 

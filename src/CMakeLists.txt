@@ -6,6 +6,7 @@ add_library(kora
   core/cpu_executor.cpp
   core/calibration.cpp
   core/calibration_cost.cpp
+  core/scheduler_placement.cpp
   core/device_selection.cpp
   core/execution_plan.cpp
   core/log.cpp

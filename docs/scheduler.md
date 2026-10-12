@@ -6,10 +6,9 @@ and callers must not interpret an unmeasured path as free. An estimate for a pat
 returns `InvalidArgument`.
 
 `estimate_calibration_cost()` adapts a complete, identity-matched startup calibration record into
-separate workload-sized nanosecond components. It is an optional input adapter, not a selector: it
-does not mutate `SchedulerCostInput`, `TransferModelSet`, queue state, or Runtime placement. A caller
-may use its values when constructing candidate costs and must retain its static/online estimates when
-`complete_record` is false. Runtime auto-placement remains tracked separately by #185.
+separate workload-sized nanosecond components. Runtime's opt-in `dispatch_adaptive()` uses those
+components with the deterministic cost and eligibility policy below. Ordinary `dispatch()` remains
+bound to the device for which the kernel was loaded.
 
 ## Logarithmic size buckets
 
@@ -74,13 +73,15 @@ kernel work was requested, preventing accidental double counting.
 | ALU operation count | ALU operations/second | nanoseconds |
 | one standalone submission | submit/completion nanoseconds | nanoseconds |
 
-This adapter does not establish cross-device confidence or select a device. Runtime placement continues
-to honor the loaded kernel's device; P9 issue #185 owns any future automatic-placement integration.
+The adapter does not establish cross-device statistical confidence; the calibration format has no
+variance field. Adaptive placement therefore requires complete records for every eligible candidate.
+If any eligible record is incomplete, dispatch deterministically remains on the kernel's bound device.
 
 Unit tests cover all bucket boundaries, separate per-path models, fitting, monotonicity from zero through
-`UINT64_MAX`, EWMA aggregation, direct penalty behavior, and invalid inputs. The model is not yet wired
-to `PerformanceDatabase` persistence or scheduler decisions; those integrations remain explicit future
-work.
+`UINT64_MAX`, EWMA aggregation, direct penalty behavior, and invalid inputs. `TransferModelSet` itself
+is not yet persisted or consulted by Runtime placement; the current adaptive API uses the calibration
+adapter's direction-specific transfer components. Online per-kernel observations remain tracked by
+#187.
 
 ## Candidate cost and score breakdown
 
@@ -150,10 +151,30 @@ both the absolute and relative margins. Priority aging discounts cost with wait 
 weight, capped by `maximum_aging_discount_ns`; it changes ranking hints only and makes no hard
 real-time guarantee. Unsupported or unhealthy candidates remain excluded regardless of priority.
 
-The policy accepts candidate estimates rather than invoking Runtime, executing work, or generating
-random values internally. This makes the decision boundary replayable and testable; the future runtime
-scheduler is responsible for constructing candidates, sampling measurements, and supplying a random
-draw only when nondeterministic mode is enabled.
+The policy accepts candidate estimates rather than executing work or generating random values
+internally. Runtime's adaptive entry point constructs candidates from devices already admitted by
+`DevicePolicy`, filters unhealthy devices and incompatible kernels, and checks caller-declared device
+memory against the largest available device-local heap. It runs deterministically with no exploration.
+Incomplete/stale calibration preserves the current kernel device. The caller must provide workload
+counts in the units declared above, including a conservative residency estimate; normal allocation
+and dispatch validation still applies after selection.
+
+`Runtime::dispatch_adaptive(kernel, workload)` returns a normal `DispatchBuilder` already bound to the
+selected device. Cross-device candidates require an explicit `DevicePolicy::AllEligible` Runtime.
+Call `DispatchBuilder::selected_device()` to inspect the provisional target. At submission, device-newer
+inputs on the kernel-bound device cause a locality-preserving fallback; if newer inputs are on another
+device or split across devices, submission returns `UnsupportedFeature` and requires explicit readback
+before migration. Inspect the selected device again after submission for the effective target. Adaptive
+dispatch does not support duplicate verification.
+Workload kind (`TinyDispatch`, `StreamingBytes`, or `AluOperations`) is explicit and is never inferred
+from vendor, device name, or kernel identifier. `LocalSizeId` autotuned kernels currently remain on
+their original device because their per-device tuning state is not interchangeable.
+
+| Adaptive workload field | Meaning |
+| --- | --- |
+| `input_bytes`, `output_bytes`, `device_copy_bytes` | Transfer byte totals used with per-direction calibration rates |
+| `kernel_kind`, `kernel_work` | Explicit probe class and its unit: dispatches, total streaming bytes, or ALU operations |
+| `required_device_memory_bytes` | Caller-declared candidate admission estimate below available device-local heap capacity |
 
 ## Small-dispatch coalescing
 
