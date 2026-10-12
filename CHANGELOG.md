@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Split diagnostic GPU completion profiling into completion-worker wake delay, Vulkan wait, timestamp collection, and Runtime callback phases.
+
+### Changed
+- Avoid an idle coalescing collection delay for isolated GPU dispatches while retaining eager batching for compatible submissions already queued together.
+
 ## [0.2.16] - 2026-10-12
 
 ### Added
