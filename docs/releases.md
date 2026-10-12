@@ -16,6 +16,29 @@ Use Stable releases when all published validation gates are closed. Use Beta rel
 can evaluate the remaining open gates against your workload. Neither channel replaces application-
 specific benchmarking, driver qualification, or security review.
 
+## Reading the GitHub release page
+
+Generated release notes show the version and Beta/Stable channel first, followed by a short highlights
+list derived from that tag's changelog. The platform table links to the Linux x86-64, macOS ARM64, and
+Windows x86-64 archives produced by the required release matrix. The release is published only after
+all three package jobs succeed, so these links refer to assets uploaded with that tag. The page also
+links to the exact source tag and its changelog.
+
+Release-validation issues are split into remaining and completed gates so the release maturity is
+visible without losing the full issue list. An empty milestone remains Beta: lack of tracked gates is
+not treated as proof that a release is Stable. Issue changes regenerate the latest release body but
+do not create a new version or change the stability rule.
+
+For a package install, download and extract the archive for your platform, then point
+`CMAKE_PREFIX_PATH` at the extracted installation prefix before configuring a consumer project:
+
+```cmake
+find_package(kora CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE kora::kora)
+```
+
+For a source build, use the exact tag shown on the page and follow the **Source build** commands below.
+
 ## Package contents
 
 Platform archives contain an installed development prefix: static library, public headers, generated

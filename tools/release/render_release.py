@@ -177,6 +177,40 @@ def milestone_issues(repo: str, milestone_title: str, token: str) -> list[dict[s
     return sorted(result, key=lambda item: item["number"])
 
 
+def _escape_table_text(value: str) -> str:
+    """Escape untrusted text for a Markdown table cell or link label."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
+def release_highlights(changelog: str, limit: int = 3) -> list[str]:
+    """Return the first categorized changelog bullets as concise, source-derived highlights."""
+    highlights: list[str] = []
+    for line in changelog.splitlines():
+        stripped = line.strip()
+        if re.match(r"[-*+]\s+\S", stripped):
+            highlights.append(re.sub(r"^[-*+]\s+", "", stripped))
+            if len(highlights) == limit:
+                break
+    return highlights
+
+
+def release_assets(repo: str, version: str) -> list[tuple[str, str, str, str]]:
+    """The release workflow uploads exactly these three package assets before publishing notes."""
+    base = f"https://github.com/{repo}/releases/download/v{version}/"
+    return [
+        ("Linux", "x86-64", f"kora-{version}-linux-x86_64.tar.gz", base + f"kora-{version}-linux-x86_64.tar.gz"),
+        ("macOS", "ARM64", f"kora-{version}-macos-arm64.tar.gz", base + f"kora-{version}-macos-arm64.tar.gz"),
+        ("Windows", "x86-64", f"kora-{version}-windows-x86_64.zip", base + f"kora-{version}-windows-x86_64.zip"),
+    ]
+
+
 def render(repo: str, version: str, changelog: str, issues: list[dict[str, object]]) -> tuple[str, bool]:
     for issue in issues:
         if (
@@ -201,27 +235,59 @@ def render(repo: str, version: str, changelog: str, issues: list[dict[str, objec
             f"> [!WARNING]\n> **Beta.** {len(issues) - closed} of {len(issues)} release-validation issues remain open. "
             "Evaluate this release before relying on it for production workloads."
         )
-    rows = "\n".join(
-        f"| #{issue['number']} | [{issue['title']}]({issue['html_url']}) | "
-        f"{'closed' if issue['state'] == 'closed' else 'open'} |"
-        for issue in issues
+    open_issues = [issue for issue in issues if issue["state"] == "open"]
+    closed_issues = [issue for issue in issues if issue["state"] == "closed"]
+
+    def issue_rows(group: list[dict[str, object]], state: str) -> str:
+        return "\n".join(
+            f"| #{issue['number']} | [{_escape_table_text(issue['title'])}]({issue['html_url']}) | {state} |"
+            for issue in group
+        ) or "| — | None | — |"
+
+    highlights = release_highlights(changelog)
+    highlight_list = "\n".join(f"- {item}" for item in highlights) or "- See the full changelog below."
+    asset_rows = "\n".join(
+        f"| {os_name} | {architecture} | [{_escape_table_text(filename)}]({url}) |"
+        for os_name, architecture, filename, url in release_assets(repo, version)
     )
+    gate_summary = f"{closed} of {len(issues)} release-validation gates closed"
     body = f"""![release {channel}](https://img.shields.io/badge/release-{channel.lower()}-{badge_color})
 ![validation issues](https://img.shields.io/badge/validation-{state_badge}-blue)
 
+# KORA v{version}
+
 {warning}
+
+**Release channel:** {channel} · **Validation:** {gate_summary} · **Version:** `{version}`
+
+[Source at this tag](https://github.com/{repo}/tree/v{version}) · [Documentation](https://kora.readthedocs.io/en/latest/) · [Changelog](https://github.com/{repo}/blob/v{version}/CHANGELOG.md)
+
+## Highlights
+
+{highlight_list}
+
+## Download packages
+
+Each archive contains the installed CMake development prefix. Extract it, then set
+`CMAKE_PREFIX_PATH` to the extracted prefix before configuring your consumer project.
+
+| Platform | Architecture | Package |
+| --- | --- | --- |
+{asset_rows}
+
+All three package jobs must pass before this release is published. Archives do not include a Vulkan
+driver, MoltenVK, a Python runtime, or a system C/C++ runtime.
 
 ## Install and use
 
-Download the archive for your platform, extract it, and point `CMAKE_PREFIX_PATH` at the extracted
-installation prefix:
+Link an installed package from CMake:
 
 ```cmake
 find_package(kora CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE kora::kora)
 ```
 
-Or build from the tag:
+Or build from the matching source tag:
 
 ```sh
 git clone --branch v{version} https://github.com/{repo}.git
@@ -231,17 +297,29 @@ cmake --build --preset release --parallel
 ctest --preset release --output-on-failure
 ```
 
-## Release-validation issues
+## Release validation
+
+The release line remains Beta until every release-validation issue in its milestone is closed. Stable
+means repository release gates are complete; it is not a workload-specific guarantee.
+
+### Remaining gates ({len(open_issues)})
 
 | No. | Issue | Status |
 | --- | --- | --- |
-{rows}
+{issue_rows(open_issues, '🟡 Open')}
+
+### Completed gates ({len(closed_issues)})
+
+| No. | Issue | Status |
+| --- | --- | --- |
+{issue_rows(closed_issues, '✅ Closed')}
 
 ## Changelog
 
 {changelog.strip()}
 
-Release status is refreshed automatically when a tracked issue changes.
+Release status is refreshed automatically when a tracked issue changes. Download links above follow
+the package filenames emitted by the required release matrix.
 """
     return body, stable
 
