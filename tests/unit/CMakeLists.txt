@@ -19,6 +19,7 @@ kora_add_test(kora_unit_tests unit
     test_transfer_model.cpp
     test_scheduler_cost.cpp
     test_scheduler_policy.cpp
+    test_scheduler_placement.cpp
     test_task_partition.cpp
     test_log.cpp
     test_suballocator.cpp

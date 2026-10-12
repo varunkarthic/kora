@@ -101,6 +101,17 @@ limit. `submit()` returns an `Event` whose `wait()` covers compute completion an
 output readback. Host writes and writable mappings advance the buffer's host content version and
 invalidate the device-copy cache on its next use.
 
+`Runtime::dispatch_adaptive(kernel, workload)` is an explicit alternative for one dispatch. It chooses
+among initialized devices that pass SPIR-V capability validation, health, and the caller-declared
+device-memory admission estimate. Cross-device comparison requires `DevicePolicy::AllEligible`.
+Every eligible candidate must have a complete calibration record matching its UUID, driver, and
+schema; if any eligible record is absent or stale, the kernel's original device is retained. The
+workload declares transfer byte totals, a kernel class and class-specific work count, and a conservative
+device-memory requirement. The returned builder is ordinary and device-bound; buffers, push constants,
+and invocation extents are still validated at submit time. Inspect `DispatchBuilder::selected_device()`
+to observe the chosen target. `LocalSizeId` autotuned kernels stay on their original device. This API
+is deterministic and never changes the behavior of `dispatch()`.
+
 Compute submissions with the same cached kernel pipeline may be coalesced by the Runtime for up to
 100 microseconds (maximum batch of eight) when their buffer accesses are independent. Each dispatch
 retains its own `Event`; shared writes, read/write conflicts, or differing external semaphore waits

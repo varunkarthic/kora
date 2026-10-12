@@ -146,6 +146,59 @@ TEST(Runtime, AllEligibleReportsQuarantinedDevicesSeparately) {
     EXPECT_TRUE(runtime.value().quarantined_devices().empty());
 }
 
+TEST(Runtime, AdaptiveDispatchFallsBackToBoundDeviceWithoutCompleteCalibration) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    kora::RuntimeOptions options;
+    options.enable_startup_calibration = false;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    const auto devices = runtime.value().devices();
+    ASSERT_FALSE(devices.empty());
+    const auto kernel =
+        runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    constexpr std::uint64_t count = 257;
+    const kora::AdaptiveDispatchWorkload workload{
+        .input_bytes = 2 * count * sizeof(std::uint32_t),
+        .output_bytes = count * sizeof(std::uint32_t),
+        .kernel_work = 3 * count * sizeof(std::uint32_t),
+        .required_device_memory_bytes = 3 * count * sizeof(std::uint32_t),
+        .kernel_kind = kora::AdaptiveKernelWorkKind::StreamingBytes,
+    };
+    auto adaptive = runtime.value().dispatch_adaptive(kernel.value(), workload);
+    ASSERT_TRUE(adaptive) << adaptive.error().describe();
+    ASSERT_TRUE(adaptive.value().selected_device());
+    EXPECT_EQ(*adaptive.value().selected_device(), devices.front());
+
+    auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
+    auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
+    auto output = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_a);
+    ASSERT_TRUE(input_b);
+    ASSERT_TRUE(output);
+    std::vector<std::uint32_t> a(count, 2), b(count, 3);
+    ASSERT_TRUE(input_a.value().write(a));
+    ASSERT_TRUE(input_b.value().write(b));
+    const auto push_count = static_cast<std::uint32_t>(count);
+    auto event = adaptive.value()
+                     .global(count)
+                     .read(input_a.value())
+                     .read(input_b.value())
+                     .write(output.value())
+                     .push(push_count)
+                     .submit();
+    ASSERT_TRUE(event) << event.error().describe();
+    ASSERT_TRUE(event.value().wait());
+    EXPECT_EQ(output.value().read().value(), std::vector<std::uint32_t>(count, 5));
+#endif
+}
+
 TEST(Runtime, VerifiedDispatchPublishesMatchingResultsAndQuarantinesMismatches) {
 #ifndef KORA_VECTOR_ADD_FIXTURE_PATH
     GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";

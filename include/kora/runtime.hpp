@@ -69,6 +69,19 @@ using CpuFallbackFunction = std::function<Status(CpuTaskContext&)>;
 
 enum class DispatchPriority : std::uint8_t { Low, Normal, High, RealtimeHint };
 
+enum class AdaptiveKernelWorkKind : std::uint8_t { TinyDispatch, StreamingBytes, AluOperations };
+
+/// Explicit workload description required by opt-in adaptive dispatch. All byte/work counts are
+/// totals for one dispatch; required_device_memory_bytes is a conservative residency requirement.
+struct AdaptiveDispatchWorkload {
+    std::uint64_t input_bytes = 0;
+    std::uint64_t output_bytes = 0;
+    std::uint64_t device_copy_bytes = 0;
+    std::uint64_t kernel_work = 0;
+    std::uint64_t required_device_memory_bytes = 0;
+    AdaptiveKernelWorkKind kernel_kind = AdaptiveKernelWorkKind::TinyDispatch;
+};
+
 class DispatchBuilder final {
 public:
     DispatchBuilder() = default;
@@ -104,11 +117,14 @@ public:
         return push(std::as_bytes(std::span<const T>(&value, 1)));
     }
     Result<Event> submit();
+    /// Device selected when the builder was created; empty for a default/invalid builder.
+    const std::optional<DeviceId>& selected_device() const noexcept { return selected_device_; }
 
 private:
     friend class Runtime;
     DispatchBuilder(std::shared_ptr<detail::DispatchContext> context,
-                    std::shared_ptr<const detail::KernelState> kernel);
+                    std::shared_ptr<const detail::KernelState> kernel,
+                    std::optional<DeviceId> selected_device = std::nullopt);
     Result<Event> submit_verified();
     std::shared_ptr<detail::DispatchContext> context_;
     std::shared_ptr<const detail::KernelState> kernel_;
@@ -121,6 +137,7 @@ private:
     std::shared_ptr<const detail::VerificationTargetSet> verification_targets_;
     std::optional<VerificationPolicy> verification_policy_;
     VerificationDataType verification_type_ = VerificationDataType::Float32;
+    std::optional<DeviceId> selected_device_;
     friend class Runtime;
 };
 
@@ -211,6 +228,11 @@ public:
     Result<Kernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
                                KernelMetadata metadata, const DeviceId& device);
     DispatchBuilder dispatch(const Kernel& kernel) const;
+    /// Select a compatible initialized device using complete per-device calibration data, then
+    /// return its dispatch builder. If measurements are incomplete, the kernel's bound device is
+    /// retained. Ordinary dispatch() remains explicitly device-bound.
+    Result<DispatchBuilder> dispatch_adaptive(const Kernel& kernel,
+                                              const AdaptiveDispatchWorkload& workload) const;
     /// Schedule a host readback for a device-resident buffer and complete when host bytes are fresh.
     Result<Event> readback(const BufferHandle& buffer) const;
     /// Read a device-resident version through host memory for CPU-visible or cross-device staging.

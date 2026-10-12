@@ -27,6 +27,7 @@
 #include "core/event_state.hpp"
 #include "core/performance_db.hpp"
 #include "core/runtime_test_access.hpp"
+#include "core/scheduler_placement.hpp"
 #include "kernel/autotuner.hpp"
 #include "kernel/pipeline_manager.hpp"
 #include "kernel/spirv.hpp"
@@ -1247,7 +1248,7 @@ Result<Event> DispatchBuilder::submit_verified() {
     for (std::size_t index = 0; index < targets.size(); ++index) {
         const auto& target = targets[index];
         const auto& target_kernel = kernels[index];
-        DispatchBuilder duplicate(target.context, target_kernel);
+        DispatchBuilder duplicate(target.context, target_kernel, target.id);
         duplicate.global_size_ = global_size_;
         duplicate.buffers_ = buffers_;
         duplicate.accesses_ = accesses_;
@@ -1446,8 +1447,11 @@ Result<BufferHandle> Runtime::create_buffer(std::uint64_t size_bytes, BufferUsag
 }
 
 DispatchBuilder::DispatchBuilder(std::shared_ptr<detail::DispatchContext> context,
-                                 std::shared_ptr<const detail::KernelState> kernel)
-    : context_(std::move(context)), kernel_(std::move(kernel)) {}
+                                 std::shared_ptr<const detail::KernelState> kernel,
+                                 std::optional<DeviceId> selected_device)
+    : context_(std::move(context)),
+      kernel_(std::move(kernel)),
+      selected_device_(std::move(selected_device)) {}
 
 DispatchBuilder& DispatchBuilder::global(std::uint64_t x) {
     return global(x, 1, 1);
@@ -1581,8 +1585,10 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
     const auto selected_device =
         std::find_if(impl_->devices.begin(), impl_->devices.end(),
                      [&](const auto& device) { return device->id.index == kernel.state_->device_index; });
-    DispatchBuilder builder(selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr,
-                            kernel.state_);
+    DispatchBuilder builder(
+        selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr, kernel.state_,
+        selected_device != impl_->devices.end() ? std::optional<DeviceId>((*selected_device)->id)
+                                                : std::nullopt);
     if (selected_device != impl_->devices.end()) {
         auto targets = std::make_shared<detail::VerificationTargetSet>();
         targets->quarantine = impl_->quarantine;
@@ -1594,6 +1600,67 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
         builder.verification_targets_ = std::move(targets);
     }
     return builder;
+}
+
+Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
+                                                   const AdaptiveDispatchWorkload& workload) const {
+    if (!impl_ || !kernel.state_ || kernel.state_->runtime_id != impl_->runtime_id)
+        return Error(ErrorCode::InvalidArgument, "adaptive dispatch kernel does not belong to this runtime");
+    if (workload.kernel_work == 0 || static_cast<std::uint8_t>(workload.kernel_kind) >
+                                         static_cast<std::uint8_t>(AdaptiveKernelWorkKind::AluOperations))
+        return Error(ErrorCode::InvalidArgument, "adaptive dispatch workload is invalid");
+    const auto current = std::find_if(impl_->devices.begin(), impl_->devices.end(), [&](const auto& device) {
+        return device->id.index == kernel.state_->device_index;
+    });
+    if (current == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument,
+                     "adaptive dispatch kernel device is not owned by this runtime");
+
+    std::vector<detail::RuntimePlacementCandidate> candidates;
+    candidates.reserve(impl_->devices.size());
+    for (const auto& device : impl_->devices) {
+        if (device->dispatch->quarantined.load(std::memory_order_acquire) ||
+            !device->dispatch->accepting_work.load(std::memory_order_acquire))
+            continue;
+        auto reflection = detail::spirv::validate_and_reflect(kernel.state_->words, kernel.state_->metadata,
+                                                              detail::spirv::capabilities_from(device->info),
+                                                              kernel.state_->entry_point);
+        if (!reflection || (kernel.state_->autotuner && device.get() != current->get())) continue;
+        auto stats = memory_stats(device->id);
+        if (!stats) {
+            if (device.get() == current->get()) return dispatch(kernel);
+            continue;
+        }
+        std::uint64_t available_device_memory = 0;
+        for (const auto& heap : stats.value().heaps) {
+            if (heap.heap_index >= device->info.memory_heaps().size() ||
+                !device->info.memory_heaps()[heap.heap_index].device_local)
+                continue;
+            available_device_memory = std::max(available_device_memory, heap.available_bytes);
+        }
+        candidates.push_back(detail::RuntimePlacementCandidate{
+            .id = device->id,
+            .driver_version = device->driver_version,
+            .calibration_record = device->calibration_record,
+            .available_device_memory_bytes = available_device_memory,
+            .supported = true,
+            .healthy = true,
+            .allowed = true,
+        });
+    }
+    auto selected = detail::select_adaptive_device(candidates, (*current)->id, workload);
+    if (!selected) return std::move(selected).error();
+    if (selected.value() == (*current)->id) return dispatch(kernel);
+
+    const auto target = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                     [&](const auto& device) { return device->id == selected.value(); });
+    if (target == impl_->devices.end())
+        return Error(ErrorCode::InternalInvariantViolation, "adaptive scheduler selected an unknown device");
+    auto selected_kernel = std::make_shared<detail::KernelState>(*kernel.state_);
+    selected_kernel->device_index = (*target)->id.index;
+    selected_kernel->autotuner.reset();
+    selected_kernel->autotune_keys.clear();
+    return DispatchBuilder((*target)->dispatch, std::move(selected_kernel), (*target)->id);
 }
 
 Result<Runtime> Runtime::create(const RuntimeOptions& options) {

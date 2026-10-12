@@ -2,8 +2,8 @@
 
 KORA is a C++20 runtime for explicit CPU and Vulkan compute. This handbook documents the current
 contracts, practical setup, operating limits, and internal design. It distinguishes working features
-from planned integrations: in particular, graph replay is caller-controlled and scheduler scoring is
-not yet wired into automatic Runtime placement.
+from planned integrations: graph replay is caller-controlled; single-dispatch adaptive placement is an
+explicit opt-in, not a default Runtime behavior.
 
 ## Choose a path
 

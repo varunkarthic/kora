@@ -10,6 +10,8 @@ flowchart TD
   PY["Python bindings"] --> RT
   GRAPH["TaskGraph / ExecutionPlan metadata"] -. "caller-controlled" .-> APP["Application orchestration"]
   APP --> RT
+  RT -->|"dispatch_adaptive (explicit opt-in)"| SELECT["Calibration-gated device selection"]
+  SELECT --> GPU
   RT --> CPU["CPU executor / registered fallbacks"]
   RT --> GPU["Per-device Vulkan dispatch"]
   GPU --> QUEUE["QueueContext and completion"]
@@ -22,14 +24,18 @@ flowchart TD
 The dotted edge is deliberate: a `TaskGraph` and its immutable `ExecutionPlan` describe ordering and
 resource access, but replay invokes caller callbacks. They are not implicitly dispatched as Vulkan
 operations. Likewise, scheduler cost, policy, transfer-model, and queue-availability helpers are
-building blocks; automatic graph-to-device scheduling is not currently wired into `Runtime`.
+building blocks. `Runtime::dispatch_adaptive()` is an explicit opt-in for one dispatch; automatic
+graph-to-device scheduling is not wired into task-graph replay.
 
 ## Ownership and execution
 
 `Runtime` owns its selected Vulkan logical devices and their independent queues, transfer services,
 memory managers, pipeline caches, timestamp rings, and device replicas. A `Kernel` is bound to its
 owning runtime and selected device. `Runtime::dispatch()` therefore submits to that device; it does
-not search for a new device on each call.
+not search for a new device on each call. `Runtime::dispatch_adaptive()` is a separate explicit
+alternative that accepts a caller-described workload and returns a builder bound to one compatible
+initialized device. It requires complete calibration records for every eligible device and otherwise
+retains the kernel's original device. It is deterministic and does not alter default dispatch behavior.
 
 Each `QueueContext` serializes host submission to one Vulkan queue and tracks completion values.
 Completion workers resolve events and deferred resource reclamation after GPU completion. Transfers
@@ -49,8 +55,9 @@ The graph layer does not allocate Vulkan resources, submit dispatches, or choose
 
 The scheduler cost evaluator returns a `ScoreBreakdown`; the candidate policy enforces feasibility,
 exploration, aging, and hysteresis. Throughput and transfer models expose measurements/estimates.
-These pieces are independently testable but are not connected to automatic `Runtime` placement.
-Consequently, current runtime trace events report completed GPU dispatch timing and queue/device
+The opt-in single-dispatch API uses calibration estimates, the EFT scorer, and deterministic candidate
+policy, but task-graph replay and online per-kernel performance feedback remain separate. Consequently,
+current runtime trace events report completed GPU dispatch timing and queue/device
 identity, not scheduler scores. This boundary is important: trace output must not imply a selection
 decision KORA did not make.
 
@@ -68,9 +75,9 @@ device or retry potentially invalid outputs; callers must rebuild from authorita
 
 | Area | Current contract | Detailed reference |
 | --- | --- | --- |
-| Runtime / Vulkan | Explicit device-bound dispatch, queues, events, buffer replicas | [Runtime API](api/runtime.md), [Vulkan backend](internals/vulkan-backend.md) |
+| Runtime / Vulkan | Explicit device-bound dispatch by default; opt-in calibration-gated selection among initialized devices | [Runtime API](api/runtime.md), [Vulkan backend](internals/vulkan-backend.md) |
 | Task graph | Metadata, hazard inference, deterministic plan and callback replay | [Task graph](task-graph.md) |
-| Scheduler | Standalone scoring, selection, partitioning, and measurement primitives; no automatic placement | [Scheduler](scheduler.md), [Multiple devices](multi-gpu.md) |
+| Scheduler | Opt-in deterministic single-dispatch selection; task-graph placement and online per-kernel feedback are not automatic | [Scheduler](scheduler.md), [Multiple devices](multi-gpu.md) |
 | Memory | Host shadows, per-device replicas, queried memory-type preferences, budget accounting | [Memory model](memory-model.md) |
 | Profiling | Optional completed GPU timestamps and Chrome Trace/Perfetto JSON | [Profiling](profiling.md) |
 | Recovery | Device-loss propagation and host-data-loss reporting; no in-place device recreation | [Recovery](recovery.md) |

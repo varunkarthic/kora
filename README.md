@@ -26,10 +26,12 @@ visible to the caller.
 - Uses Vulkan as a vendor-neutral GPU interface; it does not require CUDA, ROCm/HIP, oneAPI, or
   OpenCL.
 
-KORA is explicit rather than automatic: a loaded kernel is bound to a Runtime device. Task graphs
-replay callbacks, and scheduler/partitioning components are independent building blocks; they do not
-automatically place arbitrary graph work across CPUs and GPUs. See [what is implemented](docs/overview.md)
-and the [platform support matrix](docs/platform-support.md) before choosing it for a workload.
+KORA is explicit by default: a loaded kernel is bound to a Runtime device, and task graphs replay
+caller-owned callbacks. Applications may opt into deterministic, calibration-gated placement for an
+individual dispatch with `Runtime::dispatch_adaptive()`; it requires an explicit workload description
+and `DevicePolicy::AllEligible` to consider more than one device. It does not automatically schedule
+arbitrary graph work across CPUs and GPUs. See [what is implemented](docs/overview.md) and the
+[platform support matrix](docs/platform-support.md) before choosing it for a workload.
 
 ## Architecture at a glance
 
@@ -40,6 +42,8 @@ flowchart LR
   APP -. "owns graph order and placement" .-> GRAPH["TaskGraph / ExecutionPlan"]
   API --> CPU["CPU executor / explicit fallback"]
   API --> DISPATCH["Device-bound dispatch"]
+  API -->|"explicit opt-in"| ADAPT["Calibration-gated device selection"]
+  ADAPT --> DISPATCH
   DISPATCH --> PIPE["SPIR-V validation / pipeline"]
   DISPATCH --> QUEUE["Queue / Event completion"]
   QUEUE --> GPU["Vulkan compute device"]
