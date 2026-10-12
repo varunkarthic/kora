@@ -64,6 +64,13 @@ binary archive.
 An archive is published only after its platform build and tests pass. The workflow does not claim a
 platform package exists merely because another platform succeeded.
 
+Each package job has a three-hour runner ceiling, and each CTest case has a 15-minute timeout. A
+stalled test therefore fails with its test name and failure output; a runner or infrastructure hang
+is bounded by the job timeout. Either failure marks the package matrix unsuccessful, and the publish
+job explicitly requires the entire matrix to succeed, so partial platform results cannot produce a
+GitHub Release. A timeout does not remove the already-prepared version tag/changelog commit; fix the
+cause on a new branch and let a later successful main CI run publish the next patch version.
+
 ## Beta and Stable status
 
 Each release line has a milestone named `vMAJOR.MINOR`. Issues in that milestone are release gates.

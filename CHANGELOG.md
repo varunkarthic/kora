@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Bound release CTest cases and package jobs so a stalled platform cannot indefinitely hold the
+  release queue or publish an incomplete package set.
+
 ### Added
 - Embed a vendor-neutral compute calibration shader and record validated tiny-dispatch, streaming
   read/write, and integer ALU measurements when supported within the configured best-effort budget.
