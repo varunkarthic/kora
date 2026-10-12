@@ -154,6 +154,55 @@ class ChangelogSectionTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_release_page_contains_versioned_platform_downloads_and_source_summary(self):
+        changelog = """## [0.2.10] - 2026-10-12
+
+### Added
+- Add useful release notes.
+- Add another improvement.
+
+### Fixed
+- Repair a behavior.
+"""
+        body, stable = render_module.render("o/r", "0.2.10", changelog, [])
+        self.assertFalse(stable)
+        self.assertIn("# KORA v0.2.10", body)
+        self.assertIn("**Beta.**", body)
+        self.assertIn("[Source at this tag](https://github.com/o/r/tree/v0.2.10)", body)
+        self.assertIn("- Add useful release notes.", body)
+        self.assertIn("kora-0.2.10-linux-x86_64.tar.gz", body)
+        self.assertIn("kora-0.2.10-macos-arm64.tar.gz", body)
+        self.assertIn("kora-0.2.10-windows-x86_64.zip", body)
+        self.assertIn("CMAKE_PREFIX_PATH", body)
+        self.assertEqual(body.count("git clone --branch"), 1)
+
+    def test_release_page_groups_every_gate_and_escapes_markdown_titles(self):
+        issues = [
+            {"number": 71, "title": "Open | [gate]", "html_url": "https://example/71", "state": "open"},
+            {"number": 72, "title": "Closed gate", "html_url": "https://example/72", "state": "closed"},
+        ]
+        body, stable = render_module.render("o/r", "0.2.10", "- Change.", issues)
+        self.assertFalse(stable)
+        self.assertIn("### Remaining gates (1)", body)
+        self.assertIn("### Completed gates (1)", body)
+        self.assertIn(r"[Open \| \[gate\]](https://example/71)", body)
+        self.assertIn("[Closed gate](https://example/72)", body)
+        self.assertIn("🟡 Open", body)
+        self.assertIn("✅ Closed", body)
+        self.assertIn("1 of 2 release-validation gates closed", body)
+
+    def test_release_asset_urls_match_release_workflow_names(self):
+        assets = render_module.release_assets("o/r", "0.2.10")
+        self.assertEqual(
+            [asset[2] for asset in assets],
+            [
+                "kora-0.2.10-linux-x86_64.tar.gz",
+                "kora-0.2.10-macos-arm64.tar.gz",
+                "kora-0.2.10-windows-x86_64.zip",
+            ],
+        )
+        self.assertTrue(all("/releases/download/v0.2.10/" in asset[3] for asset in assets))
+
     def test_open_issue_makes_beta_without_assignee_column(self):
         issues = [
             {"number": 71, "title": "Docs", "html_url": "https://example/71", "state": "closed"},
