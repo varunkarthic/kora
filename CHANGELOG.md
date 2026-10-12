@@ -12,6 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add same-device raw Vulkan baselines for SAXPY, reduction, scan, tiled matrix multiplication, and stencil workloads, including host-submit and device-timestamp comparisons.
+
+### Changed
+- Keep live staging-ring ranges ordered by buffer offset, removing per-reservation scratch allocation and sorting; add dense and fragmented reserve-only occupancy benchmarks.
+- Exclude per-sample correctness scans from CPU and raw Vulkan benchmark timing while still validating every measured output.
+
 ## [0.2.18] - 2026-10-12
 
 ### Changed

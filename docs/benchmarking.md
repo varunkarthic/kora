@@ -53,6 +53,55 @@ the interval. Dense cases keep adjacent reservations live. Fragmented cases inte
 with cancelled ranges and leave a tail gap large enough for the measured request. This isolates
 reservation search cost; it is not a transfer-throughput or dispatch-latency measurement.
 
+### Matched raw Vulkan compute workloads
+
+GPU reports include same-device raw Vulkan comparisons for SAXPY, reduction, tiled scan, tiled
+matrix multiplication, and stencil at 4,096 elements (64×64 for matrix multiplication). KORA and raw
+Vulkan use the same checked-in SPIR-V fixtures, input values, dispatch dimensions, and output
+expectations. Pipelines, descriptors, buffers, and command resources are created before timing and
+reused. Each warm-up and measured output is checked for correctness, but the check is outside the
+timed interval. The host boundary covers operation setup that is part of the workload, queue submit,
+and completion wait; raw Vulkan also performs required mapped-memory flushes for the SAXPY input reset.
+GPU timestamp rows measure the dispatch interval on the same queue and selected physical device.
+
+The raw Vulkan buffers are persistent host-visible allocations, while KORA uses its normal buffer and
+dispatch path, so host timings are not identical residency/readback contracts. They are useful for
+separating KORA orchestration cost from device execution, but should not be described as a pure
+abstraction-overhead delta. Missing or intermittently unavailable device timestamp samples are
+reported as unavailable, never interpolated. For another device or OS, rerun the same command and
+retain the raw JSON report:
+
+```sh
+KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 \
+  > matched-compute.json
+python3 tools/kora-bench/render_comparison.py matched-compute.json --sizes 4096
+```
+
+One local Release sample on macOS arm64 / Apple M4, AppleClang 21.0.0, Vulkan 1.3.357 / MoltenVK,
+used 1,000 measured samples and 50 warm-ups. This is a same-device comparison, not a cross-platform
+claim; this machine provides no CUDA result. The complete raw report, including per-sample values and
+environment metadata, is
+[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-ec51125.json).
+The side-by-side tables in [the generated comparison page](benchmark-compute-results.md) are rendered
+directly from that report by [`render_comparison.py`](../tools/kora-bench/render_comparison.py).
+Regenerate them after a new run with:
+
+```sh
+python3 tools/kora-bench/render_comparison.py \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-ec51125.json \
+  --sizes 4096 --kora-revision ec511252bae75d689f64337783b91c7439283737 \
+  > docs/benchmark-compute-results.md
+```
+
+On this small workload, KORA device-time medians are within roughly 3.5% of the raw Vulkan values for
+the four workloads with complete KORA timestamps; matmul's KORA p95 is a substantial outlier and
+requires repeated-device investigation. Host completion medians are about 2.1–3.3× the raw path,
+indicating that KORA host-side orchestration, transfer/readback policy, and completion handling remain
+the more visible small-workload cost. These measurements identify follow-up profiling targets; they do
+not themselves demonstrate an end-to-end optimization or generalize to larger inputs. The existing
+vector-add size sweep remains the large-workload throughput comparison, while these compute cases
+currently provide a fixed medium-sized point.
+
 ### Staging-ring reservation scaling
 
 The reservation path previously rebuilt and sorted a temporary range list for each gap-search attempt.

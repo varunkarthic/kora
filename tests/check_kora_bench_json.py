@@ -97,6 +97,23 @@ if "--gpu" in arguments:
     expected_names |= {
         f"raw_vulkan_vector_add_{count}_dispatch_wait" for count in vector_sizes[1:]
     }
+    raw_compute_workloads = {
+        "saxpy_4096_upload",
+        "reduction_4096",
+        "tiled_scan_4096",
+        "tiled_matmul_64",
+        "stencil_4096",
+    }
+    expected_names |= {f"raw_vulkan_{name}_dispatch_wait" for name in raw_compute_workloads}
+    expected_names |= {
+        "gpu_saxpy_4096_gpu_execution",
+        "gpu_reduction_4096_gpu_execution",
+        "gpu_tiled_scan_4096_gpu_execution",
+        "gpu_tiled_matmul_64_gpu_execution",
+        "gpu_stencil_4096_gpu_execution",
+    } if gpu["kora_gpu_timestamps_available"] else set()
+    if gpu["raw_gpu_timestamps_available"]:
+        expected_names |= {f"raw_vulkan_{name}_gpu_execution" for name in raw_compute_workloads}
     expected_names |= {
         f"gpu_vector_add_{count}_gpu_execution" for count in gpu["kora_gpu_timestamp_sizes"]
     }
@@ -116,6 +133,10 @@ assert {item["name"] for item in report["results"]} == expected_names
 for result in report["results"]:
     assert result["unit"] == "ns"
     assert result["timing_domain"]
+    if "--gpu" in arguments and result["name"].startswith("raw_vulkan_") and not result["name"].endswith(
+        "_gpu_execution"
+    ):
+        assert result["timing_domain"] == "host_submit_completion"
     assert len(result["samples"]) == 3
     assert result["median"] <= result["p95"]
     if "_parallel_" in result["name"]:

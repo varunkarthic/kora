@@ -112,6 +112,77 @@ class BenchmarkChartTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not comparison tables", result.stderr)
 
+    def test_comparison_renders_matched_non_vector_host_and_device_domains(self):
+        data = report()
+        workloads = (
+            (
+                "SAXPY / 4,096",
+                "gpu_saxpy_4096_upload_dispatch_wait",
+                "raw_vulkan_saxpy_4096_upload_dispatch_wait",
+                "gpu_saxpy_4096_gpu_execution",
+                "raw_vulkan_saxpy_4096_upload_gpu_execution",
+            ),
+            (
+                "Reduction / 4,096",
+                "gpu_reduction_4096_dispatch_wait",
+                "raw_vulkan_reduction_4096_dispatch_wait",
+                "gpu_reduction_4096_gpu_execution",
+                "raw_vulkan_reduction_4096_gpu_execution",
+            ),
+            (
+                "Scan / 4,096",
+                "gpu_tiled_scan_4096_dispatch_wait",
+                "raw_vulkan_tiled_scan_4096_dispatch_wait",
+                "gpu_tiled_scan_4096_gpu_execution",
+                "raw_vulkan_tiled_scan_4096_gpu_execution",
+            ),
+            (
+                "Tiled matmul / 64×64",
+                "gpu_tiled_matmul_64_dispatch_wait",
+                "raw_vulkan_tiled_matmul_64_dispatch_wait",
+                "gpu_tiled_matmul_64_gpu_execution",
+                "raw_vulkan_tiled_matmul_64_gpu_execution",
+            ),
+            (
+                "Stencil / 4,096",
+                "gpu_stencil_4096_dispatch_wait",
+                "raw_vulkan_stencil_4096_dispatch_wait",
+                "gpu_stencil_4096_gpu_execution",
+                "raw_vulkan_stencil_4096_gpu_execution",
+            ),
+        )
+        for index, (label, kora_name, raw_name, kora_gpu_name, raw_gpu_name) in enumerate(workloads):
+            data["results"].append(result(kora_name, "host_submit_completion", 2000 + index, 2500 + index))
+            data["results"].append(result(raw_name, "host_submit_completion", 1000 + index, 1500 + index))
+            data["results"].append(
+                result(kora_gpu_name, "gpu_execution_timestamp", 100 + index, 150 + index)
+            )
+            if index != 0:  # Exercise explicit unavailable raw GPU timing.
+                data["results"].append(
+                    result(raw_gpu_name, "gpu_execution_timestamp", 50 + index, 75 + index)
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "matched.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            rendered = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tools/kora-bench/render_comparison.py"),
+                    str(path),
+                    "--sizes",
+                    "4096",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertIn("Matched same-device Vulkan compute workloads", rendered.stdout)
+        self.assertIn("SAXPY / 4,096", rendered.stdout)
+        self.assertIn("Tiled matmul / 64×64", rendered.stdout)
+        self.assertIn("unavailable", rendered.stdout)
+        self.assertIn("Raw Vulkan uses persistent host-visible buffers", rendered.stdout)
+
     def test_generation_is_deterministic_and_separates_domains(self):
         data = report()
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
