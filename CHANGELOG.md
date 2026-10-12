@@ -18,6 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 - Bump the internal calibration-record schema to 2 so older records are recalibrated.
+- Add an identity- and completeness-gated calibration cost adapter for scheduler callers; Runtime
+  placement remains explicit-device and is not changed by this adapter.
 
 ## [0.2.4] - 2026-10-12
 

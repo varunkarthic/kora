@@ -46,8 +46,11 @@ whose compute fields could only have been zero. Zero still marks an unsupported 
 Call `Runtime::calibrate()` to bypass the cache and repeat best-effort calibration for every selected
 device, including when startup calibration was disabled. The call uses the Runtime's configured
 per-device budget. It succeeds when the request was accepted; individual unsupported probes remain
-zero and cache I/O failures are non-fatal. Calibration records are currently diagnostic inputs only:
-they do not change device selection or automatic scheduling.
+zero and cache I/O failures are non-fatal. The internal scheduler calibration adapter accepts only
+complete, identity-matched records and exposes separate workload-sized cost components; incomplete
+records mean “use fallback,” not free work. These measurements still do not change Runtime device
+selection or automatic scheduling. See [scheduler cost models](scheduler.md);
+Runtime placement integration is tracked by #185.
 
 ## Invariants
 
