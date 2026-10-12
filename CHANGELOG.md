@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Redesign the docs landing and release guide around user tasks, installation, verification, and release maturity; improve generated benchmark SVG hierarchy while preserving timing-domain separation.
+
 ## [0.2.12] - 2026-10-12
 
 ### Fixed

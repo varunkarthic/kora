@@ -231,10 +231,10 @@ recorded per selected device/driver rather than assumed from the OS or GPU model
 ### Visual comparison and methodology
 
 The following plots are generated from the same retained JSON file as the table below; they are not
-hand-transcribed. The vertical axis is logarithmic so small and large workloads remain visible in the
-same panel. A dot is the median and a whisker extends to the nearest-rank p95. The raw samples remain
-in the linked JSON report. A missing KORA timestamp is a gap because that timer result is unavailable
-for the size; it is not zero and is not estimated from host time.
+hand-transcribed. The vertical latency axis is logarithmic, with units chosen for the range shown in
+each panel. Lines and dots show the median (p50); whiskers extend to the nearest-rank p95. The raw
+samples remain in the linked JSON report. A missing KORA timestamp is a gap because that timer result
+is unavailable for the size; it is not zero, interpolated, or estimated from host time.
 
 CPU arithmetic is isolated from GPU API latency. Host submit/completion is separate from GPU device
 timestamps, so the plots do not merge incompatible timing domains. The host chart deliberately labels

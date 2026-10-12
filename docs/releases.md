@@ -1,85 +1,82 @@
 # Releases and packages
 
-KORA releases use `MAJOR.MINOR.PATCH`. The repository `VERSION` file selects the release line and
-automation increments the patch for every successfully validated push to `main`.
+KORA is published as a C++20 development package and a source release. This guide helps you choose a
+release, install it, verify your toolchain, and understand what a release status does—and does not—
+guarantee.
 
-`VERSION` is `0.2`, so successful main-branch releases start at `v0.2.0` and increment the patch
-number for every validated commit (`v0.2.1`, `v0.2.2`, and so on). The workflow looks up the matching `v0.2`
-milestone. An empty release milestone is never Stable; any open issue keeps the release Beta.
-Milestone and issue lists are read across every GitHub API page. The release renderer fails closed if
-pagination is malformed, incomplete, repeated, or unavailable, so it never treats a partial issue list
-as proof of Stable status.
+<div align="center">
 
-## Choosing a release
+| Channel | Intended use | Gate meaning |
+| --- | --- | --- |
+| **Stable** | Start application integration with a qualified KORA release | Every tracked validation issue in that release line is closed |
+| **Beta** | Evaluate the current release line and its remaining work | One or more validation issues remain open, or the milestone has no gates |
 
-Use Stable releases when all published validation gates are closed. Use Beta releases only when you
-can evaluate the remaining open gates against your workload. Neither channel replaces application-
-specific benchmarking, driver qualification, or security review.
+</div>
 
-## Reading the GitHub release page
+:::{important}
+“Stable” means the project's release-validation checklist is closed. It is not a warranty of
+performance or compatibility with every GPU, driver, workload, or deployment. Qualify the exact
+hardware, driver, and application workload you intend to ship.
+:::
 
-Generated release notes show the version and Beta/Stable channel first, followed by a short highlights
-list derived from that tag's changelog. The platform table links to the Linux x86-64, macOS ARM64, and
-Windows x86-64 archives produced by the required release matrix. The release is published only after
-all three package jobs succeed, so these links refer to assets uploaded with that tag. The page also
-links to the exact source tag and its changelog.
+## Select and download a release
 
-Release-validation issues are split into remaining and completed gates so the release maturity is
-visible without losing the full issue list. An empty milestone remains Beta: lack of tracked gates is
-not treated as proof that a release is Stable. Issue changes regenerate the latest release body but
-do not create a new version or change the stability rule.
+Open the [KORA releases page](https://github.com/varunkarthic/kora/releases) and select the newest
+version appropriate for your evaluation. Prefer Stable for a production qualification baseline.
+Choose Beta when you specifically need newer work and can test the outstanding gates against your
+environment. Each generated GitHub release page includes its channel, change summary, validation
+status, source tag, changelog, and available platform archives.
 
-For a package install, download and extract the archive for your platform, then point
-`CMAKE_PREFIX_PATH` at the extracted installation prefix before configuring a consumer project:
+| Platform | Package asset |
+| --- | --- |
+| Linux x86-64 | `kora-<version>-linux-x86_64.tar.gz` |
+| macOS ARM64 | `kora-<version>-macos-arm64.tar.gz` |
+| Windows x86-64 | `kora-<version>-windows-x86_64.zip` |
 
-```cmake
-find_package(kora CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE kora::kora)
+The release page is authoritative for the exact filenames and available assets. Download the archive
+for your target platform and extract it to a directory your project can read. The package contains
+the KORA static library, public headers, generated version header, and CMake package configuration.
+It does not bundle a Vulkan driver/loader, MoltenVK, Python, or the platform C/C++ runtime.
+
+## Install the CMake package
+
+Requirements are a C++20-compatible compiler and a CMake version supported by your consumer project.
+GPU execution additionally requires a Vulkan loader and a compute-capable Vulkan implementation; a
+CPU-only build and package inspection do not require a GPU.
+
+Configure your application with the extracted package prefix. Substitute the actual extraction path
+for `/path/to/kora` (and use a Windows path in PowerShell or a CMake preset on Windows):
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/kora
+cmake --build build --parallel
 ```
 
-For a source build, use the exact tag shown on the page and follow the **Source build** commands below.
+The consumer's `CMakeLists.txt` links the exported target:
 
-## Package contents
+```cmake
+cmake_minimum_required(VERSION 3.21)
+project(my_app LANGUAGES CXX)
 
-Platform archives contain an installed development prefix: static library, public headers, generated
-version header, and CMake package files. They do not bundle a Vulkan driver, MoltenVK, Python runtime,
-or system C/C++ runtime.
+find_package(kora CONFIG REQUIRED)
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE kora::kora)
+```
 
-## Release sign-off checklist
+**Expected result:** configuration locates `koraConfig.cmake`, compilation resolves the public KORA
+headers, and the linker finds `kora::kora` from the extracted prefix. If discovery fails, confirm
+that `CMAKE_PREFIX_PATH` points to the package prefix—not the archive file or its `include` folder.
 
-Use the exact release commit when recording a sign-off. A check is complete only with the corresponding
-evidence; do not infer a passing platform or artifact from another job's success.
+To verify runtime Vulkan availability on the target system, run the matching packaged `kora-info`
+tool if included in the release, or build the tools from source and run `kora-info`. Device
+enumeration verifies that the Vulkan loader can report devices; it does not prove that a particular
+kernel or workload executes correctly. Use the integration tests and application-level checks for
+that stronger evidence.
 
-1. [ ] Configure, build, and run the full CTest suite on the release commit. Record skipped tests and
-   the reason for each skip.
-2. [ ] On a host exposing the reference Vulkan implementations, run the full suite against each
-   available target:
+## Build from a source tag
 
-   ```sh
-   python3 tools/ci/run_device_matrix.py --build-dir build/debug --require-all
-   ```
-
-   The runner discovers KosmicKrisp, llvmpipe, and MoltenVK using `kora-info`'s reported driver and
-   portability metadata, then sets `KORA_DEVICE` to each reported enumeration index before invoking
-   CTest. It never uses a vendor ID. Without `--require-all`, unavailable reference devices are
-   reported as skips; a release qualification host should use `--require-all` so missing hardware
-   cannot be mistaken for a passing run.
-3. [ ] Confirm the hosted main-branch CI matrix passed on Linux/GCC/lavapipe, macOS/AppleClang, and
-   Windows/MSVC for the exact commit. Confirm the strict documentation job also passed.
-4. [ ] Confirm the release workflow completed its Linux x86-64, macOS ARM64, and Windows x86-64
-   package jobs and published the expected Beta/Stable channel for the milestone state.
-5. [ ] Download every published archive, record SHA-256 digests, list its contents, and inspect the
-   library/tool binary format and architecture. Package-job success alone does not prove the
-   published archive has the intended ABI or contents.
-6. [ ] Reconcile the milestone's release-validation issues with the release notes. A release remains
-   Beta while any required gate is open; do not hand-edit the channel to Stable.
-7. [ ] Check changelog/version stamping and release links, then retain workflow URLs, commit SHA,
-   device-matrix results, archive digests, and any expected skips in the release record.
-
-For a milestone sign-off, retain the completed checklist with the release record; the source tree
-does not claim that a checklist template is evidence for a run that has not taken place.
-
-## Source build
+Use the exact tag linked from the release page. The example below uses `v0.2.0`; replace it with the
+release you selected:
 
 ```sh
 git clone --branch v0.2.0 https://github.com/varunkarthic/kora.git
@@ -89,6 +86,64 @@ cmake --build --preset release --parallel
 ctest --preset release --output-on-failure
 ```
 
-The example targets the first v0.2.x patch. For another patch, substitute its tag and the final
-numeric component in `KORA_VERSION_PATCH`. See [CI and releases](ci-cd.md) for automation and
-failure recovery.
+For tag `v0.2.N`, set `KORA_VERSION_PATCH=N`. A successful CTest run reports the tests that passed
+and clearly identifies capability-dependent skips. For a complete install walkthrough and
+downstream package check, see [Getting started](getting-started.md).
+
+## How versions and status are produced
+
+Versions follow `MAJOR.MINOR.PATCH`. The repository's `VERSION` file selects the major/minor release
+line; validated pushes to `main` increment the patch for that line. For example, `VERSION` set to
+`0.2` produces successive `v0.2.x` releases as the automation succeeds. The patch number is
+generated by the release workflow, not chosen manually in a normal feature change.
+
+```{mermaid}
+flowchart LR
+    A[Validated change on main] --> B[Build platform packages]
+    B -->|All required jobs pass| C[Tag and publish version]
+    B -->|A required job fails| D[No complete release]
+    C --> E{Release-line validation issues}
+    E -->|All closed| F[Stable]
+    E -->|Any open or no gates| G[Beta]
+    H[Issue status changes] --> I[Refresh latest release page]
+    I -. does not create a version .-> E
+```
+
+Milestones group work for a release line. Release issue and milestone queries are paginated; if the
+release renderer cannot establish a complete result, it fails closed rather than treating a partial
+list as evidence of Stable status. Closing an issue can refresh the latest release notes and channel
+but does not publish another version.
+
+## Read the generated GitHub release page
+
+Each generated page is organized for both consumers and maintainers:
+
+1. **Version and channel** identify the tag and Beta/Stable state.
+2. **Downloads** link only to the platform assets that were actually produced for that tag.
+3. **Highlights** summarize the tagged changelog; the complete change history remains linked below.
+4. **Validation gates** list milestone issues, grouped by remaining and completed work.
+5. **Source and changelog links** point to the exact tag, not a moving branch.
+
+An empty milestone remains Beta: no tracked issue is not proof that a release has passed validation.
+Issue titles and states are sourced from GitHub and regenerated deterministically, so the full list
+can be longer than the short overview on this page.
+
+## Maintainer release qualification
+
+Use the exact release commit and retain the evidence for each target. A successful package workflow
+does not by itself verify archive contents or binary architecture.
+
+1. Configure, build, and run the full CTest suite on the release commit; record capability-dependent
+   skips and their reasons.
+2. On a host exposing the reference Vulkan implementations, run
+   `python3 tools/ci/run_device_matrix.py --build-dir build/debug --require-all`. This checks each
+   discovered implementation and fails when a required reference device is missing.
+3. Confirm hosted Linux, macOS, Windows, and strict documentation jobs for the exact commit.
+4. Confirm all required package jobs completed and the published channel matches the milestone.
+5. Download every asset; record SHA-256, list contents, and inspect binary format/architecture.
+6. Reconcile the release-validation milestone, generated release notes, and changelog entry.
+7. Retain commit/tag, workflow links, device results, hashes, and expected skips in the release
+   record. The checklist is a template, not evidence that a run occurred.
+
+For automation details and failure recovery, see [CI and releases](ci-cd.md). For performance claims,
+read the [benchmarking methodology](benchmarking.md); release status is not a benchmark result.
