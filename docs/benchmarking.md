@@ -259,13 +259,22 @@ kernels, KORA now checks the fully serialized pipeline key first and uses the al
 pipeline when the key matches. Cache misses still perform full reflection and validation; `LocalSizeId`
 specializations retain the full path because their resolved workgroup size participates in the key.
 
-| Measurement | Before (`8dd2978`) | After (`67bec0f`) | Change |
+| Measurement | Before (`8dd2978`) | After, run 1 (`67bec0f`) | After, run 2 (`67bec0f`) |
 | --- | ---: | ---: | ---: |
-| 4K KORA deferred-readback host completion, median | 676.500 µs | 523.958 µs | 22.5% lower |
-| 4K KORA deferred-readback host completion, p95 | 819.958 µs | 674.041 µs | 17.8% lower |
-| 4K raw Vulkan host completion, median | 346.875 µs | 406.708 µs | 17.3% higher in later run |
-| KORA/raw host median ratio | 1.95× | 1.29× | 33.9% lower |
-| Pipeline lookup phase, median (diagnostic mode) | 181.667 µs | 6.709 µs | 96.3% lower |
+| 4K KORA deferred-readback host completion, median | 676.500 µs | 523.958 µs | 522.208 µs |
+| 4K KORA deferred-readback host completion, p95 | 819.958 µs | 674.041 µs | 597.500 µs |
+| 4K raw Vulkan host completion, median | 346.875 µs | 406.708 µs | 465.542 µs |
+| KORA/raw 4K host median ratio | 1.95× | 1.29× | 1.12× |
+| Pipeline lookup phase, median (diagnostic mode) | 181.667 µs | 6.709 µs | — |
+
+The larger-size medians are included to make possible throughput regressions visible:
+
+| Elements | Path | Before (`8dd2978`) | After, run 1 | After, run 2 |
+| ---: | --- | ---: | ---: | ---: |
+| 1,048,576 | KORA deferred host completion | 1.383 ms | 1.470 ms | 1.274 ms |
+| 1,048,576 | Raw Vulkan host completion | 0.958 ms | 1.191 ms | 0.582 ms |
+| 4,194,240 | KORA deferred host completion | 2.876 ms | 2.236 ms | 2.222 ms |
+| 4,194,240 | Raw Vulkan host completion | 1.493 ms | 1.714 ms | 2.002 ms |
 
 The ordinary runs used `KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000
 --warmup 50` on macOS arm64 / Apple M4, AppleClang 21.0.0 Release, Vulkan 1.3.357 / MoltenVK,
@@ -274,12 +283,15 @@ with KORA and raw Vulkan pinned to the same enumerated physical device. The pipe
 normal performance result. Its pre-fast-path profile was collected on the profiling branch worktree
 before the optimization commit, while the post-fast-path phase sample is on `67bec0f`.
 
-Both ordinary 1,000-sample reports preserve every sample and the environment fields:
+The ordinary 1,000-sample reports preserve every sample and the environment fields:
 [before `8dd2978`](../benchmarks/results/dispatch-overhead-before-8dd2978-macos-arm64-m4-moltenvk-1000x50.json)
-and [after `67bec0f`](../benchmarks/results/dispatch-overhead-after-67bec0f-macos-arm64-m4-moltenvk-1000x50.json).
-The two runs were sequential and raw Vulkan varied by about 17%; treat the ratio improvement as
-promising local evidence, not a controlled cross-device result or a CUDA parity claim. Larger 1M and
-4.19M vector-add workloads are retained in each raw report to make throughput regressions inspectable.
+and two reruns after `67bec0f` ([run 1](../benchmarks/results/dispatch-overhead-after-67bec0f-macos-arm64-m4-moltenvk-1000x50.json),
+[run 2](../benchmarks/results/dispatch-overhead-after-67bec0f-repeat-macos-arm64-m4-moltenvk-1000x50.json)).
+The KORA 4K/4.19M deferred medians were stable across the two post-change runs, but raw Vulkan and
+1M results varied materially with the sequential host/driver state. Treat the ratios as local,
+promising evidence rather than a controlled cross-device result or CUDA parity claim. Full raw samples
+for 1M and 4.19M vector-add are retained in each report so those variations and possible regressions
+remain inspectable.
 
 ### Visual comparison and methodology
 
