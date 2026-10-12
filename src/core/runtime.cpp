@@ -430,6 +430,9 @@ struct Runtime::Impl {
 #endif
             vk::QueueContext::CoalescingOptions coalescing;
             coalescing.enabled = true;
+            // Coalesce work already queued together, but don't delay an isolated dispatch in
+            // anticipation of a future peer submission.
+            coalescing.maximum_wait_ns = 0;
             auto queue_result =
                 vk::QueueContext::create(device.api(), device.handle(), device.compute_queue(),
                                          force_legacy_sync, coalescing, fault_state);

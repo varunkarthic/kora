@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 - Expand `kora-bench` CPU compute coverage with single-thread and four-worker vector-add, SAXPY, reduction, stencil, and tiled matrix multiplication cases; validate full outputs outside timed intervals and record CPU model, build flags, source revision, and worker count.
 - Split diagnostic GPU completion profiling into completion-worker delay, Vulkan wait, timestamp collection, and Runtime callback phases.
+- Submit isolated GPU dispatches without the coalescing collection delay while retaining batching for compatible submissions already queued together.
 
 ## [0.2.15] - 2026-10-12
 

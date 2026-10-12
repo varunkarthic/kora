@@ -121,12 +121,11 @@ after submission to see the effective target. Adaptive dispatch cannot be combin
 verification. `LocalSizeId` autotuned kernels stay on their original device. This API is deterministic
 and never changes the behavior of `dispatch()`.
 
-Compute submissions with the same cached kernel pipeline may be coalesced by the Runtime for up to
-100 microseconds (maximum batch of eight) when their buffer accesses are independent. Each dispatch
-retains its own `Event`; shared writes, read/write conflicts, or differing external semaphore waits
-are submitted separately. Use
-`.priority(DispatchPriority::High)` or `.priority(DispatchPriority::RealtimeHint)` to bypass the
-coalescing wait. Priorities are hints, not hard real-time guarantees.
+Compute submissions with the same cached kernel pipeline may be coalesced into batches of up to eight
+when compatible records are already queued together; the Runtime does not wait to collect additional
+dispatches. Each dispatch retains its own `Event`; shared writes, read/write conflicts, or differing
+external semaphore waits are submitted separately. High and real-time-hint priorities are not merged.
+Priorities are hints, not hard real-time guarantees.
 
 This first dispatch version supports storage-buffer descriptors only. Other descriptor kinds return
 `UnsupportedFeature`. Invalid dimensions, binding counts/access modes, push-constant sizes, and device
