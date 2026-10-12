@@ -251,6 +251,36 @@ An alternate M4/KosmicKrisp report is [also retained](../benchmarks/results/maco
 that Vulkan path reports timestamp measurements unavailable, illustrating why availability is
 recorded per selected device/driver rather than assumed from the OS or GPU model.
 
+### Dispatch overhead case study
+
+The phase profile showed the dominant steady-state host cost was not descriptor setup, transfer, or
+command recording, but repeated SPIR-V reflection on an exact pipeline-cache hit. For static-local-size
+kernels, KORA now checks the fully serialized pipeline key first and uses the already validated
+pipeline when the key matches. Cache misses still perform full reflection and validation; `LocalSizeId`
+specializations retain the full path because their resolved workgroup size participates in the key.
+
+| Measurement | Before (`8dd2978`) | After (`67bec0f`) | Change |
+| --- | ---: | ---: | ---: |
+| 4K KORA deferred-readback host completion, median | 676.500 µs | 523.958 µs | 22.5% lower |
+| 4K KORA deferred-readback host completion, p95 | 819.958 µs | 674.041 µs | 17.8% lower |
+| 4K raw Vulkan host completion, median | 346.875 µs | 406.708 µs | 17.3% higher in later run |
+| KORA/raw host median ratio | 1.95× | 1.29× | 33.9% lower |
+| Pipeline lookup phase, median (diagnostic mode) | 181.667 µs | 6.709 µs | 96.3% lower |
+
+The ordinary runs used `KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000
+--warmup 50` on macOS arm64 / Apple M4, AppleClang 21.0.0 Release, Vulkan 1.3.357 / MoltenVK,
+with KORA and raw Vulkan pinned to the same enumerated physical device. The pipeline phase uses
+`--profile-phases --iterations 200 --warmup 20`; it enables telemetry and must not be compared as a
+normal performance result. Its pre-fast-path profile was collected on the profiling branch worktree
+before the optimization commit, while the post-fast-path phase sample is on `67bec0f`.
+
+Both ordinary 1,000-sample reports preserve every sample and the environment fields:
+[before `8dd2978`](../benchmarks/results/dispatch-overhead-before-8dd2978-macos-arm64-m4-moltenvk-1000x50.json)
+and [after `67bec0f`](../benchmarks/results/dispatch-overhead-after-67bec0f-macos-arm64-m4-moltenvk-1000x50.json).
+The two runs were sequential and raw Vulkan varied by about 17%; treat the ratio improvement as
+promising local evidence, not a controlled cross-device result or a CUDA parity claim. Larger 1M and
+4.19M vector-add workloads are retained in each raw report to make throughput regressions inspectable.
+
 ### Visual comparison and methodology
 
 The following plots are generated from the same retained JSON file as the table below; they are not
