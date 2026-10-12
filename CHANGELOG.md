@@ -12,15 +12,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-## [0.2.3] - 2026-10-12
-
 ### Fixed
-- Paginate release milestone and issue queries, rejecting incomplete or malformed API results before calculating Beta/Stable status.
 - Reject stale issue branches in PR CI and refuse releases with an empty `Unreleased` changelog section.
 - Align the v0.2.2 changelog section with the benchmark device-matching change included in that tag.
 
 ### Changed
 - Document branch synchronization and release changelog requirements.
+
+## [0.2.3] - 2026-10-12
+
+### Fixed
+- Paginate release milestone and issue queries, rejecting incomplete or malformed API results before calculating Beta/Stable status.
 
 ## [0.2.2] - 2026-10-12
 
