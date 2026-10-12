@@ -42,7 +42,9 @@ def is_approved_correction(version: str, base_section: str, head_section: str) -
     correction = APPROVED_CORRECTIONS.get(version)
     if correction is None or base_section.count(correction) != 1:
         return False
-    return base_section.replace(correction, "", 1).strip() == head_section.strip()
+    expected = base_section.replace(correction, "", 1)
+    normalize_blank_lines = lambda section: re.sub(r"\n{3,}", "\n\n", section).strip()
+    return normalize_blank_lines(expected) == normalize_blank_lines(head_section)
 
 
 def validate(base_text: str, head_text: str, allowed_versions: set[str] | None = None) -> None:
@@ -100,7 +102,11 @@ def main() -> int:
     except (RuntimeError, ValueError) as error:
         print(error)
         return 1
-    print("Pull request leaves all published changelog sections unchanged.")
+    if args.allow_version:
+        versions = ", ".join(sorted(args.allow_version))
+        print(f"Published changelog sections validated; explicit correction(s) allowed for: {versions}.")
+    else:
+        print("Pull request leaves all published changelog sections unchanged.")
     return 0
 
 
