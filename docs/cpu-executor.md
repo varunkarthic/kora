@@ -26,6 +26,9 @@ accepted from 1 through 1024. The executor does not set CPU affinity or silently
 thrown standard and non-standard exceptions become `InternalInvariantViolation` statuses. `shutdown()`
 stops accepting external submissions, drains queued work (including recursive submissions made by
 already-running tasks), and joins every worker. The destructor performs the same graceful drain.
+The worker wait predicate and every transition of queued/outstanding work are synchronized with the
+executor lifecycle mutex. This makes the final completion wake reliable: shutdown cannot leave idle
+workers asleep after outstanding work reaches zero.
 
 Calling `executor.wait(event)` from one of this executor's worker tasks cooperatively runs queued work
 while waiting. This prevents the classic fixed-pool deadlock where all workers block on child tasks

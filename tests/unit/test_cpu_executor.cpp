@@ -44,6 +44,29 @@ TEST(CpuExecutor, DrainsOneMillionTasksAcrossStealingWorkers) {
     EXPECT_EQ(executor->submit([] { return kora::ok_status(); }).error().code, kora::ErrorCode::Cancelled);
 }
 
+TEST(CpuExecutor, RepeatedGracefulShutdownDrainsShortTaskBursts) {
+    constexpr std::size_t iterations = 128;
+    constexpr std::size_t task_count = 128;
+    for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+        kora::CpuExecutorOptions options;
+        options.worker_count = 4;
+        auto created = kora::CpuExecutor::create(options);
+        ASSERT_TRUE(created);
+        auto executor = std::move(created).value();
+
+        std::atomic<std::size_t> completed{0};
+        for (std::size_t index = 0; index < task_count; ++index) {
+            auto task = executor->submit([&completed] {
+                completed.fetch_add(1, std::memory_order_relaxed);
+                return kora::ok_status();
+            });
+            ASSERT_TRUE(task) << "iteration=" << iteration << ", submission=" << index;
+        }
+        ASSERT_TRUE(executor->shutdown()) << "iteration=" << iteration;
+        EXPECT_EQ(completed.load(std::memory_order_relaxed), task_count) << "iteration=" << iteration;
+    }
+}
+
 TEST(CpuExecutor, HigherPriorityLaneRunsBeforeQueuedLowerPriorityWork) {
     auto created = kora::CpuExecutor::create(one_worker());
     ASSERT_TRUE(created);

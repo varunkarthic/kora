@@ -206,7 +206,13 @@ void CpuExecutor::execute_task(WorkItem&& item) noexcept {
         status = exception_error();
     }
     item.promise->complete(std::move(status));
-    state_->outstanding.fetch_sub(1, std::memory_order_acq_rel);
+    {
+        // worker_loop waits on outstanding while holding lifecycle_mutex. Update the predicate
+        // under that same mutex so the final completion cannot notify between predicate-check
+        // and the condition-variable wait, leaving a worker asleep during graceful shutdown.
+        std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
+        state_->outstanding.fetch_sub(1, std::memory_order_acq_rel);
+    }
     state_->changed.notify_all();
 }
 
@@ -257,13 +263,16 @@ Status CpuExecutor::shutdown(ShutdownMode mode) {
     if (cancel_pending) {
         for (auto& worker : state_->workers) {
             for (auto& lane : worker->lanes) {
-                std::deque<WorkItem> cancelled = [&]() {
+                std::deque<WorkItem> cancelled;
+                {
+                    // Keep the shutdown wait predicate synchronized with cancellation too.
+                    std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
                     std::lock_guard worker_lock(worker->mutex);
-                    return std::move(lane);
-                }();
-                const auto count = cancelled.size();
-                state_->queued.fetch_sub(count, std::memory_order_acq_rel);
-                state_->outstanding.fetch_sub(count, std::memory_order_acq_rel);
+                    cancelled = std::move(lane);
+                    const auto count = cancelled.size();
+                    state_->queued.fetch_sub(count, std::memory_order_acq_rel);
+                    state_->outstanding.fetch_sub(count, std::memory_order_acq_rel);
+                }
                 while (!cancelled.empty()) {
                     auto item = std::move(cancelled.front());
                     cancelled.pop_front();
