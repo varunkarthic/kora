@@ -17,7 +17,7 @@ build/release/tools/kora-bench --iterations 1000 --warmup 50 > kora-bench.json
 checks the installed CPU smoke report; when shader tooling is available, the optional GPU fixtures are
 installed under `share/kora/benchmarks` for `--gpu`.
 
-Expected result: the command exits successfully and writes valid JSON with schema version `1`. The
+Expected result: the command exits successfully and writes valid JSON with schema version `2`. The
 report is intentionally written to stdout; redirect it to a new or intentionally replaceable path.
 `--smoke` runs three measured samples and one warm-up per workload, and is used by CTest without
 requiring a Vulkan device:
