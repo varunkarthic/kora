@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +94,23 @@ class BenchmarkChartTests(unittest.TestCase):
         bad["schema_version"] = 2
         with self.assertRaisesRegex(ValueError, "schema version 3"):
             charts.report_series(bad, "host", (4096,))
+
+    def test_diagnostic_phase_reports_are_not_rendered_as_performance_comparisons(self):
+        diagnostic = report()
+        diagnostic["diagnostic_profile"] = True
+        with self.assertRaisesRegex(ValueError, "include telemetry overhead"):
+            charts.report_series(diagnostic, "host", (4096,))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            path.write_text(json.dumps(diagnostic), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "tools/kora-bench/render_comparison.py"), str(path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not comparison tables", result.stderr)
 
     def test_generation_is_deterministic_and_separates_domains(self):
         data = report()

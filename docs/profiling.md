@@ -89,10 +89,30 @@ if (stats) {
 }
 ```
 
-`RuntimeProfilingStats` reports cumulative collected and dropped counts, the latest submission ID and
-duration, plus calibrated host time and deviation when the relevant domains are supported. Calling
-the API may collect ready samples but does not wait for pending submissions. A device not owned by
-the runtime returns `InvalidArgument`.
+`RuntimeProfilingStats` reports cumulative collected and dropped counts, the latest GPU-timestamped
+submission ID and duration, calibrated host time and deviation when supported, and the separate
+`last_profile_submission_id` plus host-side phase durations for the latest completed profile dispatch.
+The phase fields separate per-dispatch metadata, argument, and limit validation; binding preflight;
+pipeline lookup; Runtime submit preparation; buffer-residency and transfer checks; submission assembly; queue enqueue; command-buffer
+acquisition; descriptor allocation/update; command encoding; and queue completion. They are diagnostic measurements
+collected only when telemetry is set to `Profile` or `Trace`; they are not zero-overhead timers and
+must not be mixed with ordinary Release benchmark runs. Runtime submit preparation includes residency
+checks, transfers, and host-side submission assembly. It excludes synchronous upload wait time, which
+has its own transfer observation. SPIR-V parsing/reflection in `load_kernel()` is outside the
+steady-state dispatch and is not included. `submission_preparation` is an inclusive host phase; the
+preflight, pipeline, residency, and assembly fields help explain it and should not be added to it.
+On an exact pipeline-cache hit for a kernel with a static local size, the Runtime can use the
+previously validated pipeline directly. A cache miss still runs SPIR-V reflection and full validation;
+`LocalSizeId` specialization also retains full validation because specialization affects the resolved
+pipeline key.
+Queue completion is measured from the pre-enqueue point until the completion callback (so it includes
+queue enqueue) and excludes default output readback performed after GPU completion. Builder
+construction can be timed by the caller around `Runtime::dispatch()` and builder configuration.
+Calling the API may collect ready samples but does not wait for pending
+submissions. When phase profiling is enabled but the device cannot provide GPU timestamps, the method
+still returns host phases with zero GPU sample counts and duration. Without phase profiling and without
+a timestamp ring, it returns `UnsupportedFeature`. A device not owned by the runtime returns
+`InvalidArgument`.
 
 ## Invariants and limitations
 

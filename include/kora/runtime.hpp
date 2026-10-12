@@ -158,6 +158,19 @@ struct RuntimeProfilingStats {
     std::uint64_t last_duration_nanoseconds = 0;
     std::uint64_t last_host_timestamp_nanoseconds = 0;
     std::uint64_t last_calibration_deviation_nanoseconds = 0;
+    /// Host-side phase durations for the latest completed profile sample; zero if unavailable.
+    std::uint64_t last_profile_submission_id = 0;
+    std::uint64_t last_dispatch_validation_nanoseconds = 0;
+    std::uint64_t last_binding_preflight_nanoseconds = 0;
+    std::uint64_t last_pipeline_lookup_nanoseconds = 0;
+    std::uint64_t last_buffer_residency_nanoseconds = 0;
+    std::uint64_t last_submission_assembly_nanoseconds = 0;
+    std::uint64_t last_host_submission_nanoseconds = 0;
+    std::uint64_t last_queue_enqueue_nanoseconds = 0;
+    std::uint64_t last_command_buffer_acquire_nanoseconds = 0;
+    std::uint64_t last_descriptor_setup_nanoseconds = 0;
+    std::uint64_t last_command_recording_nanoseconds = 0;
+    std::uint64_t last_queue_completion_nanoseconds = 0;
 };
 
 /// Best-effort, optional Vulkan device-fault details captured after device loss. Address values are

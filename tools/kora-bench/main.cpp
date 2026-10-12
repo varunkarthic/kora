@@ -41,6 +41,7 @@ struct Options {
     std::size_t iterations = 100;
     std::size_t warmup = 10;
     bool gpu = false;
+    bool profile_phases = false;
 };
 
 struct Result {
@@ -107,6 +108,7 @@ std::string compiler_name() {
 }
 
 std::string_view measurement_domain(std::string_view name) {
+    if (name.starts_with("profile_kora_")) return "runtime_dispatch_phase";
     if (name.ends_with("_gpu_execution")) return "gpu_execution_timestamp";
     if (name.starts_with("cpu_")) return "host_cpu_execution";
     if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_vector_add_"))
@@ -187,8 +189,10 @@ bool parse_options(int argc, char** argv, Options& options) {
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if (argument == "--help" || argument == "-h") {
-            std::cout << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke] [--gpu]\n"
-                         "Runs CPU microbenchmarks; --gpu adds Vulkan tiny-dispatch and vector-add cases.\n";
+            std::cout
+                << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke] [--gpu] [--profile-phases]\n"
+                   "Runs CPU microbenchmarks; --gpu adds Vulkan workloads and --profile-phases\n"
+                   "adds telemetry-instrumented dispatch phase diagnostics.\n";
             return false;
         }
         if (argument == "--smoke") {
@@ -198,6 +202,11 @@ bool parse_options(int argc, char** argv, Options& options) {
         }
         if (argument == "--gpu") {
             options.gpu = true;
+            continue;
+        }
+        if (argument == "--profile-phases") {
+            options.gpu = true;
+            options.profile_phases = true;
             continue;
         }
         if (argument == "--iterations" || argument == "--warmup") {
@@ -837,7 +846,8 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
 bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path,
                         GpuDeviceReport& device_report) {
     kora::RuntimeOptions runtime_options;
-    runtime_options.telemetry = kora::TelemetryLevel::Off;
+    runtime_options.telemetry =
+        options.profile_phases ? kora::TelemetryLevel::Profile : kora::TelemetryLevel::Off;
     runtime_options.enable_startup_calibration = false;
     runtime_options.disable_autotune = true;
     runtime_options.debug_safety = false;
@@ -930,6 +940,111 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         if (gpu_execution) {
             device_report.kora_gpu_timestamp_sizes.push_back(count);
             results.push_back(std::move(*gpu_execution));
+        }
+    }
+
+    if (options.profile_phases) {
+        struct PhaseSample {
+            std::uint64_t builder_setup = 0;
+            std::uint64_t submit_call = 0;
+            std::uint64_t event_wait = 0;
+            kora::RuntimeProfilingStats runtime;
+        };
+        const auto profile_dispatch = [&]() -> std::optional<PhaseSample> {
+            PhaseSample sample;
+            auto before = runtime.profiling_stats(selected_devices.front());
+            if (!before) return std::nullopt;
+            const auto builder_started = Clock::now();
+            auto builder = runtime.dispatch(kernel.value());
+            builder.global(element_count)
+                .read(a.value())
+                .read(b.value())
+                .write(output.value())
+                .push(element_count)
+                .defer_readback();
+            const auto builder_finished = Clock::now();
+            sample.builder_setup = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(builder_finished - builder_started)
+                    .count());
+            const auto submit_started = Clock::now();
+            auto event = builder.submit();
+            const auto submit_finished = Clock::now();
+            if (!event) return std::nullopt;
+            sample.submit_call = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(submit_finished - submit_started)
+                    .count());
+            const auto wait_started = Clock::now();
+            if (!event.value().wait()) return std::nullopt;
+            sample.event_wait = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - wait_started).count());
+            auto stats = runtime.profiling_stats(selected_devices.front());
+            if (!stats ||
+                stats.value().last_profile_submission_id == before.value().last_profile_submission_id)
+                return std::nullopt;
+            sample.runtime = stats.value();
+            return sample;
+        };
+
+        std::array<std::vector<std::uint64_t>, 14> phase_samples;
+        const auto append_sample = [&](const PhaseSample& sample, bool retain) {
+            if (!retain) return;
+            phase_samples[0].push_back(sample.builder_setup);
+            phase_samples[1].push_back(sample.submit_call);
+            phase_samples[2].push_back(sample.event_wait);
+            phase_samples[3].push_back(sample.runtime.last_dispatch_validation_nanoseconds);
+            phase_samples[4].push_back(sample.runtime.last_binding_preflight_nanoseconds);
+            phase_samples[5].push_back(sample.runtime.last_pipeline_lookup_nanoseconds);
+            phase_samples[6].push_back(sample.runtime.last_host_submission_nanoseconds);
+            phase_samples[7].push_back(sample.runtime.last_buffer_residency_nanoseconds);
+            phase_samples[8].push_back(sample.runtime.last_submission_assembly_nanoseconds);
+            phase_samples[9].push_back(sample.runtime.last_queue_enqueue_nanoseconds);
+            phase_samples[10].push_back(sample.runtime.last_command_buffer_acquire_nanoseconds);
+            phase_samples[11].push_back(sample.runtime.last_descriptor_setup_nanoseconds);
+            phase_samples[12].push_back(sample.runtime.last_command_recording_nanoseconds);
+            phase_samples[13].push_back(sample.runtime.last_queue_completion_nanoseconds);
+        };
+        bool profile_available = true;
+        for (std::size_t iteration = 0; iteration < options.warmup; ++iteration) {
+            if (!profile_dispatch()) {
+                std::cerr << "KORA dispatch phase profiling unavailable on the selected device\n";
+                profile_available = false;
+                break;
+            }
+        }
+        if (profile_available) {
+            for (std::size_t iteration = 0; iteration < options.iterations; ++iteration) {
+                auto sample = profile_dispatch();
+                if (!sample) {
+                    std::cerr << "KORA dispatch phase profiling stopped: timestamp sample unavailable\n";
+                    profile_available = false;
+                    break;
+                }
+                append_sample(*sample, true);
+            }
+        }
+        constexpr std::array<std::string_view, 14> phase_names{"builder_setup",
+                                                               "submit_call",
+                                                               "event_wait",
+                                                               "dispatch_validation",
+                                                               "binding_preflight",
+                                                               "pipeline_lookup",
+                                                               "submission_preparation",
+                                                               "buffer_residency_transfer",
+                                                               "submission_assembly",
+                                                               "queue_enqueue",
+                                                               "command_buffer_acquire",
+                                                               "descriptor_setup",
+                                                               "command_recording",
+                                                               "queue_completion"};
+        if (profile_available) {
+            for (std::size_t phase = 0; phase < phase_samples.size(); ++phase) {
+                auto& samples = phase_samples[phase];
+                Result result{"profile_kora_4096_" + std::string(phase_names[phase]), std::move(samples), 0,
+                              0};
+                result.median_ns = percentile(result.samples_ns, 50);
+                result.p95_ns = percentile(result.samples_ns, 95);
+                results.push_back(std::move(result));
+            }
         }
     }
 
@@ -1291,7 +1406,8 @@ int main(int argc, char** argv) {
 #endif
     }
     std::cout << "{\"schema_version\":3,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
-              << ",\"warmup\":" << options.warmup;
+              << ",\"warmup\":" << options.warmup
+              << ",\"diagnostic_profile\":" << (options.profile_phases ? "true" : "false");
     std::cout << ",\"environment\":{\"os\":";
     json_string(std::cout, operating_system());
     std::cout << ",\"architecture\":";

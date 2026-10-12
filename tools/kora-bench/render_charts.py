@@ -47,6 +47,8 @@ def _valid_ns(value: Any) -> bool:
 
 def report_series(report: dict[str, Any], kind: str, sizes: tuple[int, ...] = SIZES) -> list[dict[str, Any]]:
     """Validate report identity/schema and return only available, correctly-domain-tagged values."""
+    if report.get("diagnostic_profile") is True:
+        raise ValueError("diagnostic profile reports include telemetry overhead and are not comparison charts")
     if report.get("schema_version") != 3:
         raise ValueError("expected kora-bench JSON schema version 3")
     measurements = report.get("gpu_measurements")

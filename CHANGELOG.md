@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Expose opt-in per-dispatch host phase timings and add a diagnostic `kora-bench --profile-phases` mode for validation, pipeline lookup, buffer residency, submit, queue, descriptor, command-recording, completion, and device-timestamp measurements.
+
+### Fixed
+- Skip repeated SPIR-V reflection on exact pipeline-cache hits for statically sized kernels while preserving full validation for cache misses and `LocalSizeId` specialization.
+
 ## [0.2.13] - 2026-10-12
 
 ### Changed

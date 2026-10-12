@@ -46,6 +46,29 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+For a diagnostic phase profile on a host with valid Vulkan device timestamps, run:
+
+```sh
+KORA_DEVICE=2 build/release/tools/kora-bench --profile-phases --iterations 1000 --warmup 50 \
+  > kora-dispatch-profile.json
+```
+
+`--profile-phases` enables `TelemetryLevel::Profile` and sets `diagnostic_profile: true` in the
+report. It emits raw samples and p50/p95 for builder setup, the caller's submit call and event wait,
+per-dispatch validation, binding preflight, pipeline lookup, Runtime submission preparation, buffer
+residency/transfers, submission assembly, queue enqueue, command-buffer acquisition, descriptor allocation/update, command recording,
+and queue completion. Device timestamp measurements are included when
+available. Host phases can still be reported when the selected device cannot provide GPU timestamps;
+the corresponding device-time result is omitted. This mode adds profiling work; do not use its
+ordinary benchmark rows as the Release performance baseline or feed the report to the comparison
+table or chart generators.
+
+Phase profiling identified repeated SPIR-V reflection as avoidable work on ordinary pipeline-cache
+hits. Static-local-size dispatches now perform an exact cache-key lookup first and only run reflection
+when a pipeline is not already cached. `LocalSizeId` dispatches retain the full validation path because
+their resolved workgroup size is part of the pipeline key. This internal optimization does not change
+the public dispatch contract or relax validation for cache misses.
+
 ## Comparing CPU, KORA GPU, and raw GPU paths across operating systems
 
 KORA's supported build/test environments are Linux/GCC, Windows/MSVC, and macOS/AppleClang; the

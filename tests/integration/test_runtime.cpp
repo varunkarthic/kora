@@ -972,8 +972,20 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
             ASSERT_TRUE(completed) << completed.error().describe();
             auto profiling = runtime.value().profiling_stats(device);
             if (profiling) {
+                EXPECT_GT(profiling.value().last_profile_submission_id, 0U);
                 EXPECT_GT(profiling.value().samples_collected, 0U);
                 EXPECT_GT(profiling.value().last_duration_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_dispatch_validation_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_binding_preflight_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_pipeline_lookup_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_buffer_residency_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_submission_assembly_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_host_submission_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_queue_enqueue_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_command_buffer_acquire_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_descriptor_setup_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_command_recording_nanoseconds, 0U);
+                EXPECT_GT(profiling.value().last_queue_completion_nanoseconds, 0U);
             } else {
                 EXPECT_EQ(profiling.error().code, kora::ErrorCode::UnsupportedFeature);
             }

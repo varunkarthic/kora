@@ -618,6 +618,34 @@ Result<PipelineManager::PipelineRef> PipelineManager::get_or_create(
                            std::move(key), key_hash);
 }
 
+std::optional<PipelineManager::PipelineRef> PipelineManager::find_cached(
+    std::span<const std::uint32_t> module, const KernelMetadata& metadata,
+    std::span<const SpecializationConstantMetadata> overrides, std::string_view entry_point) {
+    std::lock_guard lock(mutex_);
+    collect_retired();
+    auto resolved_metadata = metadata;
+    for (const auto& override : overrides) {
+        const auto original =
+            std::find_if(metadata.specialization_constants.begin(), metadata.specialization_constants.end(),
+                         [&](const auto& item) { return item.id == override.id; });
+        if (original == metadata.specialization_constants.end() || original->type != override.type)
+            return std::nullopt;
+    }
+    for (auto& value : resolved_metadata.specialization_constants) {
+        const auto specialization_override = std::find_if(
+            overrides.begin(), overrides.end(), [&](const auto& item) { return item.id == value.id; });
+        if (specialization_override != overrides.end())
+            value.default_value = specialization_override->default_value;
+    }
+    auto pipeline_key = make_pipeline_key(module, resolved_metadata, entry_point, identity_);
+    const auto found = pipelines_.find(pipeline_key.serialized);
+    if (found == pipelines_.end()) return std::nullopt;
+    lru_.splice(lru_.begin(), lru_, found->second.lru_position);
+    found->second.lru_position = lru_.begin();
+    ++stats_.pipeline_cache_hits;
+    return PipelineRef(found->second.pipeline);
+}
+
 void PipelineManager::evict_if_needed() {
     while (pipelines_.size() > options_.max_cached_pipelines) {
         const auto last = std::prev(lru_.end());
