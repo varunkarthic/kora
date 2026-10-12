@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <unordered_map>
 
 #include "core/calibration_cost.hpp"
 #include "core/scheduler_cost.hpp"
@@ -22,8 +23,9 @@ bool eligible(const RuntimePlacementCandidate& candidate, const AdaptiveDispatch
 
 }  // namespace
 
-Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandidate>& candidates,
-                                        const DeviceId& current, const AdaptiveDispatchWorkload& workload) {
+Result<AdaptivePlacementDecision> select_adaptive_device(
+    const std::vector<RuntimePlacementCandidate>& candidates, const DeviceId& current,
+    const AdaptiveDispatchWorkload& workload) {
     if (workload.kernel_work == 0)
         return Error(ErrorCode::InvalidArgument, "adaptive dispatch kernel work must be nonzero");
     if (static_cast<std::uint8_t>(workload.kernel_kind) >
@@ -37,6 +39,8 @@ Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandid
 
     std::vector<SchedulerCandidate> scored;
     scored.reserve(candidates.size());
+    std::unordered_map<std::uint64_t, ScoreBreakdown> breakdowns;
+    breakdowns.reserve(candidates.size());
     bool found_current = false;
     for (const auto& candidate : candidates) {
         if (!eligible(candidate, workload)) continue;
@@ -64,7 +68,7 @@ Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandid
         auto measured = estimate_calibration_cost(candidate.calibration_record, candidate.id.uuid,
                                                   candidate.driver_version, cost_workload);
         if (!measured) return std::move(measured).error();
-        if (!measured.value().complete_record) return current;
+        if (!measured.value().complete_record) return AdaptivePlacementDecision{.device = current};
 
         SchedulerCostInput cost;
         cost.input_transfer_ns =
@@ -87,6 +91,7 @@ Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandid
         cost.memory_penalty_scale_ns = cost.execute_ns + cost.input_transfer_ns + cost.required_output_ns;
         auto score = evaluate_scheduler_cost(cost);
         if (!score) continue;
+        breakdowns.insert_or_assign(candidate.id.index, score.value());
         scored.push_back(SchedulerCandidate{
             .id = candidate.id.index,
             .predicted_finish_ns = score.value().predicted_finish_ns,
@@ -114,7 +119,11 @@ Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandid
     });
     if (found == candidates.end())
         return Error(ErrorCode::InternalInvariantViolation, "scheduler selected an unknown device candidate");
-    return found->id;
+    const auto score = breakdowns.find(found->id.index);
+    if (score == breakdowns.end())
+        return Error(ErrorCode::InternalInvariantViolation,
+                     "scheduler selection is missing its score breakdown");
+    return AdaptivePlacementDecision{.device = found->id, .score = score->second};
 }
 
 }  // namespace kora::detail

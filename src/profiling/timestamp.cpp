@@ -147,6 +147,10 @@ Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t com
             GpuTimestampSample{slot.submission_id, slot.queue_value,    values[0],          values[1],
                                duration.value(),   slot.host_timestamp, slot.host_deviation};
         ++samples_collected_;
+        if (trace_history_enabled_) {
+            history_.push_back(latest_sample_);
+            if (history_.size() > 4096) history_.pop_front();
+        }
         samples.push_back(latest_sample_);
         slots_.pop_front();
     }
@@ -158,6 +162,12 @@ std::uint64_t TimestampRing::dropped_samples() const noexcept {
     return dropped_samples_;
 }
 
+void TimestampRing::enable_trace_history(bool enabled) noexcept {
+    std::lock_guard lock(mutex_);
+    trace_history_enabled_ = enabled;
+    if (!enabled) history_.clear();
+}
+
 std::uint64_t TimestampRing::samples_collected() const noexcept {
     std::lock_guard lock(mutex_);
     return samples_collected_;
@@ -166,6 +176,11 @@ std::uint64_t TimestampRing::samples_collected() const noexcept {
 GpuTimestampSample TimestampRing::latest_sample() const noexcept {
     std::lock_guard lock(mutex_);
     return latest_sample_;
+}
+
+std::vector<GpuTimestampSample> TimestampRing::history() const {
+    std::lock_guard lock(mutex_);
+    return {history_.begin(), history_.end()};
 }
 
 }  // namespace kora::detail

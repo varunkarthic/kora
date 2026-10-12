@@ -86,6 +86,10 @@ and download operation counts aggregated across the Runtime's selected device co
 completion timeline. It reports cumulative collected/dropped counts and the most recently collected
 duration; calibrated host time and deviation are available only when supported. Profiling is optional:
 unsupported queues report `UnsupportedFeature` without preventing runtime creation or dispatch.
+With `TelemetryLevel::Trace`, `export_trace_json()` returns a validated Chrome Trace Event document
+from the newest 4096 completed samples per device without waiting for pending GPU work. Adaptive
+dispatch events include the chosen device and the actual score breakdown used by the placement
+policy; explicit dispatch and score-free calibration fallback events do not include score fields.
 
 `load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module
 for the first selected device. Pass a `DeviceId` as a fourth argument to validate and associate the

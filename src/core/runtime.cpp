@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,6 +27,7 @@
 #include "core/device_caps.hpp"
 #include "core/device_initialization.hpp"
 #include "core/event_state.hpp"
+#include "core/json.hpp"
 #include "core/performance_db.hpp"
 #include "core/runtime_test_access.hpp"
 #include "core/scheduler_placement.hpp"
@@ -97,6 +100,11 @@ struct PendingPerformanceObservation {
     std::uint64_t completion_elapsed_nanoseconds = 0;
 };
 
+struct TraceSchedulerScore {
+    std::uint64_t selected_device_index = 0;
+    detail::ScoreBreakdown score;
+};
+
 struct DispatchContext {
     std::atomic<bool> accepting_work{true};
     std::atomic<bool> quarantined{false};
@@ -124,6 +132,7 @@ struct DispatchContext {
     std::atomic<std::uint64_t> upload_count{0};
     std::atomic<std::uint64_t> download_count{0};
     std::unique_ptr<detail::TimestampRing> timestamps;
+    bool trace_enabled = false;
     bool autotuning_enabled = false;
     struct PendingAutotune {
         std::shared_ptr<detail::kernel::WorkgroupAutotuner> tuner;
@@ -132,6 +141,10 @@ struct DispatchContext {
     };
     std::unordered_map<std::uint64_t, PendingAutotune> pending_autotune;
     std::unordered_map<std::uint64_t, PendingPerformanceObservation> pending_observations;
+    std::unordered_map<std::uint64_t, TraceSchedulerScore> pending_trace_scores;
+    std::deque<std::uint64_t> pending_trace_score_order;
+    std::unordered_map<std::uint64_t, TraceSchedulerScore> completed_trace_scores;
+    std::deque<std::uint64_t> completed_trace_score_order;
     std::shared_ptr<detail::PerformanceDatabase> performance_database;
     std::filesystem::path performance_database_path;
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
@@ -167,6 +180,7 @@ struct AdaptiveDispatchState {
     std::shared_ptr<DispatchContext> original_context;
     std::shared_ptr<const KernelState> original_kernel;
     AdaptiveDispatchWorkload workload;
+    std::optional<detail::ScoreBreakdown> selected_score;
     std::vector<std::shared_ptr<DispatchContext>> contexts;
 };
 
@@ -193,6 +207,18 @@ void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
             if (observed != dispatch->pending_observations.end()) {
                 observation = std::move(observed->second);
                 dispatch->pending_observations.erase(observed);
+            }
+            const auto trace_score = dispatch->pending_trace_scores.find(sample.submission_id);
+            if (trace_score != dispatch->pending_trace_scores.end()) {
+                dispatch->completed_trace_scores.insert_or_assign(sample.submission_id,
+                                                                  std::move(trace_score->second));
+                dispatch->completed_trace_score_order.push_back(sample.submission_id);
+                dispatch->pending_trace_scores.erase(trace_score);
+                constexpr std::size_t kTraceScoreHistoryLimit = 4096;
+                while (dispatch->completed_trace_score_order.size() > kTraceScoreHistoryLimit) {
+                    dispatch->completed_trace_scores.erase(dispatch->completed_trace_score_order.front());
+                    dispatch->completed_trace_score_order.pop_front();
+                }
             }
         }
         const auto duration = static_cast<double>(sample.duration_nanoseconds);
@@ -1021,11 +1047,15 @@ Result<Event> DispatchBuilder::submit() {
         bool timestamp_recorded = false;
         detail::kernel::WorkgroupAutotuner::Trial autotune_trial;
         detail::PendingPerformanceObservation observation;
+        std::optional<detail::TraceSchedulerScore> trace_score;
         std::chrono::steady_clock::time_point queued_at;
     };
     auto work = std::make_shared<DispatchWork>();
     work->autotune_trial = autotune_trial;
     work->observation = std::move(observation);
+    if (ctx->trace_enabled && adaptive_state_ && adaptive_state_->selected_score)
+        work->trace_score = detail::TraceSchedulerScore{.selected_device_index = ctx->device_index,
+                                                        .score = *adaptive_state_->selected_score};
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
     submission.coalescible = true;
@@ -1124,6 +1154,15 @@ Result<Event> DispatchBuilder::submit() {
                         detail::DispatchContext::PendingAutotune{tuner, work->autotune_trial, key});
                 if (work->timestamp_recorded && !work->observation.execution_key.empty())
                     ctx->pending_observations.insert_or_assign(work->submission_id, work->observation);
+                if (ctx->trace_enabled && work->timestamp_recorded && work->trace_score) {
+                    ctx->pending_trace_scores.insert_or_assign(work->submission_id, *work->trace_score);
+                    ctx->pending_trace_score_order.push_back(work->submission_id);
+                    constexpr std::size_t kTraceScoreHistoryLimit = 4096;
+                    while (ctx->pending_trace_score_order.size() > kTraceScoreHistoryLimit) {
+                        ctx->pending_trace_scores.erase(ctx->pending_trace_score_order.front());
+                        ctx->pending_trace_score_order.pop_front();
+                    }
+                }
                 for (const auto& buffer : bound_handles) {
                     ctx->device_last_use[buffer.id()] = timeline;
                 }
@@ -1170,6 +1209,7 @@ Result<Event> DispatchBuilder::submit() {
                 // just as we do for failed submissions so repeated failures cannot grow the maps.
                 std::lock_guard lock(ctx->submit_mutex);
                 ctx->pending_observations.erase(work->submission_id);
+                ctx->pending_trace_scores.erase(work->submission_id);
                 const auto pending = ctx->pending_autotune.find(work->submission_id);
                 if (pending != ctx->pending_autotune.end()) {
                     pending->second.tuner->cancel(pending->second.trial);
@@ -1179,6 +1219,7 @@ Result<Event> DispatchBuilder::submit() {
         } else if (ctx->timestamps) {
             std::lock_guard lock(ctx->submit_mutex);
             ctx->pending_observations.erase(work->submission_id);
+            ctx->pending_trace_scores.erase(work->submission_id);
             const auto pending = ctx->pending_autotune.find(work->submission_id);
             if (pending != ctx->pending_autotune.end()) {
                 pending->second.tuner->cancel(pending->second.trial);
@@ -1850,8 +1891,9 @@ Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
     }
     auto selected = detail::select_adaptive_device(candidates, (*current)->id, workload);
     if (!selected) return std::move(selected).error();
-    const auto target = std::find_if(impl_->devices.begin(), impl_->devices.end(),
-                                     [&](const auto& device) { return device->id == selected.value(); });
+    const auto target = std::find_if(impl_->devices.begin(), impl_->devices.end(), [&](const auto& device) {
+        return device->id == selected.value().device;
+    });
     if (target == impl_->devices.end())
         return Error(ErrorCode::InternalInvariantViolation, "adaptive scheduler selected an unknown device");
     std::shared_ptr<const detail::KernelState> selected_kernel = kernel.state_;
@@ -1868,6 +1910,7 @@ Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
     builder.adaptive_state_->original_context = (*current)->dispatch;
     builder.adaptive_state_->original_kernel = kernel.state_;
     builder.adaptive_state_->workload = workload;
+    builder.adaptive_state_->selected_score = selected.value().score;
     builder.adaptive_state_->contexts.reserve(impl_->devices.size());
     for (const auto& device : impl_->devices) builder.adaptive_state_->contexts.push_back(device->dispatch);
     return builder;
@@ -1972,6 +2015,9 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();
+        entry->dispatch->trace_enabled = resolved.telemetry == TelemetryLevel::Trace;
+        if (entry->dispatch->timestamps)
+            entry->dispatch->timestamps->enable_trace_history(entry->dispatch->trace_enabled);
         entry->dispatch->device_uuid = entry->id.uuid;
         entry->dispatch->driver_version = entry->driver_version;
         if (impl->calibrate_on_start)
@@ -2340,6 +2386,76 @@ void Runtime::calibrate_compute_probes() noexcept {
             // Compute calibration is diagnostic and cannot make Runtime creation fail.
         }
     }
+}
+
+Result<std::string> Runtime::export_trace_json() const {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    if (options_.telemetry.value_or(TelemetryLevel::Basic) != TelemetryLevel::Trace)
+        return Error(ErrorCode::InvalidArgument, "trace export requires TelemetryLevel::Trace");
+    for (const auto& entry : impl_->devices) {
+        const auto& dispatch = entry->dispatch;
+        if (!dispatch || !dispatch->timestamps) continue;
+        const auto completed = dispatch->queue->completed_value();
+        if (!completed) return std::move(completed).error();
+        auto samples = dispatch->timestamps->collect(completed.value());
+        if (!samples) return std::move(samples).error();
+        detail::observe_autotune_samples(dispatch, samples.value(), impl_->performance_database,
+                                         impl_->performance_database_path);
+    }
+    std::ostringstream json;
+    json << "{\"traceEvents\":[";
+    bool first = true;
+    for (const auto& entry : impl_->devices) {
+        const auto& dispatch = entry->dispatch;
+        if (!dispatch || !dispatch->timestamps) continue;
+        const auto history = dispatch->timestamps->history();
+        std::unordered_map<std::uint64_t, detail::TraceSchedulerScore> scheduler_scores;
+        {
+            std::lock_guard lock(dispatch->submit_mutex);
+            scheduler_scores = dispatch->completed_trace_scores;
+        }
+        for (const auto& sample : history) {
+            if (!first) json << ',';
+            first = false;
+            const auto start_us = sample.host_timestamp_nanoseconds / 1000;
+            const auto duration_us = sample.duration_nanoseconds / 1000;
+            json << "{\"name\":\"gpu_dispatch\",\"cat\":\"kora.gpu\",\"ph\":\"X\","
+                    "\"ts\":"
+                 << start_us << ",\"dur\":" << duration_us << ",\"pid\":1,\"tid\":" << entry->id.index
+                 << ",\"args\":{\"submission_id\":" << sample.submission_id
+                 << ",\"queue_value\":" << sample.queue_value
+                 << ",\"host_clock_calibrated\":" << (sample.host_timestamp_nanoseconds ? "true" : "false")
+                 << ",\"calibration_deviation_ns\":" << sample.calibration_deviation_nanoseconds;
+            const auto scheduler_score = scheduler_scores.find(sample.submission_id);
+            if (scheduler_score != scheduler_scores.end()) {
+                const auto& selected = scheduler_score->second;
+                const auto& score = selected.score;
+                json << ",\"scheduler_score\":{\"selected_device_index\":" << selected.selected_device_index
+                     << ",\"ready_delay_ns\":" << score.ready_delay_ns
+                     << ",\"queue_delay_ns\":" << score.queue_delay_ns
+                     << ",\"input_transfer_ns\":" << score.input_transfer_ns
+                     << ",\"execute_ns\":" << score.execute_ns
+                     << ",\"required_output_ns\":" << score.required_output_ns
+                     << ",\"synchronization_ns\":" << score.synchronization_ns
+                     << ",\"memory_penalty_ns\":" << score.memory_penalty_ns
+                     << ",\"uncertainty_penalty_ns\":" << score.uncertainty_penalty_ns
+                     << ",\"locality_bonus_ns\":" << score.locality_bonus_ns
+                     << ",\"downstream_movement_penalty_ns\":" << score.downstream_movement_penalty_ns
+                     << ",\"predicted_finish_ns\":" << score.predicted_finish_ns << '}';
+            }
+            json << "}}";
+        }
+    }
+    json << "],\"displayTimeUnit\":\"us\",\"metadata\":{\"format\":\"Chrome Trace Event\","
+            "\"time_origin\":\"calibrated_monotonic_host_timestamp_when_available\"}}";
+    const auto document = json.str();
+    auto validated = detail::json::parse(document, {.maximum_bytes = 128U * 1024U * 1024U,
+                                                    .maximum_depth = 16,
+                                                    .maximum_string_bytes = 1024,
+                                                    .maximum_values = 1'000'000});
+    if (!validated)
+        return Error(ErrorCode::InternalInvariantViolation, "trace exporter generated invalid JSON");
+    return document;
 }
 
 Result<DeviceFaultReport> Runtime::device_fault_report(const DeviceId& id) const {

@@ -6,6 +6,7 @@
 
 #include "core/calibration.hpp"
 #include "core/performance_db.hpp"
+#include "core/scheduler_cost.hpp"
 #include "kora/runtime.hpp"
 
 namespace kora::detail {
@@ -21,7 +22,13 @@ struct RuntimePlacementCandidate {
     bool allowed = true;
 };
 
-Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandidate>& candidates,
-                                        const DeviceId& current, const AdaptiveDispatchWorkload& workload);
+struct AdaptivePlacementDecision {
+    DeviceId device;
+    std::optional<ScoreBreakdown> score;
+};
+
+Result<AdaptivePlacementDecision> select_adaptive_device(
+    const std::vector<RuntimePlacementCandidate>& candidates, const DeviceId& current,
+    const AdaptiveDispatchWorkload& workload);
 
 }  // namespace kora::detail

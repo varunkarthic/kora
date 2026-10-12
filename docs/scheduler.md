@@ -10,6 +10,13 @@ separate workload-sized nanosecond components. Runtime's opt-in `dispatch_adapti
 components with the deterministic cost and eligibility policy below. Ordinary `dispatch()` remains
 bound to the device for which the kernel was loaded.
 
+For Trace telemetry, adaptive dispatch preserves the selected candidate's `ScoreBreakdown` through
+submission and includes it in that submission's completed GPU trace event. The trace score is the
+actual model output used for candidate ranking, not a recomputed or post-hoc estimate. A cold-start
+fallback caused by incomplete calibration and ordinary device-bound dispatch do not carry a score.
+Trace events include the chosen device index and each score term in nanoseconds; task association uses
+the same submission ID as the timestamp record.
+
 ## Logarithmic size buckets
 
 `transfer_size_bucket(bytes)` uses `floor(log2(bytes))`, with zero and one byte in bucket zero. Bucket

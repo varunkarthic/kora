@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/calibration.hpp"
+#include "core/json.hpp"
 #include "core/runtime_test_access.hpp"
 #include "kora/runtime.hpp"
 #include "kora/task_partition.hpp"
@@ -153,6 +154,7 @@ TEST(Runtime, AdaptiveDispatchFallsBackToBoundDeviceWithoutCompleteCalibration) 
 #else
     kora::RuntimeOptions options;
     options.enable_startup_calibration = false;
+    options.telemetry = kora::TelemetryLevel::Trace;
     auto runtime = kora::Runtime::create(options);
     if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
                      runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
@@ -197,6 +199,19 @@ TEST(Runtime, AdaptiveDispatchFallsBackToBoundDeviceWithoutCompleteCalibration) 
     ASSERT_TRUE(event) << event.error().describe();
     ASSERT_TRUE(event.value().wait());
     EXPECT_EQ(output.value().read().value(), std::vector<std::uint32_t>(count, 5));
+    const auto trace = runtime.value().export_trace_json();
+    ASSERT_TRUE(trace) << trace.error().describe();
+    const auto parsed_trace = kora::detail::json::parse(trace.value());
+    ASSERT_TRUE(parsed_trace) << parsed_trace.error().describe();
+    const auto* trace_events_value = parsed_trace.value().find("traceEvents");
+    ASSERT_NE(trace_events_value, nullptr);
+    const auto* trace_events = std::get_if<kora::detail::json::Value::Array>(&trace_events_value->storage);
+    ASSERT_NE(trace_events, nullptr);
+    for (const auto& trace_event : *trace_events) {
+        const auto* args = trace_event.find("args");
+        ASSERT_NE(args, nullptr);
+        EXPECT_EQ(args->find("scheduler_score"), nullptr);
+    }
 #endif
 }
 
@@ -211,6 +226,7 @@ TEST(Runtime, AdaptiveDispatchPersistsCompletedExecutionObservations) {
     kora::RuntimeOptions options;
     options.cache_dir = cache_directory.string();
     options.enable_startup_calibration = false;
+    options.telemetry = kora::TelemetryLevel::Trace;
     auto runtime = kora::Runtime::create(options);
     if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
                      runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
@@ -218,6 +234,16 @@ TEST(Runtime, AdaptiveDispatchPersistsCompletedExecutionObservations) {
     }
     ASSERT_TRUE(runtime) << runtime.error().describe();
     const auto device = runtime.value().devices().front();
+    kora::detail::calibration::Record calibration;
+    calibration.submit_overhead_ns = 100;
+    calibration.tiny_dispatch_ns = 100;
+    calibration.h2d_bytes_per_second = 100'000'000;
+    calibration.d2h_bytes_per_second = 100'000'000;
+    calibration.device_copy_bytes_per_second = 100'000'000;
+    calibration.streaming_bytes_per_second = 100'000'000;
+    calibration.alu_operations_per_second = 100'000'000;
+    ASSERT_TRUE(kora::detail::RuntimeTestAccess::set_calibration_record(runtime.value(), device,
+                                                                        std::move(calibration)));
     auto profiling = runtime.value().profiling_stats(device);
     if (!profiling && profiling.error().code == kora::ErrorCode::UnsupportedFeature)
         GTEST_SKIP() << "adaptive online observations require compute timestamp support";
@@ -274,6 +300,34 @@ TEST(Runtime, AdaptiveDispatchPersistsCompletedExecutionObservations) {
     const auto saved = persisted.query(key.value());
     ASSERT_TRUE(saved) << saved.error().describe();
     EXPECT_GE(saved.value().count, 5U);
+    auto trace = runtime.value().export_trace_json();
+    ASSERT_TRUE(trace) << trace.error().describe();
+    auto parsed_trace = kora::detail::json::parse(trace.value());
+    ASSERT_TRUE(parsed_trace) << parsed_trace.error().describe();
+    const auto* trace_events_value = parsed_trace.value().find("traceEvents");
+    ASSERT_NE(trace_events_value, nullptr);
+    const auto* trace_events = std::get_if<kora::detail::json::Value::Array>(&trace_events_value->storage);
+    ASSERT_NE(trace_events, nullptr);
+    bool found_score = false;
+    for (const auto& trace_event : *trace_events) {
+        const auto* args = trace_event.find("args");
+        if (!args) continue;
+        const auto* score = args->find("scheduler_score");
+        if (!score) continue;
+        const auto* device_index = score->find("selected_device_index");
+        const auto* predicted_finish = score->find("predicted_finish_ns");
+        ASSERT_NE(device_index, nullptr);
+        ASSERT_NE(predicted_finish, nullptr);
+        const auto* device_number = std::get_if<kora::detail::json::Value::Number>(&device_index->storage);
+        const auto* finish_number =
+            std::get_if<kora::detail::json::Value::Number>(&predicted_finish->storage);
+        ASSERT_NE(device_number, nullptr);
+        ASSERT_NE(finish_number, nullptr);
+        EXPECT_EQ(std::stoull(device_number->text), device.index);
+        EXPECT_GT(std::stod(finish_number->text), 0.0);
+        found_score = true;
+    }
+    EXPECT_TRUE(found_score);
     std::error_code ignored;
     std::filesystem::remove_all(cache_directory, ignored);
 #endif
@@ -858,6 +912,7 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
             options.device_policy = kora::DevicePolicy::ByIndex;
             options.device_index = device.index;
             options.force_legacy_sync = force_fallback;
+            options.telemetry = kora::TelemetryLevel::Trace;
             options.cache_dir =
                 (std::filesystem::temp_directory_path() / "kora-dispatch-test-cache").string();
             auto runtime = kora::Runtime::create(options);
@@ -921,6 +976,25 @@ TEST(Runtime, DispatchesVectorAddOnEveryDeviceWithTimelineAndFenceFallback) {
                 EXPECT_GT(profiling.value().last_duration_nanoseconds, 0U);
             } else {
                 EXPECT_EQ(profiling.error().code, kora::ErrorCode::UnsupportedFeature);
+            }
+            auto trace = runtime.value().export_trace_json();
+            ASSERT_TRUE(trace) << trace.error().describe();
+            auto parsed_trace = kora::detail::json::parse(trace.value());
+            ASSERT_TRUE(parsed_trace) << parsed_trace.error().describe();
+            const auto* trace_events_value = parsed_trace.value().find("traceEvents");
+            ASSERT_NE(trace_events_value, nullptr);
+            const auto* trace_events =
+                std::get_if<kora::detail::json::Value::Array>(&trace_events_value->storage);
+            ASSERT_NE(trace_events, nullptr);
+            if (profiling) ASSERT_FALSE(trace_events->empty());
+            if (!trace_events->empty()) {
+                EXPECT_NE(trace.value().find("\"ph\":\"X\""), std::string::npos);
+                EXPECT_NE(trace.value().find("submission_id"), std::string::npos);
+            }
+            for (const auto& trace_event : *trace_events) {
+                const auto* args = trace_event.find("args");
+                ASSERT_NE(args, nullptr);
+                EXPECT_EQ(args->find("scheduler_score"), nullptr);
             }
             auto values = output.value().read();
             ASSERT_TRUE(values) << values.error().describe();
