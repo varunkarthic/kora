@@ -17,6 +17,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   inferring it from vector-add timer support.
 - Render KORA default, KORA deferred, raw Vulkan host, and device-timestamp domains as distinct
   benchmark columns; validate deferred outputs with explicit readback after each timed sample.
+  Keep KORA timestamp probes on the default completion path because the deferred path does not
+  currently publish Runtime profiling durations; host timing remains separately deferred.
 
 ## [0.2.19] - 2026-10-12
 

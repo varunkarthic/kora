@@ -1825,7 +1825,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run_checked(
         "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait", [&] { run_saxpy(true); }, validate_saxpy,
         options));
-    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", [&] { run_saxpy(true); });
+    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", [&] { run_saxpy(); });
 
     kora::KernelMetadata reduction_metadata;
     reduction_metadata.kernel_id = "kora_bench.reduction";
@@ -1874,7 +1874,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run_checked(
         "gpu_reduction_4096_deferred_readback_dispatch_wait", [&] { run_reduction(true); },
         validate_reduction, options));
-    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", [&] { run_reduction(true); });
+    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", [&] { run_reduction(); });
 
     kora::KernelMetadata scan_metadata;
     scan_metadata.kernel_id = "kora_bench.scan_tile64";
@@ -1924,7 +1924,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run_checked(
         "gpu_tiled_scan_4096_deferred_readback_dispatch_wait", [&] { run_scan(true); }, validate_scan,
         options));
-    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", [&] { run_scan(true); });
+    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", [&] { run_scan(); });
 
     kora::KernelMetadata matmul_metadata;
     matmul_metadata.kernel_id = "kora_bench.tiled_matmul";
@@ -1979,7 +1979,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run_checked(
         "gpu_tiled_matmul_64_deferred_readback_dispatch_wait", [&] { run_matmul(true); }, validate_matmul,
         options));
-    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", [&] { run_matmul(true); });
+    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", [&] { run_matmul(); });
 
     kora::KernelMetadata stencil_metadata;
     stencil_metadata.kernel_id = "kora_bench.stencil";
@@ -2028,7 +2028,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     results.push_back(run_checked(
         "gpu_stencil_4096_deferred_readback_dispatch_wait", [&] { run_stencil(true); }, validate_stencil,
         options));
-    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", [&] { run_stencil(true); });
+    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", [&] { run_stencil(); });
 
     auto loader = kora::vk::Loader::load();
     if (!loader) return false;
