@@ -12,11 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add an opt-in external CUDA reference report contract and same-device comparison table without adding a CUDA build/runtime dependency.
+
 ## [0.2.14] - 2026-10-12
 
 ### Added
 - Expose opt-in per-dispatch host phase timings and add a diagnostic `kora-bench --profile-phases` mode for validation, pipeline lookup, buffer residency, submit, queue, descriptor, command-recording, completion, and device-timestamp measurements.
-- Add an opt-in external CUDA reference report contract and same-device comparison table without adding a CUDA build/runtime dependency.
 
 ### Fixed
 - Skip repeated SPIR-V reflection on exact pipeline-cache hits for statically sized kernels while preserving full validation for cache misses and `LocalSizeId` specialization.
