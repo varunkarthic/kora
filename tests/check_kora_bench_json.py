@@ -30,6 +30,9 @@ assert report["environment"]["os"] in {"windows", "macos", "linux", "unknown"}
 assert report["environment"]["architecture"] in {"arm64", "x86_64", "x86", "unknown"}
 assert report["environment"]["compiler"].startswith(("MSVC ", "Clang ", "AppleClang ", "GCC ", "unknown"))
 assert report["environment"]["build_type"]
+assert isinstance(report["environment"]["cpu_model"], str) and report["environment"]["cpu_model"]
+assert isinstance(report["environment"]["build_flags"], str)
+assert re.fullmatch(r"[0-9a-f]{40}|unknown", report["environment"]["source_revision"])
 assert isinstance(report["environment"]["logical_cpu_count"], int)
 expected_names = {
     "scheduler_cost",
@@ -42,6 +45,19 @@ expected_names = {
 }
 vector_sizes = (1, 64, 256, 1024, 4096, 65536, 262144, 1048576, 4194240)
 expected_names |= {f"cpu_vector_add_{count}" for count in vector_sizes}
+compute_sizes = (4096, 65536, 1048576)
+expected_names |= {
+    f"cpu_{workload}_{count}"
+    for workload in ("saxpy", "reduction", "stencil")
+    for count in compute_sizes
+}
+expected_names |= {f"cpu_tiled_matmul_{dimension}" for dimension in (16, 64, 128)}
+expected_names |= {
+    f"cpu_{workload}_parallel_{count}"
+    for workload in ("vector_add", "saxpy", "reduction", "stencil")
+    for count in compute_sizes
+}
+expected_names |= {f"cpu_tiled_matmul_parallel_{dimension}" for dimension in (16, 64, 128)}
 if "--gpu" in arguments:
     gpu = report["gpu_measurements"]
     assert gpu["backend"] == "vulkan"
@@ -97,6 +113,8 @@ for result in report["results"]:
     assert result["timing_domain"]
     assert len(result["samples"]) == 3
     assert result["median"] <= result["p95"]
+    if "_parallel_" in result["name"]:
+        assert result["thread_count"] == 4
     if result["name"].startswith(("transfer_", "raw_vulkan_copy_", "kora_transfer_copy_")):
         assert result["bytes_transferred"] in (4096, 65536, 1048576)
         assert result["throughput_bytes_per_second"] > 0

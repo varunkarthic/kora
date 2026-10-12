@@ -1,11 +1,11 @@
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -20,6 +20,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
 
 #include "core/device_caps.hpp"
 #include "core/scheduler_cost.hpp"
@@ -51,6 +56,7 @@ struct Result {
     std::uint64_t p95_ns = 0;
     std::uint64_t bytes_transferred = 0;
     std::uint64_t throughput_bytes_per_second = 0;
+    std::uint32_t thread_count = 0;
 };
 
 struct GpuDeviceReport {
@@ -105,6 +111,33 @@ std::string compiler_name() {
 #else
     return "unknown";
 #endif
+}
+
+std::string cpu_model_name() {
+#if defined(__APPLE__)
+    std::size_t length = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", nullptr, &length, nullptr, 0) == 0 && length > 1) {
+        std::string model(length, '\0');
+        if (sysctlbyname("machdep.cpu.brand_string", model.data(), &length, nullptr, 0) == 0) {
+            model.resize(length - 1);
+            return model;
+        }
+    }
+#elif defined(_WIN32)
+    if (const auto* model = std::getenv("PROCESSOR_IDENTIFIER"); model != nullptr) return model;
+#elif defined(__linux__)
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(cpuinfo, line)) {
+        const auto separator = line.find(':');
+        if (separator == std::string::npos) continue;
+        const auto key = line.substr(0, separator);
+        if (key != "model name" && key != "Hardware" && key != "Processor") continue;
+        const auto start = line.find_first_not_of(" \t", separator + 1);
+        if (start != std::string::npos) return line.substr(start);
+    }
+#endif
+    return "unknown";
 }
 
 std::string_view measurement_domain(std::string_view name) {
@@ -244,6 +277,27 @@ Result run(std::string name, const std::function<void()>& operation, const Optio
     return result;
 }
 
+Result run_checked(std::string name, const std::function<void()>& operation,
+                   const std::function<bool()>& validate, const Options& options) {
+    for (std::size_t index = 0; index < options.warmup; ++index) {
+        operation();
+        if (!validate()) throw std::runtime_error("benchmark correctness check failed: " + name);
+    }
+    Result result{std::move(name), {}, 0, 0};
+    result.samples_ns.reserve(options.iterations);
+    for (std::size_t index = 0; index < options.iterations; ++index) {
+        const auto begin = Clock::now();
+        operation();
+        const auto end = Clock::now();
+        if (!validate()) throw std::runtime_error("benchmark correctness check failed: " + result.name);
+        result.samples_ns.push_back(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count()));
+    }
+    result.median_ns = percentile(result.samples_ns, 50);
+    result.p95_ns = percentile(result.samples_ns, 95);
+    return result;
+}
+
 std::optional<Result> run_timestamps(std::string name,
                                      const std::function<std::optional<std::uint64_t>()>& operation,
                                      const Options& options) {
@@ -325,14 +379,216 @@ bool allocation_operation() {
     return bytes.front() == std::byte{0};
 }
 
-bool cpu_vector_add_operation(std::uint32_t count) {
-    static const std::vector<std::uint32_t> left(4'194'240, 3);
-    static const std::vector<std::uint32_t> right(4'194'240, 7);
-    static std::vector<std::uint32_t> output(4'194'240);
-    for (std::size_t index = 0; index < count; ++index) output[index] = left[index] + right[index];
-    static std::atomic<std::uint32_t> sink{0};
-    sink.store(output[count - 1], std::memory_order_relaxed);
-    return sink.load(std::memory_order_relaxed) == 10;
+template <typename T, typename Operation, typename Expected>
+Result run_cpu_compute(std::string name, std::vector<T>& output, Operation operation, Expected expected,
+                       const Options& options) {
+    return run_checked(
+        std::move(name), operation,
+        [&] {
+            for (std::size_t index = 0; index < output.size(); ++index)
+                if (!expected(index, output[index])) return false;
+            return true;
+        },
+        options);
+}
+
+template <typename Operation>
+void parallel_for(kora::CpuExecutor& executor, std::size_t count, Operation operation) {
+    const auto workers = executor.worker_count();
+    std::vector<kora::Event> events;
+    events.reserve(workers);
+    for (std::size_t worker = 0; worker < workers; ++worker) {
+        const auto begin = count * worker / workers;
+        const auto end = count * (worker + 1) / workers;
+        auto event = executor.submit([&, worker, begin, end] {
+            operation(worker, begin, end);
+            return kora::Status{};
+        });
+        if (!event) throw std::runtime_error("CPU executor rejected benchmark work");
+        events.push_back(std::move(event).value());
+    }
+    for (const auto& event : events)
+        if (!executor.wait(event)) throw std::runtime_error("CPU executor benchmark task failed");
+}
+
+void add_cpu_compute_benchmarks(std::vector<Result>& results, const Options& options) {
+    kora::CpuExecutorOptions executor_options;
+    executor_options.worker_count = 4;
+    auto executor_result = kora::CpuExecutor::create(executor_options);
+    if (!executor_result) throw std::runtime_error("could not create CPU benchmark executor");
+    auto executor = std::move(executor_result).value();
+    const auto worker_count = static_cast<std::uint32_t>(executor->worker_count());
+    constexpr std::array<std::size_t, 3> sizes{4096, 65536, 1048576};
+    for (const auto count : sizes) {
+        std::vector<std::uint32_t> int_left(count), int_right(count), int_output(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            int_left[index] = static_cast<std::uint32_t>(index % 17);
+            int_right[index] = static_cast<std::uint32_t>(index % 29);
+        }
+        const auto parallel_vector_add = [&] {
+            parallel_for(*executor, count, [&](std::size_t, std::size_t begin, std::size_t end) {
+                for (auto index = begin; index < end; ++index)
+                    int_output[index] = int_left[index] + int_right[index];
+            });
+        };
+        auto parallel_vector_result = run_cpu_compute(
+            "cpu_vector_add_parallel_" + std::to_string(count), int_output, parallel_vector_add,
+            [&](std::size_t index, std::uint32_t value) {
+                return value == int_left[index] + int_right[index];
+            },
+            options);
+        parallel_vector_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_vector_result));
+
+        std::vector<float> x(count), y(count), output(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            x[index] = static_cast<float>(static_cast<int>(index % 97) - 48) * 0.125F;
+            y[index] = static_cast<float>(static_cast<int>(index % 53) - 26) * 0.25F;
+        }
+        const auto saxpy = [&] {
+            for (std::size_t index = 0; index < count; ++index) output[index] = 1.5F * x[index] + y[index];
+        };
+        saxpy();
+        const auto saxpy_expected = [&](std::size_t index, float value) {
+            return std::abs(value - (1.5F * x[index] + y[index])) <= 1e-6F;
+        };
+        results.push_back(
+            run_cpu_compute("cpu_saxpy_" + std::to_string(count), output, saxpy, saxpy_expected, options));
+        const auto parallel_saxpy = [&] {
+            parallel_for(*executor, count, [&](std::size_t, std::size_t begin, std::size_t end) {
+                for (auto index = begin; index < end; ++index) output[index] = 1.5F * x[index] + y[index];
+            });
+        };
+        auto parallel_saxpy_result = run_cpu_compute("cpu_saxpy_parallel_" + std::to_string(count), output,
+                                                     parallel_saxpy, saxpy_expected, options);
+        parallel_saxpy_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_saxpy_result));
+
+        constexpr std::size_t reduction_width = 64;
+        const auto group_count = count / reduction_width;
+        std::vector<float> reduced(group_count);
+        const auto reduction = [&] {
+            for (std::size_t group = 0; group < group_count; ++group) {
+                float sum = 0.0F;
+                for (std::size_t lane = 0; lane < reduction_width; ++lane)
+                    sum += x[group * reduction_width + lane];
+                reduced[group] = sum;
+            }
+        };
+        reduction();
+        const auto reduction_expected = [&](std::size_t group, float value) {
+            double reference = 0.0;
+            for (std::size_t lane = 0; lane < reduction_width; ++lane)
+                reference += x[group * reduction_width + lane];
+            return std::abs(static_cast<double>(value) - reference) <= 1e-3;
+        };
+        results.push_back(run_cpu_compute("cpu_reduction_" + std::to_string(count), reduced, reduction,
+                                          reduction_expected, options));
+        const auto parallel_reduction = [&] {
+            parallel_for(*executor, group_count, [&](std::size_t, std::size_t begin, std::size_t end) {
+                for (auto group = begin; group < end; ++group) {
+                    float sum = 0.0F;
+                    for (std::size_t lane = 0; lane < reduction_width; ++lane)
+                        sum += x[group * reduction_width + lane];
+                    reduced[group] = sum;
+                }
+            });
+        };
+        auto parallel_reduction_result =
+            run_cpu_compute("cpu_reduction_parallel_" + std::to_string(count), reduced, parallel_reduction,
+                            reduction_expected, options);
+        parallel_reduction_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_reduction_result));
+
+        std::vector<float> stencil(count);
+        const auto stencil_operation = [&] {
+            for (std::size_t index = 0; index < count; ++index) {
+                float sum = x[index];
+                if (index > 0) sum += x[index - 1];
+                if (index + 1 < count) sum += x[index + 1];
+                stencil[index] = sum;
+            }
+        };
+        stencil_operation();
+        results.push_back(run_cpu_compute(
+            "cpu_stencil_" + std::to_string(count), stencil, stencil_operation,
+            [&](std::size_t index, float value) {
+                auto expected = x[index];
+                if (index > 0) expected += x[index - 1];
+                if (index + 1 < count) expected += x[index + 1];
+                return std::abs(value - expected) <= 1e-6F;
+            },
+            options));
+        const auto parallel_stencil = [&] {
+            parallel_for(*executor, count, [&](std::size_t, std::size_t begin, std::size_t end) {
+                for (auto index = begin; index < end; ++index) {
+                    float sum = x[index];
+                    if (index > 0) sum += x[index - 1];
+                    if (index + 1 < count) sum += x[index + 1];
+                    stencil[index] = sum;
+                }
+            });
+        };
+        auto parallel_stencil_result = run_cpu_compute(
+            "cpu_stencil_parallel_" + std::to_string(count), stencil, parallel_stencil,
+            [&](std::size_t index, float value) {
+                auto expected = x[index];
+                if (index > 0) expected += x[index - 1];
+                if (index + 1 < count) expected += x[index + 1];
+                return std::abs(value - expected) <= 1e-6F;
+            },
+            options);
+        parallel_stencil_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_stencil_result));
+    }
+
+    for (const auto dimension : {16U, 64U, 128U}) {
+        const auto count = static_cast<std::size_t>(dimension) * dimension;
+        std::vector<float> a(count, 0.5F), b(count, 0.25F), output(count);
+        constexpr std::size_t tile = 32;
+        const auto matmul = [&] {
+            std::fill(output.begin(), output.end(), 0.0F);
+            for (std::size_t kk = 0; kk < dimension; kk += tile)
+                for (std::size_t ii = 0; ii < dimension; ii += tile)
+                    for (std::size_t jj = 0; jj < dimension; jj += tile)
+                        for (std::size_t i = ii; i < std::min<std::size_t>(ii + tile, dimension); ++i)
+                            for (std::size_t k = kk; k < std::min<std::size_t>(kk + tile, dimension); ++k) {
+                                const auto aik = a[i * dimension + k];
+                                for (std::size_t j = jj; j < std::min<std::size_t>(jj + tile, dimension); ++j)
+                                    output[i * dimension + j] += aik * b[k * dimension + j];
+                            }
+        };
+        matmul();
+        results.push_back(run_cpu_compute(
+            "cpu_tiled_matmul_" + std::to_string(dimension), output, matmul,
+            [dimension](std::size_t, float value) {
+                return std::abs(value - 0.125F * static_cast<float>(dimension)) <= 1e-5F;
+            },
+            options));
+        const auto parallel_matmul = [&] {
+            parallel_for(*executor, dimension, [&](std::size_t, std::size_t begin, std::size_t end) {
+                for (auto i = begin; i < end; ++i) {
+                    for (std::size_t j = 0; j < dimension; ++j) output[i * dimension + j] = 0.0F;
+                }
+                for (std::size_t kk = 0; kk < dimension; kk += tile)
+                    for (std::size_t jj = 0; jj < dimension; jj += tile)
+                        for (auto i = begin; i < end; ++i)
+                            for (std::size_t k = kk; k < std::min<std::size_t>(kk + tile, dimension); ++k) {
+                                const auto aik = a[i * dimension + k];
+                                for (std::size_t j = jj; j < std::min<std::size_t>(jj + tile, dimension); ++j)
+                                    output[i * dimension + j] += aik * b[k * dimension + j];
+                            }
+            });
+        };
+        auto parallel_matmul_result = run_cpu_compute(
+            "cpu_tiled_matmul_parallel_" + std::to_string(dimension), output, parallel_matmul,
+            [dimension](std::size_t, float value) {
+                return std::abs(value - 0.125F * static_cast<float>(dimension)) <= 1e-5F;
+            },
+            options);
+        parallel_matmul_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_matmul_result));
+    }
 }
 
 bool allocator_throughput_operation() {
@@ -1381,13 +1637,21 @@ int main(int argc, char** argv) {
         }
         for (const auto count : {1U, 64U, 256U, 1024U, 4096U, 65536U, 262144U, 1048576U, 4194240U}) {
             const auto name = "cpu_vector_add_" + std::to_string(count);
-            results.push_back(run(
-                name,
-                [count] {
-                    if (!cpu_vector_add_operation(count)) throw std::runtime_error("CPU vector-add failed");
-                },
+            std::vector<std::uint32_t> left(count), right(count), output(count);
+            for (std::size_t index = 0; index < count; ++index) {
+                left[index] = static_cast<std::uint32_t>(index % 17);
+                right[index] = static_cast<std::uint32_t>(index % 29);
+            }
+            const auto operation = [&] {
+                for (std::size_t index = 0; index < count; ++index)
+                    output[index] = left[index] + right[index];
+            };
+            results.push_back(run_cpu_compute(
+                name, output, operation,
+                [&](std::size_t index, std::uint32_t value) { return value == left[index] + right[index]; },
                 options));
         }
+        add_cpu_compute_benchmarks(results, options);
     } catch (const std::exception& error) {
         std::cerr << "benchmark workload failed: " << error.what() << '\n';
         return 1;
@@ -1414,9 +1678,23 @@ int main(int argc, char** argv) {
     json_string(std::cout, architecture());
     std::cout << ",\"compiler\":";
     json_string(std::cout, compiler_name());
+    std::cout << ",\"cpu_model\":";
+    json_string(std::cout, cpu_model_name());
     std::cout << ",\"build_type\":";
 #ifdef KORA_BENCH_BUILD_TYPE
     json_string(std::cout, KORA_BENCH_BUILD_TYPE);
+#else
+    json_string(std::cout, "unknown");
+#endif
+    std::cout << ",\"build_flags\":";
+#ifdef KORA_BENCH_BUILD_FLAGS
+    json_string(std::cout, KORA_BENCH_BUILD_FLAGS);
+#else
+    json_string(std::cout, "unknown");
+#endif
+    std::cout << ",\"source_revision\":";
+#ifdef KORA_BENCH_SOURCE_REVISION
+    json_string(std::cout, KORA_BENCH_SOURCE_REVISION);
 #else
     json_string(std::cout, "unknown");
 #endif
@@ -1467,6 +1745,7 @@ int main(int argc, char** argv) {
         if (result.bytes_transferred != 0)
             std::cout << ",\"bytes_transferred\":" << result.bytes_transferred
                       << ",\"throughput_bytes_per_second\":" << result.throughput_bytes_per_second;
+        if (result.thread_count != 0) std::cout << ",\"thread_count\":" << result.thread_count;
         std::cout << ",\"samples\":[";
         for (std::size_t sample = 0; sample < result.samples_ns.size(); ++sample) {
             if (sample != 0) std::cout << ',';
