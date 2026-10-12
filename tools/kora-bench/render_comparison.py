@@ -199,6 +199,80 @@ def main() -> int:
             ],
         ]
         print("| " + " | ".join(values) + " |")
+    matched_compute_workloads = (
+        (
+            "SAXPY / 4,096",
+            "gpu_saxpy_4096_upload_dispatch_wait",
+            "raw_vulkan_saxpy_4096_upload_dispatch_wait",
+            "gpu_saxpy_4096_gpu_execution",
+            "raw_vulkan_saxpy_4096_upload_gpu_execution",
+        ),
+        (
+            "Reduction / 4,096",
+            "gpu_reduction_4096_dispatch_wait",
+            "raw_vulkan_reduction_4096_dispatch_wait",
+            "gpu_reduction_4096_gpu_execution",
+            "raw_vulkan_reduction_4096_gpu_execution",
+        ),
+        (
+            "Scan / 4,096",
+            "gpu_tiled_scan_4096_dispatch_wait",
+            "raw_vulkan_tiled_scan_4096_dispatch_wait",
+            "gpu_tiled_scan_4096_gpu_execution",
+            "raw_vulkan_tiled_scan_4096_gpu_execution",
+        ),
+        (
+            "Tiled matmul / 64×64",
+            "gpu_tiled_matmul_64_dispatch_wait",
+            "raw_vulkan_tiled_matmul_64_dispatch_wait",
+            "gpu_tiled_matmul_64_gpu_execution",
+            "raw_vulkan_tiled_matmul_64_gpu_execution",
+        ),
+        (
+            "Stencil / 4,096",
+            "gpu_stencil_4096_dispatch_wait",
+            "raw_vulkan_stencil_4096_dispatch_wait",
+            "gpu_stencil_4096_gpu_execution",
+            "raw_vulkan_stencil_4096_gpu_execution",
+        ),
+    )
+    if all(kora_name in results and raw_name in results for _, kora_name, raw_name, _, _ in matched_compute_workloads):
+        print("\nMatched same-device Vulkan compute workloads:")
+        print(
+            "| Workload | KORA host p50 | KORA host p95 | Raw Vulkan host p50 | Raw Vulkan host p95 | "
+            "KORA GPU p50 | KORA GPU p95 | Raw Vulkan GPU p50 | Raw Vulkan GPU p95 |"
+        )
+        print("| " + " | ".join(["---"] + ["---:"] * 8) + " |")
+        for label, kora_name, raw_name, kora_gpu_name, raw_gpu_name in matched_compute_workloads:
+            kora_host = results[kora_name]
+            raw_host = results[raw_name]
+            if kora_host.get("timing_domain") != "host_submit_completion" or raw_host.get(
+                "timing_domain"
+            ) != "host_submit_completion":
+                parser.error(f"{label} host timings must use host_submit_completion")
+            gpu_results = (results.get(kora_gpu_name), results.get(raw_gpu_name))
+            for gpu_result in gpu_results:
+                if gpu_result is not None and gpu_result.get("timing_domain") != "gpu_execution_timestamp":
+                    parser.error(f"{label} device timings must use gpu_execution_timestamp")
+            values = [
+                label,
+                format_ns(kora_host["median"]),
+                format_ns(kora_host["p95"]),
+                format_ns(raw_host["median"]),
+                format_ns(raw_host["p95"]),
+                *[
+                    format_ns(gpu_result[stat]) if gpu_result is not None else "unavailable"
+                    for gpu_result in gpu_results
+                    for stat in ("median", "p95")
+                ],
+            ]
+            print("| " + " | ".join(values) + " |")
+        print(
+            "\nHost rows include submit through completion and are not kernel-only. Device-timestamp rows "
+            "isolate execution; unavailable samples are not estimated. Raw Vulkan uses persistent "
+            "host-visible buffers on this benchmark path, so its host latency has a different "
+            "residency/readback boundary from KORA."
+        )
     if args.cuda_report:
         if not args.kora_revision or not re.fullmatch(r"[0-9a-fA-F]{7,40}", args.kora_revision):
             parser.error("--cuda-report requires --kora-revision with a Git commit hash")

@@ -145,8 +145,7 @@ std::string_view measurement_domain(std::string_view name) {
     if (name.starts_with("profile_kora_")) return "runtime_dispatch_phase";
     if (name.ends_with("_gpu_execution")) return "gpu_execution_timestamp";
     if (name.starts_with("cpu_") || name.starts_with("staging_ring_reserve_")) return "host_cpu_execution";
-    if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_vector_add_"))
-        return "host_submit_completion";
+    if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_")) return "host_submit_completion";
     if (name.starts_with("transfer_") || name.starts_with("raw_vulkan_copy_") ||
         name.starts_with("kora_transfer_copy_"))
         return "host_transfer_completion";
@@ -704,6 +703,241 @@ void synchronize_mapped_buffer(const kora::vk::Device& device, const HostTransfe
                                        : "mapped transfer invalidate failed");
 }
 
+class RawComputeRunner {
+public:
+    RawComputeRunner(const kora::vk::PhysicalDeviceInfo& physical, const kora::vk::Device& device,
+                     const std::filesystem::path& shader_path,
+                     const std::vector<HostTransferBuffer*>& buffers, std::uint32_t push_size)
+        : api_(device.api()),
+          device_(device.handle()),
+          queue_(device.compute_queue()),
+          timestamp_period_(physical.properties.limits.timestampPeriod),
+          timestamp_bits_(
+              physical.queue_family_properties[device.compute_queue_family()].timestampValidBits) {
+        if (buffers.empty() || push_size == 0) throw std::runtime_error("invalid raw compute layout");
+        try {
+            std::ifstream shader_file(shader_path, std::ios::binary | std::ios::ate);
+            if (!shader_file) throw std::runtime_error("raw Vulkan shader fixture is unavailable");
+            const auto shader_size = shader_file.tellg();
+            if (shader_size <= 0 || static_cast<std::uint64_t>(shader_size) % sizeof(std::uint32_t) != 0)
+                throw std::runtime_error("raw Vulkan shader fixture has an invalid size");
+            std::vector<std::uint32_t> shader_code(static_cast<std::size_t>(shader_size) /
+                                                   sizeof(std::uint32_t));
+            shader_file.seekg(0);
+            shader_file.read(reinterpret_cast<char*>(shader_code.data()), shader_size);
+            if (!shader_file) throw std::runtime_error("raw Vulkan shader fixture could not be read");
+
+            const auto require = [](VkResult result, const char* operation) {
+                if (result != VK_SUCCESS) throw std::runtime_error(operation);
+            };
+            VkShaderModuleCreateInfo shader_info{};
+            shader_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            shader_info.codeSize = shader_code.size() * sizeof(std::uint32_t);
+            shader_info.pCode = shader_code.data();
+            require(api_.create_shader_module(device_, &shader_info, nullptr, &shader_),
+                    "raw Vulkan shader-module creation failed");
+
+            std::vector<VkDescriptorSetLayoutBinding> bindings(buffers.size());
+            for (std::uint32_t index = 0; index < bindings.size(); ++index) {
+                bindings[index].binding = index;
+                bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                bindings[index].descriptorCount = 1;
+                bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo descriptor_layout_info{};
+            descriptor_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            descriptor_layout_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
+            descriptor_layout_info.pBindings = bindings.data();
+            require(api_.create_descriptor_set_layout(device_, &descriptor_layout_info, nullptr,
+                                                      &descriptor_layout_),
+                    "raw Vulkan descriptor-layout creation failed");
+
+            VkPushConstantRange push_range{};
+            push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            push_range.size = push_size;
+            VkPipelineLayoutCreateInfo pipeline_layout_info{};
+            pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            pipeline_layout_info.setLayoutCount = 1;
+            pipeline_layout_info.pSetLayouts = &descriptor_layout_;
+            pipeline_layout_info.pushConstantRangeCount = 1;
+            pipeline_layout_info.pPushConstantRanges = &push_range;
+            require(api_.create_pipeline_layout(device_, &pipeline_layout_info, nullptr, &pipeline_layout_),
+                    "raw Vulkan pipeline-layout creation failed");
+
+            VkPipelineShaderStageCreateInfo stage{};
+            stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = shader_;
+            stage.pName = "main";
+            VkComputePipelineCreateInfo pipeline_info{};
+            pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            pipeline_info.stage = stage;
+            pipeline_info.layout = pipeline_layout_;
+            require(api_.create_compute_pipelines(device_, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
+                                                  &pipeline_),
+                    "raw Vulkan compute-pipeline creation failed");
+
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                           static_cast<std::uint32_t>(buffers.size())};
+            VkDescriptorPoolCreateInfo descriptor_pool_info{};
+            descriptor_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            descriptor_pool_info.maxSets = 1;
+            descriptor_pool_info.poolSizeCount = 1;
+            descriptor_pool_info.pPoolSizes = &pool_size;
+            require(api_.create_descriptor_pool(device_, &descriptor_pool_info, nullptr, &descriptor_pool_),
+                    "raw Vulkan descriptor-pool creation failed");
+            VkDescriptorSetAllocateInfo descriptor_allocate{};
+            descriptor_allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            descriptor_allocate.descriptorPool = descriptor_pool_;
+            descriptor_allocate.descriptorSetCount = 1;
+            descriptor_allocate.pSetLayouts = &descriptor_layout_;
+            require(api_.allocate_descriptor_sets(device_, &descriptor_allocate, &descriptor_set_),
+                    "raw Vulkan descriptor-set allocation failed");
+            std::vector<VkDescriptorBufferInfo> buffer_infos(buffers.size());
+            std::vector<VkWriteDescriptorSet> writes(buffers.size());
+            for (std::uint32_t index = 0; index < buffers.size(); ++index) {
+                buffer_infos[index] = {buffers[index]->buffer, 0, buffers[index]->size};
+                writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[index].dstSet = descriptor_set_;
+                writes[index].dstBinding = index;
+                writes[index].descriptorCount = 1;
+                writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[index].pBufferInfo = &buffer_infos[index];
+            }
+            api_.update_descriptor_sets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
+                                        nullptr);
+
+            VkCommandPoolCreateInfo command_pool_info{};
+            command_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            command_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            command_pool_info.queueFamilyIndex = device.compute_queue_family();
+            require(api_.create_command_pool(device_, &command_pool_info, nullptr, &command_pool_),
+                    "raw Vulkan command-pool creation failed");
+            VkCommandBufferAllocateInfo command_allocate{};
+            command_allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            command_allocate.commandPool = command_pool_;
+            command_allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            command_allocate.commandBufferCount = 1;
+            require(api_.allocate_command_buffers(device_, &command_allocate, &command_),
+                    "raw Vulkan command-buffer allocation failed");
+            VkFenceCreateInfo fence_info{};
+            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            require(api_.create_fence(device_, &fence_info, nullptr, &fence_),
+                    "raw Vulkan fence creation failed");
+
+            const bool timestamp_supported = timestamp_bits_ != 0 && api_.cmd_write_timestamp != nullptr &&
+                                             api_.cmd_reset_query_pool != nullptr &&
+                                             api_.create_query_pool != nullptr &&
+                                             static_cast<bool>(api_.get_query_pool_results);
+            if (timestamp_supported) {
+                VkQueryPoolCreateInfo query_info{};
+                query_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                query_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                query_info.queryCount = 2;
+                if (api_.create_query_pool(device_, &query_info, nullptr, &query_pool_) != VK_SUCCESS)
+                    query_pool_ = VK_NULL_HANDLE;
+            }
+        } catch (...) {
+            cleanup();
+            throw;
+        }
+    }
+
+    ~RawComputeRunner() { cleanup(); }
+
+    std::optional<std::uint64_t> dispatch(std::uint32_t groups_x, std::uint32_t groups_y,
+                                          const void* push_constants, std::uint32_t push_size,
+                                          bool collect_timestamp = false) {
+        if (api_.reset_command_buffer(command_, 0) != VK_SUCCESS)
+            throw std::runtime_error("raw Vulkan command reset failed");
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (api_.begin_command_buffer(command_, &begin) != VK_SUCCESS)
+            throw std::runtime_error("raw Vulkan command begin failed");
+        if (collect_timestamp && query_pool_ != VK_NULL_HANDLE) {
+            api_.cmd_reset_query_pool(command_, query_pool_, 0, 2);
+            api_.cmd_write_timestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, query_pool_, 0);
+        }
+        VkMemoryBarrier host_barrier{};
+        host_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        host_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+        host_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        api_.cmd_pipeline_barrier(command_, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                  0, 1, &host_barrier, 0, nullptr, 0, nullptr);
+        api_.cmd_bind_pipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+        api_.cmd_bind_descriptor_sets(command_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1,
+                                      &descriptor_set_, 0, nullptr);
+        api_.cmd_push_constants(command_, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size,
+                                push_constants);
+        api_.cmd_dispatch(command_, groups_x, groups_y, 1);
+        if (collect_timestamp && query_pool_ != VK_NULL_HANDLE)
+            api_.cmd_write_timestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, query_pool_, 1);
+        VkMemoryBarrier host_read_barrier{};
+        host_read_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        host_read_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        host_read_barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        api_.cmd_pipeline_barrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                                  0, 1, &host_read_barrier, 0, nullptr, 0, nullptr);
+        if (api_.end_command_buffer(command_) != VK_SUCCESS)
+            throw std::runtime_error("raw Vulkan command end failed");
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &command_;
+        if (api_.queue_submit(queue_, 1, &submit, fence_) != VK_SUCCESS ||
+            api_.wait_for_fences(device_, 1, &fence_, VK_TRUE, UINT64_MAX) != VK_SUCCESS ||
+            api_.reset_fences(device_, 1, &fence_) != VK_SUCCESS)
+            throw std::runtime_error("raw Vulkan dispatch submit/wait failed");
+        if (!collect_timestamp || query_pool_ == VK_NULL_HANDLE) return std::nullopt;
+        std::array<std::uint64_t, 2> timestamps{};
+        if (api_.get_query_pool_results(device_, query_pool_, 0, 2, sizeof(timestamps), timestamps.data(),
+                                        sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+            return std::nullopt;
+        auto ticks = timestamps[1] - timestamps[0];
+        if (timestamp_bits_ < 64) ticks &= (std::uint64_t{1} << timestamp_bits_) - 1;
+        return static_cast<std::uint64_t>(std::llround(static_cast<double>(ticks) * timestamp_period_));
+    }
+
+private:
+    void cleanup() noexcept {
+        if (query_pool_ != VK_NULL_HANDLE) api_.destroy_query_pool(device_, query_pool_, nullptr);
+        if (fence_ != VK_NULL_HANDLE) api_.destroy_fence(device_, fence_, nullptr);
+        if (command_pool_ != VK_NULL_HANDLE) api_.destroy_command_pool(device_, command_pool_, nullptr);
+        if (descriptor_pool_ != VK_NULL_HANDLE)
+            api_.destroy_descriptor_pool(device_, descriptor_pool_, nullptr);
+        if (pipeline_ != VK_NULL_HANDLE) api_.destroy_pipeline(device_, pipeline_, nullptr);
+        if (pipeline_layout_ != VK_NULL_HANDLE)
+            api_.destroy_pipeline_layout(device_, pipeline_layout_, nullptr);
+        if (descriptor_layout_ != VK_NULL_HANDLE)
+            api_.destroy_descriptor_set_layout(device_, descriptor_layout_, nullptr);
+        if (shader_ != VK_NULL_HANDLE) api_.destroy_shader_module(device_, shader_, nullptr);
+        query_pool_ = VK_NULL_HANDLE;
+        fence_ = VK_NULL_HANDLE;
+        command_pool_ = VK_NULL_HANDLE;
+        descriptor_pool_ = VK_NULL_HANDLE;
+        pipeline_ = VK_NULL_HANDLE;
+        pipeline_layout_ = VK_NULL_HANDLE;
+        descriptor_layout_ = VK_NULL_HANDLE;
+        shader_ = VK_NULL_HANDLE;
+    }
+    const kora::vk::Api& api_;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
+    double timestamp_period_ = 0.0;
+    std::uint32_t timestamp_bits_ = 0;
+    VkShaderModule shader_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout descriptor_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
+    VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    VkCommandBuffer command_ = VK_NULL_HANDLE;
+    VkFence fence_ = VK_NULL_HANDLE;
+    VkQueryPool query_pool_ = VK_NULL_HANDLE;
+};
+
 bool add_transfer_benchmarks(std::vector<Result>& results, const Options& options,
                              const kora::vk::PhysicalDeviceInfo& physical, const kora::vk::Device& device) {
     using namespace kora::detail;
@@ -1163,6 +1397,149 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
     return true;
 }
 
+bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const Options& options,
+                                           const kora::vk::PhysicalDeviceInfo& physical,
+                                           const kora::vk::Device& device,
+                                           const std::filesystem::path& vector_add_fixture) {
+    using namespace kora::detail;
+    const auto info = DeviceCaps::from_vulkan(physical).to_device_info();
+    const auto fixture_path = [&](const char* name) {
+        auto path = vector_add_fixture.parent_path() / name;
+        if (!std::filesystem::exists(path))
+            path = vector_add_fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" / name;
+        return path;
+    };
+    constexpr std::uint32_t count = 4096;
+    constexpr std::uint32_t local_size = 64;
+    constexpr VkDeviceSize float_bytes = count * sizeof(float);
+    constexpr VkDeviceSize uint_bytes = count * sizeof(std::uint32_t);
+    const auto make_buffer = [&](VkDeviceSize bytes) {
+        auto buffer = make_host_transfer_buffer(device, info, bytes);
+        if (!buffer) throw std::runtime_error("raw Vulkan compute buffer allocation failed");
+        return buffer;
+    };
+    const auto finish_samples = [&](const std::string& workload, RawComputeRunner& runner,
+                                    std::uint32_t groups_x, std::uint32_t groups_y, const void* push_data,
+                                    std::uint32_t push_size, const std::function<void()>& prepare,
+                                    const std::function<bool()>& validate) {
+        const auto operation = [&] {
+            prepare();
+            (void)runner.dispatch(groups_x, groups_y, push_data, push_size);
+        };
+        results.push_back(
+            run_checked("raw_vulkan_" + workload + "_dispatch_wait", operation, validate, options));
+        const auto timestamp = run_timestamps(
+            "raw_vulkan_" + workload + "_gpu_execution",
+            [&]() -> std::optional<std::uint64_t> {
+                prepare();
+                return runner.dispatch(groups_x, groups_y, push_data, push_size, true);
+            },
+            options);
+        if (timestamp) results.push_back(std::move(*timestamp));
+        operation();
+        if (!validate()) throw std::runtime_error("raw Vulkan output validation failed: " + workload);
+        return true;
+    };
+
+    struct SaxpyParams {
+        float scale;
+        std::uint32_t count;
+    };
+    static_assert(sizeof(SaxpyParams) == 8);
+    const SaxpyParams saxpy_params{2.0F, count};
+    auto saxpy_x = make_buffer(float_bytes);
+    auto saxpy_y = make_buffer(float_bytes);
+    auto* saxpy_x_values = reinterpret_cast<float*>(saxpy_x->mapped);
+    auto* saxpy_y_values = reinterpret_cast<float*>(saxpy_y->mapped);
+    std::fill_n(saxpy_x_values, count, 2.0F);
+    const std::vector<float> saxpy_initial(count, 1.0F);
+    std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
+    synchronize_mapped_buffer(device, *saxpy_x, true);
+    synchronize_mapped_buffer(device, *saxpy_y, true);
+    RawComputeRunner saxpy_runner(physical, device, fixture_path(KORA_BENCH_SAXPY_FIXTURE_NAME),
+                                  {saxpy_x.get(), saxpy_y.get()}, sizeof(saxpy_params));
+    finish_samples(
+        "saxpy_4096_upload", saxpy_runner, count / local_size, 1, &saxpy_params, sizeof(saxpy_params),
+        [&] {
+            std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
+            synchronize_mapped_buffer(device, *saxpy_y, true);
+        },
+        [&] {
+            synchronize_mapped_buffer(device, *saxpy_y, false);
+            return std::all_of(saxpy_y_values, saxpy_y_values + count,
+                               [](float value) { return value == 5.0F; });
+        });
+
+    const std::uint32_t count_push = count;
+    auto reduction_input = make_buffer(float_bytes);
+    auto reduction_output = make_buffer((count / local_size) * sizeof(float));
+    std::fill_n(reinterpret_cast<float*>(reduction_input->mapped), count, 1.0F);
+    synchronize_mapped_buffer(device, *reduction_input, true);
+    RawComputeRunner reduction_runner(physical, device, fixture_path(KORA_BENCH_REDUCTION_FIXTURE_NAME),
+                                      {reduction_input.get(), reduction_output.get()}, sizeof(count_push));
+    finish_samples(
+        "reduction_4096", reduction_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
+        [&] {
+            synchronize_mapped_buffer(device, *reduction_output, false);
+            const auto* values = reinterpret_cast<const float*>(reduction_output->mapped);
+            return std::all_of(values, values + count / local_size,
+                               [](float value) { return value == 64.0F; });
+        });
+
+    auto scan_input = make_buffer(uint_bytes);
+    auto scan_output = make_buffer(uint_bytes);
+    std::fill_n(reinterpret_cast<std::uint32_t*>(scan_input->mapped), count, 1U);
+    synchronize_mapped_buffer(device, *scan_input, true);
+    RawComputeRunner scan_runner(physical, device, fixture_path(KORA_BENCH_SCAN_FIXTURE_NAME),
+                                 {scan_input.get(), scan_output.get()}, sizeof(count_push));
+    finish_samples(
+        "tiled_scan_4096", scan_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
+        [&] {
+            synchronize_mapped_buffer(device, *scan_output, false);
+            const auto* values = reinterpret_cast<const std::uint32_t*>(scan_output->mapped);
+            return std::all_of(values, values + count,
+                               [index = std::uint32_t{0}](std::uint32_t value) mutable {
+                                   return value == (index++ % local_size) + 1;
+                               });
+        });
+
+    constexpr std::uint32_t dimension = 64;
+    constexpr std::uint32_t matrix_count = dimension * dimension;
+    constexpr VkDeviceSize matrix_bytes = matrix_count * sizeof(float);
+    auto matrix_a = make_buffer(matrix_bytes);
+    auto matrix_b = make_buffer(matrix_bytes);
+    auto matrix_c = make_buffer(matrix_bytes);
+    std::fill_n(reinterpret_cast<float*>(matrix_a->mapped), matrix_count, 1.0F);
+    std::fill_n(reinterpret_cast<float*>(matrix_b->mapped), matrix_count, 1.0F);
+    synchronize_mapped_buffer(device, *matrix_a, true);
+    synchronize_mapped_buffer(device, *matrix_b, true);
+    RawComputeRunner matmul_runner(physical, device, fixture_path(KORA_BENCH_MATMUL_FIXTURE_NAME),
+                                   {matrix_a.get(), matrix_b.get(), matrix_c.get()}, sizeof(dimension));
+    finish_samples(
+        "tiled_matmul_64", matmul_runner, dimension / 8, dimension / 8, &dimension, sizeof(dimension), [] {},
+        [&] {
+            synchronize_mapped_buffer(device, *matrix_c, false);
+            const auto* values = reinterpret_cast<const float*>(matrix_c->mapped);
+            return std::all_of(values, values + matrix_count, [](float value) { return value == 64.0F; });
+        });
+
+    auto stencil_input = make_buffer(float_bytes);
+    auto stencil_output = make_buffer(float_bytes);
+    std::fill_n(reinterpret_cast<float*>(stencil_input->mapped), count, 1.0F);
+    synchronize_mapped_buffer(device, *stencil_input, true);
+    RawComputeRunner stencil_runner(physical, device, fixture_path(KORA_BENCH_STENCIL_FIXTURE_NAME),
+                                    {stencil_input.get(), stencil_output.get()}, sizeof(count_push));
+    finish_samples(
+        "stencil_4096", stencil_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
+        [&] {
+            synchronize_mapped_buffer(device, *stencil_output, false);
+            const auto* values = reinterpret_cast<const float*>(stencil_output->mapped);
+            return values[0] == 2.0F && values[count - 1] == 2.0F &&
+                   std::all_of(values + 1, values + count - 1, [](float value) { return value == 3.0F; });
+        });
+    return true;
+}
+
 #ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
 bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path,
                         GpuDeviceReport& device_report) {
@@ -1221,6 +1598,21 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         if (defer_readback) builder.defer_readback();
         auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan dispatch failed");
+    };
+    const auto add_kora_gpu_timestamp = [&](std::string name, const std::function<void()>& operation) {
+        auto result = run_timestamps(
+            std::move(name),
+            [&]() -> std::optional<std::uint64_t> {
+                auto before = runtime.profiling_stats(selected_devices.front());
+                if (!before) return std::nullopt;
+                operation();
+                auto after = runtime.profiling_stats(selected_devices.front());
+                if (!after || after.value().last_submission_id == before.value().last_submission_id)
+                    return std::nullopt;
+                return after.value().last_duration_nanoseconds;
+            },
+            options);
+        if (result) results.push_back(std::move(*result));
     };
     results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
     const auto dispatch_tiny_batch = [&] {
@@ -1422,6 +1814,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                       [](float value) { return value == 5.0F; }))
         return false;
     results.push_back(run("gpu_saxpy_4096_upload_dispatch_wait", [&] { run_saxpy(); }, options));
+    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", run_saxpy);
 
     kora::KernelMetadata reduction_metadata;
     reduction_metadata.kernel_id = "kora_bench.reduction";
@@ -1461,6 +1854,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                         [](float value) { return value == 64.0F; }))
         return false;
     results.push_back(run("gpu_reduction_4096_dispatch_wait", run_reduction, options));
+    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", run_reduction);
 
     kora::KernelMetadata scan_metadata;
     scan_metadata.kernel_id = "kora_bench.scan_tile64";
@@ -1501,6 +1895,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                         }))
         return false;
     results.push_back(run("gpu_tiled_scan_4096_dispatch_wait", run_scan, options));
+    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", run_scan);
 
     kora::KernelMetadata matmul_metadata;
     matmul_metadata.kernel_id = "kora_bench.tiled_matmul";
@@ -1546,6 +1941,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                                            [](float value) { return value == 64.0F; }))
         return false;
     results.push_back(run("gpu_tiled_matmul_64_dispatch_wait", run_matmul, options));
+    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", run_matmul);
 
     kora::KernelMetadata stencil_metadata;
     stencil_metadata.kernel_id = "kora_bench.stencil";
@@ -1585,6 +1981,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                      [](float value) { return value == 3.0F; }))
         return false;
     results.push_back(run("gpu_stencil_4096_dispatch_wait", run_stencil, options));
+    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", run_stencil);
 
     auto loader = kora::vk::Loader::load();
     if (!loader) return false;
@@ -1636,6 +2033,8 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         if (!add_raw_vector_add_benchmark(results, options, selected_physical, device.value(), fixture, count,
                                           device_report))
             return false;
+    if (!add_raw_non_vector_compute_benchmarks(results, options, selected_physical, device.value(), fixture))
+        return false;
     kora::vk::CommandPoolSet::Options pool_options;
     pool_options.queue_family = device.value().compute_queue_family();
     pool_options.ring_size = 16;
