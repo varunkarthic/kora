@@ -92,8 +92,8 @@ Result<Record> decode(const std::vector<std::uint8_t>& bytes, const std::string&
         !get_string(parsed.value().find("device_uuid"), record.device_uuid) ||
         !get_u64(parsed.value().find("driver_version"), driver) ||
         !get_u64(parsed.value().find("kora_schema"), kora_schema) || schema != kSchemaVersion ||
-        driver > UINT32_MAX || kora_schema != 1 || record.device_uuid != expected_uuid ||
-        driver != expected_driver)
+        driver > UINT32_MAX || kora_schema != static_cast<std::uint32_t>(kora::kSchemaVersion) ||
+        record.device_uuid != expected_uuid || driver != expected_driver)
         return invalid("calibration record identity or schema mismatch");
     record.schema = static_cast<std::uint32_t>(schema);
     record.driver_version = static_cast<std::uint32_t>(driver);

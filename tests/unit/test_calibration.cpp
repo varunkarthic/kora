@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include "core/calibration.hpp"
+#include "kora/version.hpp"
 
 namespace kora::detail::calibration {
 namespace {
@@ -29,6 +30,7 @@ TEST(CalibrationRecord, RoundTripsAllMeasurements) {
     ASSERT_TRUE(decoded) << decoded.error().describe();
     EXPECT_EQ(decoded.value().device_uuid, record.device_uuid);
     EXPECT_EQ(decoded.value().driver_version, record.driver_version);
+    EXPECT_EQ(decoded.value().kora_schema, static_cast<std::uint32_t>(kora::kSchemaVersion));
     EXPECT_EQ(decoded.value().submit_overhead_ns, record.submit_overhead_ns);
     EXPECT_EQ(decoded.value().tiny_dispatch_ns, record.tiny_dispatch_ns);
     EXPECT_EQ(decoded.value().h2d_bytes_per_second, record.h2d_bytes_per_second);
@@ -52,6 +54,10 @@ TEST(CalibrationRecord, RejectsCorruptionAndIdentityOrSchemaMismatch) {
     text.replace(text.find(old_schema), old_schema.size(), newer_schema);
     incompatible.assign(text.begin(), text.end());
     EXPECT_FALSE(decode(incompatible, record.device_uuid, record.driver_version));
+
+    auto incompatible_kora_schema = record;
+    incompatible_kora_schema.kora_schema = kora::kSchemaVersion == 1 ? 2U : 1U;
+    EXPECT_FALSE(decode(encode(incompatible_kora_schema), record.device_uuid, record.driver_version));
 }
 
 TEST(CalibrationRecord, AtomicFileRoundTripAndCorruptFileAreCacheMisses) {
