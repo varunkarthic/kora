@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-10-12
+
 ### Added
 - Expose opt-in per-dispatch host phase timings and add a diagnostic `kora-bench --profile-phases` mode for validation, pipeline lookup, buffer residency, submit, queue, descriptor, command-recording, completion, and device-timestamp measurements.
 
@@ -459,7 +461,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.14...HEAD
+[0.2.14]: https://github.com/varunkarthic/kora/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/varunkarthic/kora/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/varunkarthic/kora/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/varunkarthic/kora/compare/v0.2.10...v0.2.11
