@@ -37,6 +37,16 @@ jobs:
           python3 tools/ci/check_changelog_sections.py \
             "refs/remotes/origin/${BASE_REF}" \
             "refs/remotes/origin/pull/${PR_NUMBER}/head"
+      - name: Require a new Unreleased changelog entry
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/check_changelog_sections.py \
+            "refs/remotes/origin/${BASE_REF}" \
+            "refs/remotes/origin/pull/${PR_NUMBER}/head" \
+            --require-unreleased-entry
       - name: Validate the reviewed v0.2.5 changelog correction for issue 176
         if: github.event_name == 'pull_request' && github.head_ref == 'issue/176-changelog-tag-alignment'
         env:

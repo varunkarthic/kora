@@ -38,6 +38,28 @@ def release_sections(text: str) -> dict[str, str]:
     return sections
 
 
+def unreleased_entries(text: str) -> set[str]:
+    """Return bullet entries beneath the Unreleased heading and its categories."""
+    lines = text.splitlines()
+    headings = [i for i, line in enumerate(lines) if line.strip() == "## [Unreleased]"]
+    if len(headings) != 1:
+        raise ValueError("CHANGELOG.md must contain exactly one Unreleased heading")
+    start = headings[0] + 1
+    entries: set[str] = set()
+    category: str | None = None
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("### "):
+            category = line[4:].strip()
+            if category not in {"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}:
+                category = None
+        if re.match(r"^\s*-\s+\S", line):
+            if category is not None:
+                entries.add(f"{category}: {line.strip()}")
+    return entries
+
+
 def is_approved_correction(version: str, base_section: str, head_section: str) -> bool:
     correction = APPROVED_CORRECTIONS.get(version)
     if correction is None or base_section.count(correction) != 1:
@@ -47,7 +69,20 @@ def is_approved_correction(version: str, base_section: str, head_section: str) -
     return normalize_blank_lines(expected) == normalize_blank_lines(head_section)
 
 
-def validate(base_text: str, head_text: str, allowed_versions: set[str] | None = None) -> None:
+def validate(
+    base_text: str,
+    head_text: str,
+    allowed_versions: set[str] | None = None,
+    require_unreleased_entry: bool = False,
+) -> None:
+    if require_unreleased_entry:
+        base_entries = unreleased_entries(base_text)
+        head_entries = unreleased_entries(head_text)
+        if not head_entries - base_entries:
+            raise ValueError(
+                "pull request must add a bullet under [Unreleased] in CHANGELOG.md; "
+                "use an Added, Changed, Deprecated, Removed, Fixed, or Security heading"
+            )
     base_sections = release_sections(base_text)
     head_sections = release_sections(head_text)
     changed = []
@@ -96,9 +131,19 @@ def main() -> int:
         default=[],
         help="explicitly reviewed historical release section correction",
     )
+    parser.add_argument(
+        "--require-unreleased-entry",
+        action="store_true",
+        help="require a new categorized bullet beneath [Unreleased]",
+    )
     args = parser.parse_args()
     try:
-        validate(git_show(args.base_ref), git_show(args.head_ref), set(args.allow_version))
+        validate(
+            git_show(args.base_ref),
+            git_show(args.head_ref),
+            set(args.allow_version),
+            require_unreleased_entry=args.require_unreleased_entry,
+        )
     except (RuntimeError, ValueError) as error:
         print(error)
         return 1

@@ -19,6 +19,14 @@ branch and that every already-published changelog section is unchanged. This cat
 branches whose changes would otherwise merge beneath an existing release heading after the automatic
 release commit arrives; new user-visible entries belong under `[Unreleased]`.
 
+CI also requires each pull request to add at least one new bullet under `[Unreleased]`, nested beneath
+one of the Keep a Changelog categories (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or
+`Security`). This applies to documentation, benchmark, runtime, and repository-maintenance changes;
+release tooling and workflow changes can describe their user-visible process impact under `Changed`
+or `Fixed` instead of relying on a path-based exemption. An unchanged, empty, uncategorized, or
+duplicate entry does not satisfy the gate. The release-time non-empty check remains as a defense in
+depth.
+
 Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These jobs use the same
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete
 platform gate that precedes a release.

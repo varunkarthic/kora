@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Correct the benchmark documentation to identify the current `kora-bench` JSON schema as version 3.
+- Reject pull requests that omit a new categorized `[Unreleased]` changelog entry before they can merge.
+
 ## [0.2.6] - 2026-10-12
 
 ### Fixed
