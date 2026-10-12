@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -48,6 +49,70 @@ struct Result {
     std::uint64_t bytes_transferred = 0;
     std::uint64_t throughput_bytes_per_second = 0;
 };
+
+struct GpuDeviceReport {
+    std::uint32_t index = 0;
+    std::string name;
+    std::string api_version;
+    std::string driver_name;
+    std::uint32_t compute_queue_family = 0;
+};
+
+void json_string(std::ostream& out, std::string_view value) {
+    out << '"';
+    for (const unsigned char c : value) {
+        switch (c) {
+            case '"':
+                out << "\\\"";
+                break;
+            case '\\':
+                out << "\\\\";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                if (c < 0x20U) {
+                    out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<unsigned>(c)
+                        << std::dec << std::setfill(' ');
+                } else {
+                    out << static_cast<char>(c);
+                }
+        }
+    }
+    out << '"';
+}
+
+std::string version_string(std::uint32_t version) {
+    return std::to_string(VK_VERSION_MAJOR(version)) + "." + std::to_string(VK_VERSION_MINOR(version)) + "." +
+           std::to_string(VK_VERSION_PATCH(version));
+}
+
+std::string_view gpu_path(std::string_view name) {
+    if (name.starts_with("gpu_")) return "kora_runtime";
+    if (name.starts_with("kora_transfer_copy_") || name.starts_with("transfer_"))
+        return "kora_transfer_engine";
+    if (name.starts_with("raw_vulkan_") || name.starts_with("command_pool_")) return "raw_vulkan";
+    return {};
+}
+
+bool selected_device_matches(const kora::DeviceId& selected, const kora::vk::PhysicalDeviceInfo& physical) {
+    if (selected.uuid.empty()) return true;
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string uuid;
+    uuid.reserve(sizeof(physical.id_properties.deviceUUID) * 2);
+    for (const auto byte : physical.id_properties.deviceUUID) {
+        uuid.push_back(hex[byte >> 4U]);
+        uuid.push_back(hex[byte & 0x0fU]);
+    }
+    return uuid == selected.uuid;
+}
 
 bool parse_count(std::string_view text, std::size_t& value) {
     if (text.empty()) return false;
@@ -652,7 +717,8 @@ bool add_raw_vector_add_benchmark(std::vector<Result>& results, const Options& o
 }
 
 #ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
-bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path) {
+bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path,
+                        GpuDeviceReport& device_report) {
     kora::RuntimeOptions runtime_options;
     runtime_options.telemetry = kora::TelemetryLevel::Off;
     runtime_options.enable_startup_calibration = false;
@@ -665,6 +731,11 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         return false;
     }
     auto runtime = std::move(runtime_result).value();
+    const auto selected_devices = runtime.devices();
+    if (selected_devices.empty()) {
+        std::cerr << "GPU benchmarks unavailable: Runtime selected no devices\n";
+        return false;
+    }
     kora::KernelMetadata metadata;
     metadata.kernel_id = "kora_bench.vector_add";
     metadata.local_size = {64, 1, 1};
@@ -940,16 +1011,30 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     if (!instance) return false;
     auto physical_devices = instance.value().physical_devices();
     if (!physical_devices || physical_devices.value().empty()) return false;
+    const auto selected_index = selected_devices.front().index;
+    if (selected_index >= physical_devices.value().size()) {
+        std::cerr << "GPU benchmarks unavailable: Runtime-selected Vulkan device was not enumerated\n";
+        return false;
+    }
+    const auto& selected_physical = physical_devices.value()[selected_index];
+    if (!selected_device_matches(selected_devices.front(), selected_physical)) {
+        std::cerr << "GPU benchmarks unavailable: Runtime and raw Vulkan device identities do not match\n";
+        return false;
+    }
     kora::vk::DeviceOptions device_options;
     device_options.enable_dedicated_transfer_queue = false;
     device_options.enable_timeline_semaphore = false;
     device_options.enable_synchronization2 = false;
-    auto device = instance.value().create_device(physical_devices.value().front(), device_options);
+    auto device = instance.value().create_device(selected_physical, device_options);
     if (!device) return false;
-    if (!add_transfer_benchmarks(results, options, physical_devices.value().front(), device.value()))
-        return false;
-    if (!add_raw_vector_add_benchmark(results, options, physical_devices.value().front(), device.value(),
-                                      fixture))
+    device_report.index = selected_index;
+    device_report.name = selected_physical.properties.deviceName;
+    device_report.api_version = version_string(selected_physical.properties.apiVersion);
+    device_report.driver_name = selected_physical.vulkan12_properties.driverName;
+    if (device_report.driver_name.empty()) device_report.driver_name = "unreported";
+    device_report.compute_queue_family = device.value().compute_queue_family();
+    if (!add_transfer_benchmarks(results, options, selected_physical, device.value())) return false;
+    if (!add_raw_vector_add_benchmark(results, options, selected_physical, device.value(), fixture))
         return false;
     kora::vk::CommandPoolSet::Options pool_options;
     pool_options.queue_family = device.value().compute_queue_family();
@@ -989,6 +1074,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::vector<Result> results;
+    GpuDeviceReport gpu_device;
     try {
         kora::TaskGraph reused_graph;
         for (std::uint32_t index = 0; index < 64; ++index) {
@@ -1038,7 +1124,7 @@ int main(int argc, char** argv) {
     if (options.gpu) {
 #ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
         try {
-            if (!add_gpu_benchmarks(results, options, argv[0])) return 3;
+            if (!add_gpu_benchmarks(results, options, argv[0], gpu_device)) return 3;
         } catch (const std::exception& error) {
             std::cerr << "GPU benchmark workload failed: " << error.what() << '\n';
             return 1;
@@ -1048,13 +1134,34 @@ int main(int argc, char** argv) {
         return 3;
 #endif
     }
-    std::cout << "{\"schema_version\":1,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
-              << ",\"warmup\":" << options.warmup << ",\"results\":[";
+    std::cout << "{\"schema_version\":2,\"clock\":\"steady_clock\",\"iterations\":" << options.iterations
+              << ",\"warmup\":" << options.warmup;
+    if (options.gpu) {
+        std::cout << ",\"gpu_measurements\":{\"backend\":\"vulkan\",\"device_index\":" << gpu_device.index
+                  << ",\"device_name\":";
+        json_string(std::cout, gpu_device.name);
+        std::cout << ",\"api_version\":";
+        json_string(std::cout, gpu_device.api_version);
+        std::cout << ",\"driver_name\":";
+        json_string(std::cout, gpu_device.driver_name);
+        std::cout << ",\"compute_queue_family\":" << gpu_device.compute_queue_family
+                  << ",\"same_physical_device_for_kora_and_raw_vulkan\":true"
+                     ",\"paths\":[\"kora_runtime\",\"kora_transfer_engine\",\"raw_vulkan\"]}";
+    }
+    std::cout << ",\"results\":[";
     for (std::size_t index = 0; index < results.size(); ++index) {
         const auto& result = results[index];
         if (index != 0) std::cout << ',';
         std::cout << "{\"name\":\"" << result.name << "\",\"unit\":\"ns\",\"median\":" << result.median_ns
                   << ",\"p95\":" << result.p95_ns;
+        if (options.gpu) {
+            const auto path = gpu_path(result.name);
+            if (!path.empty()) {
+                std::cout << ",\"path\":";
+                json_string(std::cout, path);
+                std::cout << ",\"device_index\":" << gpu_device.index;
+            }
+        }
         if (result.bytes_transferred != 0)
             std::cout << ",\"bytes_transferred\":" << result.bytes_transferred
                       << ",\"throughput_bytes_per_second\":" << result.throughput_bytes_per_second;

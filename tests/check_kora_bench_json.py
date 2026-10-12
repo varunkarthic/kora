@@ -15,7 +15,7 @@ if completed.returncode == 3:
     sys.exit(77)
 completed.check_returncode()
 report = json.loads(completed.stdout)
-assert report["schema_version"] == 1
+assert report["schema_version"] == 2
 assert report["clock"] == "steady_clock"
 assert report["iterations"] == 3
 assert report["warmup"] == 1
@@ -31,6 +31,14 @@ expected_names = {
 vector_sizes = (1, 64, 256, 1024, 4096, 65536, 262144, 1048576, 4194240)
 expected_names |= {f"cpu_vector_add_{count}" for count in vector_sizes}
 if "--gpu" in arguments:
+    gpu = report["gpu_measurements"]
+    assert gpu["backend"] == "vulkan"
+    assert isinstance(gpu["device_index"], int) and gpu["device_index"] >= 0
+    assert gpu["device_name"] and gpu["api_version"] and gpu["driver_name"]
+    assert isinstance(gpu["compute_queue_family"], int)
+    assert gpu["same_physical_device_for_kora_and_raw_vulkan"] is True
+    assert set(gpu["paths"]) == {"kora_runtime", "kora_transfer_engine", "raw_vulkan"}
+    assert not {"uuid", "device_uuid", "vendor_id", "device_id"}.intersection(gpu)
     expected_names |= {
         "gpu_tiny_dispatch_1",
         "gpu_tiny_dispatch_batch_10",
@@ -63,3 +71,6 @@ for result in report["results"]:
     if result["name"].startswith(("transfer_", "raw_vulkan_copy_", "kora_transfer_copy_")):
         assert result["bytes_transferred"] in (4096, 65536, 1048576)
         assert result["throughput_bytes_per_second"] > 0
+    if "--gpu" in arguments and result["name"].startswith(("gpu_", "transfer_", "raw_vulkan_", "kora_transfer_copy_", "command_pool_")):
+        assert result["device_index"] == report["gpu_measurements"]["device_index"]
+        assert result["path"] in report["gpu_measurements"]["paths"]

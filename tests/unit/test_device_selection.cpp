@@ -22,13 +22,14 @@ DeviceCandidate candidate(std::uint32_t index, DeviceKind kind, CapabilityTier t
 
 }  // namespace
 
-TEST(DeviceSelection, AutoUsesCapabilitiesNotDiscreteType) {
+TEST(DeviceSelection, AutoCanSelectDeviceAfterFirstEnumerationEntry) {
     ResolvedOptions options;
     const std::vector devices{candidate(0, DeviceKind::Discrete, CapabilityTier::A, 8),
                               candidate(1, DeviceKind::Integrated, CapabilityTier::C, 4)};
     auto selected = kora::select_devices(options, devices);
     ASSERT_TRUE(selected);
     EXPECT_EQ(selected.value()[0].index, 1u);
+    EXPECT_NE(selected.value()[0].index, devices.front().id.index);
 }
 
 TEST(DeviceSelection, ExplicitPreferencesWinAndFallBack) {

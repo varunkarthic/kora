@@ -93,14 +93,15 @@ or kernel performance.
 
 ## Report contract
 
-The root object has `schema_version`, `clock`, `iterations`, `warmup`, and `results`. Each result has
+The root object has `schema_version: 2`, `clock`, `iterations`, `warmup`, and `results`. Each result has
 a stable `name`, `unit`, `median`, `p95`, and `samples` array. Transfer results also report
 `bytes_transferred` and `throughput_bytes_per_second`, derived from transferred bytes and median
-latency. Percentiles use nearest-rank ordering:
-the rank is `ceil(p * N)`. The runner emits workload records in a fixed order and records no paths,
-device identifiers, or private configuration. Timing values naturally vary with host load and
-compiler, so compare reports only when the machine, build type, compiler, and workload parameters
-are recorded alongside them.
+latency. GPU reports add a `gpu_measurements` object with backend, selected enumeration index,
+sanitized device name, Vulkan API version, driver name, compute queue-family index, matched-device
+assertion, and compared paths. Every GPU result identifies its path and selected device index. No
+UUID, vendor ID, or device ID is emitted. Percentiles use nearest-rank ordering: the rank is
+`ceil(p * N)`. Timing values naturally vary with host load and compiler, so compare reports only when
+the machine, build type, compiler, and workload parameters are recorded alongside them.
 
 ## Scope and interpretation
 
@@ -115,17 +116,21 @@ wired into `Runtime::dispatch()`.
 ## Reference run and results
 
 The following reference was collected on one local machine; it is included to make results
-interpretable, not to predict another system. The GPU run explicitly used enumeration index 0 for
-KORA (`KORA_DEVICE=0`), matching the raw Vulkan helper's first-enumerated physical device. The
-benchmark runner does not yet enforce or emit this identity for arbitrary configurations; until
-[issue #170](https://github.com/varunkarthic/kora/issues/170) is resolved, pin the device and record
-the environment when comparing KORA against raw Vulkan.
+interpretable, not to predict another system. KORA and raw Vulkan use the physical device selected by
+`Runtime::devices()[0]`. The benchmark resolves that stable enumeration index against the Vulkan
+instance's physical-device list and fails the GPU comparison if it cannot find the exact device. Raw
+dispatch and transfer helpers create their Vulkan device from that same physical-device record. Set
+`KORA_DEVICE` to pin selection when reproducing results. The JSON report records the sanitized device
+name, API and driver names, selected index, compute queue family, and measurement path for each GPU
+result; UUIDs and vendor/device IDs are omitted. Runtime and raw helpers share the selected physical
+device, while their host orchestration, resource setup, and timing boundaries remain intentionally
+different.
 
 | Environment field | Value |
 | --- | --- |
 | Operating system | macOS 27.0 (build 26A428), arm64 |
 | CPU/device | Apple M4 |
-| KORA GPU selection | `KORA_DEVICE=0`, Apple M4 via KosmicKrisp, Vulkan 1.3.354 |
+| KORA and raw Vulkan selection | Runtime-selected index 0 via `KORA_DEVICE=0`, Apple M4 via KosmicKrisp, Vulkan 1.3.354 |
 | Compiler | AppleClang 21.0.0 |
 | Build | CMake `release` preset, 64-bit |
 | CMake / Ninja | CMake 4.4.2; repository preset uses Ninja |

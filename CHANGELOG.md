@@ -14,9 +14,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 - Make `kora-info` report that runtime pipeline-cache state was not queried, rather than implying the cache is absent or uninitialized.
+- Ensure KORA and raw Vulkan benchmark measurements use the same Runtime-selected physical device and identify the sanitized device and path in JSON.
 
 ### Changed
 - Bump the `kora-info` JSON schema to version 2 and move pipeline-cache reporting to the root-level `pipeline_cache_state` field.
+- Bump the `kora-bench` JSON schema to version 2 with GPU device and measurement-path metadata.
 ## [0.2.0] - 2026-10-12
 
 ### Changed
