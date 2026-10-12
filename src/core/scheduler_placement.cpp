@@ -1,6 +1,7 @@
 #include "core/scheduler_placement.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 #include "core/calibration_cost.hpp"
@@ -69,6 +70,16 @@ Result<DeviceId> select_adaptive_device(const std::vector<RuntimePlacementCandid
         cost.input_transfer_ns =
             measured.value().input_transfer_ns.value_or(0) + measured.value().device_copy_ns.value_or(0);
         cost.execute_ns = measured.value().kernel_ns.value_or(0);
+        if (candidate.online_execution && candidate.online_execution->count >= 5 &&
+            std::isfinite(candidate.online_execution->ewma) &&
+            std::isfinite(candidate.online_execution->ew_variance) && candidate.online_execution->ewma > 0 &&
+            candidate.online_execution->ew_variance >= 0) {
+            const auto& observation = *candidate.online_execution;
+            const auto confidence =
+                static_cast<double>(observation.count) / (static_cast<double>(observation.count) + 5.0);
+            const auto conservative_sample = observation.ewma + std::sqrt(observation.ew_variance);
+            cost.execute_ns = (1.0 - confidence) * cost.execute_ns + confidence * conservative_sample;
+        }
         cost.required_output_ns = measured.value().output_transfer_ns.value_or(0);
         cost.synchronization_ns = measured.value().submit_completion_ns.value_or(0);
         cost.predicted_usage_bytes = static_cast<double>(workload.required_device_memory_bytes);

@@ -81,9 +81,20 @@ struct KernelState {
     std::vector<std::uint32_t> words;
     std::uint64_t runtime_id = 0;
     std::uint64_t device_index = 0;
+    std::uint64_t semantic_identity = 0;
     std::array<std::uint32_t, 3> local_size_spec_ids{};
     std::shared_ptr<detail::kernel::WorkgroupAutotuner> autotuner;
     std::vector<std::string> autotune_keys;
+};
+
+struct PendingPerformanceObservation {
+    std::string execution_key;
+    std::string submission_key;
+    std::string transfer_key;
+    std::string queue_completion_key;
+    std::uint64_t submission_nanoseconds = 0;
+    std::uint64_t transfer_nanoseconds = 0;
+    std::uint64_t completion_elapsed_nanoseconds = 0;
 };
 
 struct DispatchContext {
@@ -93,6 +104,8 @@ struct DispatchContext {
     std::uint64_t runtime_id = 0;
     std::size_t device_index = 0;
     const DeviceInfo* info = nullptr;
+    std::string device_uuid;
+    std::uint32_t driver_version = 0;
     detail::kernel::PipelineManager* pipelines = nullptr;
     detail::TransferEngine* transfers = nullptr;
     vk::QueueContext* queue = nullptr;
@@ -118,6 +131,7 @@ struct DispatchContext {
         std::string key;
     };
     std::unordered_map<std::uint64_t, PendingAutotune> pending_autotune;
+    std::unordered_map<std::uint64_t, PendingPerformanceObservation> pending_observations;
     std::shared_ptr<detail::PerformanceDatabase> performance_database;
     std::filesystem::path performance_database_path;
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
@@ -152,6 +166,7 @@ struct AdaptiveDispatchState {
     DeviceId original_id;
     std::shared_ptr<DispatchContext> original_context;
     std::shared_ptr<const KernelState> original_kernel;
+    AdaptiveDispatchWorkload workload;
     std::vector<std::shared_ptr<DispatchContext>> contexts;
 };
 
@@ -160,28 +175,56 @@ void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
                               const std::shared_ptr<PerformanceDatabase>& database,
                               const std::filesystem::path& database_path) {
     if (!dispatch || !database) return;
-    bool changed = false;
+    bool save_required = false;
     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
     for (const auto& sample : samples) {
         DispatchContext::PendingAutotune pending;
+        PendingPerformanceObservation observation;
         {
             std::lock_guard lock(dispatch->submit_mutex);
             const auto found = dispatch->pending_autotune.find(sample.submission_id);
-            if (found == dispatch->pending_autotune.end()) continue;
-            pending = std::move(found->second);
-            dispatch->pending_autotune.erase(found);
+            if (found != dispatch->pending_autotune.end()) {
+                pending = std::move(found->second);
+                dispatch->pending_autotune.erase(found);
+            }
+            const auto observed = dispatch->pending_observations.find(sample.submission_id);
+            if (observed != dispatch->pending_observations.end()) {
+                observation = std::move(observed->second);
+                dispatch->pending_observations.erase(observed);
+            }
         }
         const auto duration = static_cast<double>(sample.duration_nanoseconds);
-        if (!pending.tuner->observe(pending.trial, duration)) continue;
-        if (now_ms >= 0 && !pending.trial.warmup) {
-            changed = static_cast<bool>(
-                          database->observe(pending.key, duration, static_cast<std::uint64_t>(now_ms))) ||
-                      changed;
+        if (pending.tuner && pending.tuner->observe(pending.trial, duration) && now_ms >= 0 &&
+            !pending.trial.warmup) {
+            save_required = static_cast<bool>(database->observe(pending.key, duration,
+                                                                static_cast<std::uint64_t>(now_ms))) ||
+                            save_required;
+        }
+        if (now_ms >= 0) {
+            const auto observed_at = static_cast<std::uint64_t>(now_ms);
+            const auto observe_domain = [&](const std::string& key, std::uint64_t nanoseconds) {
+                if (key.empty() || nanoseconds == 0) return;
+                const auto before = database->query(key);
+                const auto before_count = before ? before.value().count : 0;
+                if (!database->observe(key, static_cast<double>(nanoseconds), observed_at)) return;
+                const auto after = database->query(key);
+                if (after && after.value().count != before_count &&
+                    (after.value().count == 1 || after.value().count == 5 || after.value().count % 8 == 0))
+                    save_required = true;
+            };
+            observe_domain(observation.execution_key, sample.duration_nanoseconds);
+            observe_domain(observation.submission_key, observation.submission_nanoseconds);
+            observe_domain(observation.transfer_key, observation.transfer_nanoseconds);
+            const auto queue_wait =
+                observation.completion_elapsed_nanoseconds > sample.duration_nanoseconds
+                    ? observation.completion_elapsed_nanoseconds - sample.duration_nanoseconds
+                    : 0;
+            observe_domain(observation.queue_completion_key, queue_wait);
         }
     }
-    if (changed) (void)database->save(database_path);
+    if (save_required) (void)database->save(database_path);
 }
 
 }  // namespace detail
@@ -201,6 +244,46 @@ std::string uuid_string(const VkPhysicalDeviceIDProperties& properties) {
         value.push_back(kHex[byte & 0x0fU]);
     }
     return value;
+}
+
+std::uint64_t semantic_kernel_identity(const detail::KernelState& kernel) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    auto append = [&](std::uint8_t byte) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    };
+    for (const auto word : kernel.words)
+        for (unsigned shift = 0; shift < 32; shift += 8) append(static_cast<std::uint8_t>(word >> shift));
+    for (const unsigned char character : kernel.entry_point) append(character);
+    return hash == 0 ? 1 : hash;
+}
+
+std::uint8_t workload_bucket(std::uint64_t work) {
+    std::uint8_t bucket = 0;
+    while (work > 1) {
+        work >>= 1U;
+        ++bucket;
+    }
+    return bucket;
+}
+
+std::optional<detail::PerformanceStats> query_execution_observation(
+    const std::shared_ptr<detail::PerformanceDatabase>& database, const DeviceId& id,
+    std::uint32_t driver_version, std::uint64_t kernel_identity, const AdaptiveDispatchWorkload& workload,
+    std::uint64_t now_ms) {
+    if (!database || id.uuid.empty()) return std::nullopt;
+    const detail::PerformanceObservationKey identity{
+        .device_uuid = id.uuid,
+        .driver_version = driver_version,
+        .runtime_schema = static_cast<std::uint32_t>(kora::kSchemaVersion),
+        .kernel_identity = kernel_identity,
+        .workload_class = static_cast<std::uint8_t>(workload.kernel_kind),
+        .workload_bucket = workload_bucket(workload.kernel_work),
+        .timing_domain = detail::PerformanceTimingDomain::DeviceExecution,
+    };
+    auto key = detail::performance_observation_key(identity);
+    if (!key) return std::nullopt;
+    return database->query_confident(key.value(), now_ms);
 }
 
 DeviceKind device_kind(VkPhysicalDeviceType type) {
@@ -699,6 +782,8 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
 }
 
 Result<Event> DispatchBuilder::submit() {
+    const auto host_submit_started = std::chrono::steady_clock::now();
+    std::uint64_t upload_wait_nanoseconds = 0;
     if (adaptive_state_) {
         if (verification_policy_)
             return Error(ErrorCode::UnsupportedFeature,
@@ -872,10 +957,17 @@ Result<Event> DispatchBuilder::submit() {
             contents = Error(ErrorCode::StaleHandle, "host buffer changed while preparing an upload");
         }
         if (!contents) return std::move(contents).error();
+        const auto transfer_started = std::chrono::steady_clock::now();
         auto uploaded = context_->transfers->upload(vk_buffers[i], 0, contents.value());
         if (!uploaded) return std::move(uploaded).error();
         auto upload_status = uploaded.value().wait();
         if (!upload_status) return std::move(upload_status).error();
+        const auto transfer_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now() - transfer_started)
+                                          .count();
+        if (transfer_elapsed > 0 && static_cast<std::uint64_t>(transfer_elapsed) <=
+                                        std::numeric_limits<std::uint64_t>::max() - upload_wait_nanoseconds)
+            upload_wait_nanoseconds += static_cast<std::uint64_t>(transfer_elapsed);
         context_->upload_count.fetch_add(1, std::memory_order_relaxed);
         {
             std::lock_guard lock(context_->submit_mutex);
@@ -902,14 +994,38 @@ Result<Event> DispatchBuilder::submit() {
     auto promise = std::make_shared<detail::EventPromise>();
     auto record_status = std::make_shared<Status>();
     auto event = promise->event();
+    detail::PendingPerformanceObservation observation;
+    if (adaptive_state_ && !ctx->device_uuid.empty()) {
+        detail::PerformanceObservationKey observation_identity{
+            .device_uuid = ctx->device_uuid,
+            .driver_version = ctx->driver_version,
+            .runtime_schema = static_cast<std::uint32_t>(kora::kSchemaVersion),
+            .kernel_identity = kernel_->semantic_identity,
+            .workload_class = static_cast<std::uint8_t>(adaptive_state_->workload.kernel_kind),
+            .workload_bucket = workload_bucket(adaptive_state_->workload.kernel_work),
+            .timing_domain = detail::PerformanceTimingDomain::DeviceExecution,
+        };
+        const auto encode_domain = [&](detail::PerformanceTimingDomain domain) {
+            observation_identity.timing_domain = domain;
+            auto encoded = detail::performance_observation_key(observation_identity);
+            return encoded ? std::move(encoded).value() : std::string{};
+        };
+        observation.execution_key = encode_domain(detail::PerformanceTimingDomain::DeviceExecution);
+        observation.submission_key = encode_domain(detail::PerformanceTimingDomain::HostSubmission);
+        observation.transfer_key = encode_domain(detail::PerformanceTimingDomain::HostTransfer);
+        observation.queue_completion_key = encode_domain(detail::PerformanceTimingDomain::QueueCompletion);
+    }
     struct DispatchWork {
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         std::uint64_t submission_id = 0;
         bool timestamp_recorded = false;
         detail::kernel::WorkgroupAutotuner::Trial autotune_trial;
+        detail::PendingPerformanceObservation observation;
+        std::chrono::steady_clock::time_point queued_at;
     };
     auto work = std::make_shared<DispatchWork>();
     work->autotune_trial = autotune_trial;
+    work->observation = std::move(observation);
     auto allocated_descriptors = std::make_shared<std::vector<VkDescriptorSet>>();
     vk::QueueContext::Submission submission;
     submission.coalescible = true;
@@ -1006,6 +1122,8 @@ Result<Event> DispatchBuilder::submit() {
                     ctx->pending_autotune.insert_or_assign(
                         work->submission_id,
                         detail::DispatchContext::PendingAutotune{tuner, work->autotune_trial, key});
+                if (work->timestamp_recorded && !work->observation.execution_key.empty())
+                    ctx->pending_observations.insert_or_assign(work->submission_id, work->observation);
                 for (const auto& buffer : bound_handles) {
                     ctx->device_last_use[buffer.id()] = timeline;
                 }
@@ -1023,7 +1141,7 @@ Result<Event> DispatchBuilder::submit() {
                 }
             }
         };
-    submission.on_complete = [promise, ctx, pipeline_ref, allocated_descriptors, bound_buffers,
+    submission.on_complete = [promise, ctx, work, pipeline_ref, allocated_descriptors, bound_buffers,
                               bound_handles = buffers_, accesses = accesses_, written_buffers,
                               bound_host_versions,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
@@ -1032,11 +1150,40 @@ Result<Event> DispatchBuilder::submit() {
             for (std::size_t index = 0; index < accesses.size(); ++index)
                 if (accesses[index] != KernelAccess::Read) (void)bound_handles[index].mark_data_lost();
         }
-        if (ctx->timestamps) {
+        if (ctx->timestamps && status) {
+            const auto completion_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                std::chrono::steady_clock::now() - work->queued_at)
+                                                .count();
+            if (completion_elapsed > 0) {
+                std::lock_guard lock(ctx->submit_mutex);
+                const auto pending = ctx->pending_observations.find(work->submission_id);
+                if (pending != ctx->pending_observations.end())
+                    pending->second.completion_elapsed_nanoseconds =
+                        static_cast<std::uint64_t>(completion_elapsed);
+            }
             auto samples = ctx->timestamps->collect(compute_value);
             if (samples)
                 detail::observe_autotune_samples(ctx, samples.value(), ctx->performance_database,
                                                  ctx->performance_database_path);
+            else {
+                // Query failures have no valid measurement to consume these entries. Remove them
+                // just as we do for failed submissions so repeated failures cannot grow the maps.
+                std::lock_guard lock(ctx->submit_mutex);
+                ctx->pending_observations.erase(work->submission_id);
+                const auto pending = ctx->pending_autotune.find(work->submission_id);
+                if (pending != ctx->pending_autotune.end()) {
+                    pending->second.tuner->cancel(pending->second.trial);
+                    ctx->pending_autotune.erase(pending);
+                }
+            }
+        } else if (ctx->timestamps) {
+            std::lock_guard lock(ctx->submit_mutex);
+            ctx->pending_observations.erase(work->submission_id);
+            const auto pending = ctx->pending_autotune.find(work->submission_id);
+            if (pending != ctx->pending_autotune.end()) {
+                pending->second.tuner->cancel(pending->second.trial);
+                ctx->pending_autotune.erase(pending);
+            }
         }
         for (const auto descriptor : *allocated_descriptors)
             (void)ctx->pipelines->free_descriptor_set(descriptor);
@@ -1116,6 +1263,15 @@ Result<Event> DispatchBuilder::submit() {
         }
     }
     trial_guard.active = false;  // Submission callbacks now own cancellation/observation.
+    const auto before_enqueue = std::chrono::steady_clock::now();
+    const auto host_submit_elapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(before_enqueue - host_submit_started).count();
+    work->observation.transfer_nanoseconds = upload_wait_nanoseconds;
+    work->observation.submission_nanoseconds =
+        host_submit_elapsed > 0 && static_cast<std::uint64_t>(host_submit_elapsed) > upload_wait_nanoseconds
+            ? static_cast<std::uint64_t>(host_submit_elapsed) - upload_wait_nanoseconds
+            : 0;
+    work->queued_at = before_enqueue;
     auto submitted = queue->submit(std::move(submission));
     if (!submitted) {
         cancel_autotune_trial();
@@ -1575,6 +1731,7 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     state->entry_point = std::move(entry_point);
     state->metadata = std::move(metadata);
     state->words = std::move(words);
+    state->semantic_identity = semantic_kernel_identity(*state);
     state->runtime_id = impl_->runtime_id;
     state->device_index = device.id.index;
     if (reflection.value().local_size_id_based) {
@@ -1654,6 +1811,10 @@ Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
 
     std::vector<detail::RuntimePlacementCandidate> candidates;
     candidates.reserve(impl_->devices.size());
+    const auto wall_now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
+    const auto observation_now = wall_now < 0 ? 0 : static_cast<std::uint64_t>(wall_now);
     for (const auto& device : impl_->devices) {
         if (device->dispatch->quarantined.load(std::memory_order_acquire) ||
             !device->dispatch->accepting_work.load(std::memory_order_acquire))
@@ -1678,6 +1839,9 @@ Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
             .id = device->id,
             .driver_version = device->driver_version,
             .calibration_record = device->calibration_record,
+            .online_execution =
+                query_execution_observation(impl_->performance_database, device->id, device->driver_version,
+                                            kernel.state_->semantic_identity, workload, observation_now),
             .available_device_memory_bytes = available_device_memory,
             .supported = true,
             .healthy = true,
@@ -1686,21 +1850,24 @@ Result<DispatchBuilder> Runtime::dispatch_adaptive(const Kernel& kernel,
     }
     auto selected = detail::select_adaptive_device(candidates, (*current)->id, workload);
     if (!selected) return std::move(selected).error();
-    if (selected.value() == (*current)->id) return dispatch(kernel);
-
     const auto target = std::find_if(impl_->devices.begin(), impl_->devices.end(),
                                      [&](const auto& device) { return device->id == selected.value(); });
     if (target == impl_->devices.end())
         return Error(ErrorCode::InternalInvariantViolation, "adaptive scheduler selected an unknown device");
-    auto selected_kernel = std::make_shared<detail::KernelState>(*kernel.state_);
-    selected_kernel->device_index = (*target)->id.index;
-    selected_kernel->autotuner.reset();
-    selected_kernel->autotune_keys.clear();
+    std::shared_ptr<const detail::KernelState> selected_kernel = kernel.state_;
+    if (target->get() != current->get()) {
+        auto migrated_kernel = std::make_shared<detail::KernelState>(*kernel.state_);
+        migrated_kernel->device_index = (*target)->id.index;
+        migrated_kernel->autotuner.reset();
+        migrated_kernel->autotune_keys.clear();
+        selected_kernel = std::move(migrated_kernel);
+    }
     DispatchBuilder builder((*target)->dispatch, std::move(selected_kernel), (*target)->id);
     builder.adaptive_state_ = std::make_shared<detail::AdaptiveDispatchState>();
     builder.adaptive_state_->original_id = (*current)->id;
     builder.adaptive_state_->original_context = (*current)->dispatch;
     builder.adaptive_state_->original_kernel = kernel.state_;
+    builder.adaptive_state_->workload = workload;
     builder.adaptive_state_->contexts.reserve(impl_->devices.size());
     for (const auto& device : impl_->devices) builder.adaptive_state_->contexts.push_back(device->dispatch);
     return builder;
@@ -1805,6 +1972,8 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         entry->driver_version = physical.properties.driverVersion;
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();
+        entry->dispatch->device_uuid = entry->id.uuid;
+        entry->dispatch->driver_version = entry->driver_version;
         if (impl->calibrate_on_start)
             entry->calibrate(impl->calibration_directory, impl->calibration_budget_ms);
         entry->dispatch->autotuning_enabled = !resolved.disable_autotune;
@@ -1901,6 +2070,33 @@ Status detail::RuntimeTestAccess::set_calibration_record(Runtime& runtime, const
     record.kora_schema = static_cast<std::uint32_t>(kora::kSchemaVersion);
     (*found)->calibration_record = std::move(record);
     return {};
+}
+
+Result<std::string> detail::RuntimeTestAccess::performance_observation_key(
+    const Runtime& runtime, const DeviceId& id, const Kernel& kernel,
+    const AdaptiveDispatchWorkload& workload, detail::PerformanceTimingDomain domain) {
+    if (!runtime.impl_ || !kernel.state_ || kernel.state_->runtime_id != runtime.impl_->runtime_id)
+        return Error(ErrorCode::InvalidArgument, "kernel does not belong to the initialized runtime");
+    const auto found = std::find_if(runtime.impl_->devices.begin(), runtime.impl_->devices.end(),
+                                    [&](const auto& device) { return device->id == id; });
+    if (found == runtime.impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    return detail::performance_observation_key(detail::PerformanceObservationKey{
+        .device_uuid = id.uuid,
+        .driver_version = (*found)->driver_version,
+        .runtime_schema = static_cast<std::uint32_t>(kora::kSchemaVersion),
+        .kernel_identity = kernel.state_->semantic_identity,
+        .workload_class = static_cast<std::uint8_t>(workload.kernel_kind),
+        .workload_bucket = workload_bucket(workload.kernel_work),
+        .timing_domain = domain,
+    });
+}
+
+Result<detail::PerformanceStats> detail::RuntimeTestAccess::performance_stats(const Runtime& runtime,
+                                                                              const std::string& key) {
+    if (!runtime.impl_ || !runtime.impl_->performance_database)
+        return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    return runtime.impl_->performance_database->query(key);
 }
 
 std::vector<DeviceId> Runtime::devices() const {

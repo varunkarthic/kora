@@ -17,6 +17,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   read/write, and integer ALU measurements when supported within the configured best-effort budget.
 - Add an explicit adaptive-dispatch API that uses identity- and completeness-gated calibration costs;
   ordinary dispatch remains device-bound and incomplete records retain the current device.
+- Learn fresh per-kernel GPU execution costs from completed adaptive-dispatch timestamp samples, with
+  identity-safe keys, outlier rejection, expiry, bounded persistence, and conservative calibration blending.
 
 ### Changed
 - Bump the internal calibration-record schema to 2 so older records are recalibrated.
