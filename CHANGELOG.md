@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Preserve indented continuation lines when generating release highlights from wrapped changelog
+  bullets.
+
 ## [0.2.11] - 2026-10-12
 
 ### Changed

@@ -192,12 +192,34 @@ def _escape_table_text(value: str) -> str:
 def release_highlights(changelog: str, limit: int = 3) -> list[str]:
     """Return the first categorized changelog bullets as concise, source-derived highlights."""
     highlights: list[str] = []
+    current: str | None = None
+
+    def finish_highlight() -> bool:
+        if current is None:
+            return len(highlights) >= limit
+        highlights.append(current)
+        return len(highlights) >= limit
+
+    if limit <= 0:
+        return highlights
     for line in changelog.splitlines():
         stripped = line.strip()
         if re.match(r"[-*+]\s+\S", stripped):
-            highlights.append(re.sub(r"^[-*+]\s+", "", stripped))
-            if len(highlights) == limit:
+            if finish_highlight():
                 break
+            current = re.sub(r"^[-*+]\s+", "", stripped)
+        elif current is not None and line.startswith((" ", "\t")) and stripped:
+            current = f"{current} {stripped}"
+        elif current is not None and (not stripped or stripped.startswith("#")):
+            if finish_highlight():
+                break
+            current = None
+        elif current is not None:
+            if finish_highlight():
+                break
+            current = None
+    else:
+        finish_highlight()
     return highlights
 
 
