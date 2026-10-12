@@ -777,6 +777,9 @@ struct Runtime::Impl {
     vk::Loader loader;
     vk::Instance instance;
     std::vector<std::unique_ptr<DeviceEntry>> devices;
+    // Immutable device membership is shared by dispatch builders; quarantine is checked live
+    // when duplicate verification is submitted. Avoid rebuilding this list on every dispatch().
+    std::shared_ptr<const detail::VerificationTargetSet> verification_targets;
     std::shared_ptr<detail::DeviceQuarantineRegistry> quarantine =
         std::make_shared<detail::DeviceQuarantineRegistry>();
     std::uint64_t runtime_id = 0;
@@ -792,6 +795,8 @@ struct Runtime::Impl {
     std::shared_ptr<CpuExecutor> cpu_executor;
 
     ~Impl() {
+        // Drop cached target references before tearing down their Vulkan devices.
+        verification_targets.reset();
         for (auto& device : devices)
             if (device && device->dispatch)
                 device->dispatch->accepting_work.store(false, std::memory_order_release);
@@ -1823,16 +1828,7 @@ DispatchBuilder Runtime::dispatch(const Kernel& kernel) const {
         selected_device != impl_->devices.end() ? (*selected_device)->dispatch : nullptr, kernel.state_,
         selected_device != impl_->devices.end() ? std::optional<DeviceId>((*selected_device)->id)
                                                 : std::nullopt);
-    if (selected_device != impl_->devices.end()) {
-        auto targets = std::make_shared<detail::VerificationTargetSet>();
-        targets->quarantine = impl_->quarantine;
-        targets->targets.reserve(impl_->devices.size());
-        for (const auto& device : impl_->devices) {
-            if (device->dispatch->quarantined.load(std::memory_order_acquire)) continue;
-            targets->targets.push_back({device->id, device->dispatch});
-        }
-        builder.verification_targets_ = std::move(targets);
-    }
+    if (selected_device != impl_->devices.end()) builder.verification_targets_ = impl_->verification_targets;
     return builder;
 }
 
@@ -2036,6 +2032,12 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
                      error.describe());
         });
     if (!device_initialization) return std::move(device_initialization).error();
+    auto verification_targets = std::make_shared<detail::VerificationTargetSet>();
+    verification_targets->quarantine = impl->quarantine;
+    verification_targets->targets.reserve(impl->devices.size());
+    for (const auto& device : impl->devices)
+        verification_targets->targets.push_back({device->id, device->dispatch});
+    impl->verification_targets = std::move(verification_targets);
     RuntimeOptions effective_options;
     effective_options.enable_validation = resolved.enable_validation;
     effective_options.debug_safety = resolved.debug_safety;
@@ -2074,6 +2076,10 @@ Status Runtime::recover() {
     auto new_quarantines = replacement.impl_->quarantine->snapshot();
     for (const auto& id : new_quarantines) impl_->quarantine->add(id);
     replacement.impl_->quarantine = impl_->quarantine;
+    auto replacement_targets =
+        std::make_shared<detail::VerificationTargetSet>(*replacement.impl_->verification_targets);
+    replacement_targets->quarantine = impl_->quarantine;
+    replacement.impl_->verification_targets = std::move(replacement_targets);
     for (const auto& id : replacement.impl_->quarantine->snapshot()) {
         const auto quarantined =
             std::find_if(replacement.impl_->devices.begin(), replacement.impl_->devices.end(),
