@@ -471,7 +471,6 @@ TEST(QueueContext, RecordsOnSubmissionThreadAndReportsTimelineAcrossCallbacks) {
     EXPECT_EQ(completed_id.load(), id.value());
     EXPECT_EQ(profile_calls.load(), 1U);
     EXPECT_GT(completion_worker_delay.load(), 0U);
-    EXPECT_GE(device_wait_duration.load(), 0U);
     EXPECT_EQ(mock.submit_calls.load(), 1U);
 }
 

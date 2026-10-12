@@ -157,6 +157,16 @@ An optional external CUDA report can be validated and rendered separately; no CU
 until a same-device NVIDIA run is available. The report contract and invocation are in the
 [benchmark guide](docs/benchmarking.md#optional-external-cuda-reference).
 
+The follow-up #214 optimization removed the idle coalescing collection delay while preserving
+batching of compatible submissions already queued together. Across five interleaved 1,000-sample
+Release pairs on the same M4/MoltenVK device, 4K deferred KORA host completion improved from a
+547.9 µs median to 381.0 µs (−30.5%); median per-run p95 improved from 612.0 µs to 444.1 µs. The
+matched raw Vulkan 4K median was 409.5 µs before and 408.0 µs after, putting post-change KORA at
+0.93× raw host latency on this device. Deferred KORA medians also improved at 64K, 256K, 1M, and
+4M elements; the 4M p50 improved 9.7% with no p95 regression. These are host-side timings, not
+kernel-only GPU timings, and do not establish CUDA parity. The [full paired study](docs/benchmarking.md#issue-214-eager-submission-coalescing-and-completion-latency)
+includes the methodology, per-size p50/p95 table, remaining bottlenecks, and all ten raw reports.
+
 ## Documentation
 
 Start with [Overview](docs/overview.md), then choose a path:
