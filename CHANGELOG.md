@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Generate deterministic, timing-domain-separated benchmark SVG charts from retained schema-3
+  reports and document their methodology and limitations.
+
 ## [0.2.9] - 2026-10-12
 
 ### Changed
