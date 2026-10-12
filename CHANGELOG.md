@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-12
+
 ### Fixed
 - Reject stale issue branches in PR CI and refuse releases with an empty `Unreleased` changelog section.
 - Align the v0.2.2 changelog section with the benchmark device-matching change included in that tag.
@@ -377,7 +379,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/varunkarthic/kora/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/varunkarthic/kora/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/varunkarthic/kora/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/varunkarthic/kora/compare/v0.2.0...v0.2.1
