@@ -46,6 +46,29 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+For a diagnostic phase profile on a host with valid Vulkan device timestamps, run:
+
+```sh
+KORA_DEVICE=2 build/release/tools/kora-bench --profile-phases --iterations 1000 --warmup 50 \
+  > kora-dispatch-profile.json
+```
+
+`--profile-phases` enables `TelemetryLevel::Profile` and sets `diagnostic_profile: true` in the
+report. It emits raw samples and p50/p95 for builder setup, the caller's submit call and event wait,
+per-dispatch validation, binding preflight, pipeline lookup, Runtime submission preparation, buffer
+residency/transfers, submission assembly, queue enqueue, command-buffer acquisition, descriptor allocation/update, command recording,
+and queue completion. Device timestamp measurements are included when
+available. Host phases can still be reported when the selected device cannot provide GPU timestamps;
+the corresponding device-time result is omitted. This mode adds profiling work; do not use its
+ordinary benchmark rows as the Release performance baseline or feed the report to the comparison
+table or chart generators.
+
+Phase profiling identified repeated SPIR-V reflection as avoidable work on ordinary pipeline-cache
+hits. Static-local-size dispatches now perform an exact cache-key lookup first and only run reflection
+when a pipeline is not already cached. `LocalSizeId` dispatches retain the full validation path because
+their resolved workgroup size is part of the pipeline key. This internal optimization does not change
+the public dispatch contract or relax validation for cache misses.
+
 ## Comparing CPU, KORA GPU, and raw GPU paths across operating systems
 
 KORA's supported build/test environments are Linux/GCC, Windows/MSVC, and macOS/AppleClang; the
@@ -227,6 +250,48 @@ The full 100-sample report is [retained as JSON](../benchmarks/results/macos-arm
 An alternate M4/KosmicKrisp report is [also retained](../benchmarks/results/macos-arm64-apple-m4-kosmic-100x10.json);
 that Vulkan path reports timestamp measurements unavailable, illustrating why availability is
 recorded per selected device/driver rather than assumed from the OS or GPU model.
+
+### Dispatch overhead case study
+
+The phase profile showed the dominant steady-state host cost was not descriptor setup, transfer, or
+command recording, but repeated SPIR-V reflection on an exact pipeline-cache hit. For static-local-size
+kernels, KORA now checks the fully serialized pipeline key first and uses the already validated
+pipeline when the key matches. Cache misses still perform full reflection and validation; `LocalSizeId`
+specializations retain the full path because their resolved workgroup size participates in the key.
+
+| Measurement | Before (`8dd2978`) | After, run 1 (`67bec0f`) | After, run 2 (`67bec0f`) |
+| --- | ---: | ---: | ---: |
+| 4K KORA deferred-readback host completion, median | 676.500 µs | 523.958 µs | 522.208 µs |
+| 4K KORA deferred-readback host completion, p95 | 819.958 µs | 674.041 µs | 597.500 µs |
+| 4K raw Vulkan host completion, median | 346.875 µs | 406.708 µs | 465.542 µs |
+| KORA/raw 4K host median ratio | 1.95× | 1.29× | 1.12× |
+| Pipeline lookup phase, median (diagnostic mode) | 181.667 µs | 6.709 µs | — |
+
+The larger-size medians are included to make possible throughput regressions visible:
+
+| Elements | Path | Before (`8dd2978`) | After, run 1 | After, run 2 |
+| ---: | --- | ---: | ---: | ---: |
+| 1,048,576 | KORA deferred host completion | 1.383 ms | 1.470 ms | 1.274 ms |
+| 1,048,576 | Raw Vulkan host completion | 0.958 ms | 1.191 ms | 0.582 ms |
+| 4,194,240 | KORA deferred host completion | 2.876 ms | 2.236 ms | 2.222 ms |
+| 4,194,240 | Raw Vulkan host completion | 1.493 ms | 1.714 ms | 2.002 ms |
+
+The ordinary runs used `KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000
+--warmup 50` on macOS arm64 / Apple M4, AppleClang 21.0.0 Release, Vulkan 1.3.357 / MoltenVK,
+with KORA and raw Vulkan pinned to the same enumerated physical device. The pipeline phase uses
+`--profile-phases --iterations 200 --warmup 20`; it enables telemetry and must not be compared as a
+normal performance result. Its pre-fast-path profile was collected on the profiling branch worktree
+before the optimization commit, while the post-fast-path phase sample is on `67bec0f`.
+
+The ordinary 1,000-sample reports preserve every sample and the environment fields:
+[before `8dd2978`](../benchmarks/results/dispatch-overhead-before-8dd2978-macos-arm64-m4-moltenvk-1000x50.json)
+and two reruns after `67bec0f` ([run 1](../benchmarks/results/dispatch-overhead-after-67bec0f-macos-arm64-m4-moltenvk-1000x50.json),
+[run 2](../benchmarks/results/dispatch-overhead-after-67bec0f-repeat-macos-arm64-m4-moltenvk-1000x50.json)).
+The KORA 4K/4.19M deferred medians were stable across the two post-change runs, but raw Vulkan and
+1M results varied materially with the sequential host/driver state. Treat the ratios as local,
+promising evidence rather than a controlled cross-device result or CUDA parity claim. Full raw samples
+for 1M and 4.19M vector-add are retained in each report so those variations and possible regressions
+remain inspectable.
 
 ### Visual comparison and methodology
 

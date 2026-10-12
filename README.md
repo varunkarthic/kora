@@ -145,6 +145,14 @@ build/test targets, but CI smoke coverage is not a cross-OS performance study; n
 hardware-GPU or CUDA result is claimed. The benchmark guide explains how to distinguish CPU
 arithmetic, software Vulkan, hardware-GPU timestamps, and KORA host overhead.
 
+The subsequent #196 dispatch-path optimization was measured separately against raw Vulkan on the
+same Apple M4/MoltenVK device. In 1,000-sample Release runs, 4K deferred-readback KORA changed from
+676.5 µs to 524.0 µs median (raw Vulkan: 346.9 µs to 406.7 µs). The KORA/raw host-latency ratio
+changed from 1.95× to 1.29×. These sequential local runs show host-load variation and do not establish
+CUDA parity; a second post-change sample measured KORA at 522.2 µs and raw Vulkan at 465.5 µs.
+Raw JSON, exact revisions, and the profiling breakdown are in
+[the dispatch-overhead study](docs/benchmarking.md#dispatch-overhead-case-study).
+
 ## Documentation
 
 Start with [Overview](docs/overview.md), then choose a path:

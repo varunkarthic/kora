@@ -21,6 +21,8 @@ def main() -> int:
     report = json.loads(args.report.read_text(encoding="utf-8"))
     if report.get("schema_version") != 3:
         parser.error("expected kora-bench JSON schema version 3")
+    if report.get("diagnostic_profile") is True:
+        parser.error("diagnostic profile reports include telemetry overhead and are not comparison tables")
     if "gpu_measurements" not in report:
         parser.error("report must include --gpu measurements")
     if not report["gpu_measurements"].get("same_physical_device_for_kora_and_raw_vulkan"):

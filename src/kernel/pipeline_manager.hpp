@@ -7,6 +7,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -84,6 +85,11 @@ public:
     Result<PipelineRef> get_or_create(std::span<const std::uint32_t> module, const KernelMetadata& metadata,
                                       std::span<const SpecializationConstantMetadata> overrides,
                                       std::string_view entry_point = "main");
+    /// Fast exact cache lookup for metadata already validated and without LocalSizeId specialization.
+    std::optional<PipelineRef> find_cached(std::span<const std::uint32_t> module,
+                                           const KernelMetadata& metadata,
+                                           std::span<const SpecializationConstantMetadata> overrides,
+                                           std::string_view entry_point = "main");
     Result<VkDescriptorSet> allocate_descriptor_set(const PipelineRef& pipeline, std::uint32_t set_index);
     Status free_descriptor_set(VkDescriptorSet descriptor_set);
     Status save_pipeline_cache();

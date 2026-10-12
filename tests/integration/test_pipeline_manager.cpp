@@ -126,14 +126,23 @@ TEST(PipelineManager, CachesPipelinesRecyclesDescriptorsAndRecoversPersistentCac
             device.api(), device.handle(), capabilities, identity, cache_file, options);
         ASSERT_TRUE(manager_result) << manager_result.error().describe();
         auto manager = std::move(manager_result).value();
-        auto first = manager->get_or_create(module, fixture_metadata());
+        const auto metadata = fixture_metadata();
+        auto first = manager->get_or_create(module, metadata);
         ASSERT_TRUE(first) << first.error().describe();
         ASSERT_NE(first.value()->handle, VK_NULL_HANDLE);
 
-        auto repeated = manager->get_or_create(module, fixture_metadata());
+        auto fast_cached = manager->find_cached(module, metadata, metadata.specialization_constants);
+        ASSERT_TRUE(fast_cached);
+        EXPECT_EQ(first.value().get(), fast_cached->get());
+
+        auto repeated = manager->get_or_create(module, metadata);
         ASSERT_TRUE(repeated) << repeated.error().describe();
         EXPECT_EQ(first.value().get(), repeated.value().get());
-        EXPECT_EQ(manager->stats().pipeline_cache_hits, 1U);
+        EXPECT_EQ(manager->stats().pipeline_cache_hits, 2U);
+
+        auto invalid_override = metadata.specialization_constants;
+        invalid_override.front().type = "unsupported";
+        EXPECT_FALSE(manager->find_cached(module, metadata, invalid_override));
 
         auto descriptor = manager->allocate_descriptor_set(first.value(), 0);
         ASSERT_TRUE(descriptor) << descriptor.error().describe();

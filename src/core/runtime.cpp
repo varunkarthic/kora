@@ -85,6 +85,7 @@ struct KernelState {
     std::uint64_t runtime_id = 0;
     std::uint64_t device_index = 0;
     std::uint64_t semantic_identity = 0;
+    bool local_size_id_based = false;
     std::array<std::uint32_t, 3> local_size_spec_ids{};
     std::shared_ptr<detail::kernel::WorkgroupAutotuner> autotuner;
     std::vector<std::string> autotune_keys;
@@ -98,6 +99,15 @@ struct PendingPerformanceObservation {
     std::uint64_t submission_nanoseconds = 0;
     std::uint64_t transfer_nanoseconds = 0;
     std::uint64_t completion_elapsed_nanoseconds = 0;
+    std::uint64_t dispatch_validation_nanoseconds = 0;
+    std::uint64_t binding_preflight_nanoseconds = 0;
+    std::uint64_t pipeline_lookup_nanoseconds = 0;
+    std::uint64_t buffer_residency_nanoseconds = 0;
+    std::uint64_t submission_assembly_nanoseconds = 0;
+    std::uint64_t queue_enqueue_nanoseconds = 0;
+    std::uint64_t command_buffer_acquire_nanoseconds = 0;
+    std::uint64_t descriptor_setup_nanoseconds = 0;
+    std::uint64_t command_recording_nanoseconds = 0;
 };
 
 struct TraceSchedulerScore {
@@ -132,6 +142,9 @@ struct DispatchContext {
     std::atomic<std::uint64_t> upload_count{0};
     std::atomic<std::uint64_t> download_count{0};
     std::unique_ptr<detail::TimestampRing> timestamps;
+    bool phase_profile_enabled = false;
+    std::uint64_t latest_profile_submission_id = 0;
+    detail::PendingPerformanceObservation latest_profile_observation;
     bool trace_enabled = false;
     bool autotuning_enabled = false;
     struct PendingAutotune {
@@ -844,6 +857,9 @@ Result<Event> DispatchBuilder::submit() {
             }
         }
     }
+    const auto validation_started = context_ && context_->phase_profile_enabled
+                                        ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
     if (verification_policy_) return submit_verified();
     if (!context_ || !context_->accepting_work.load(std::memory_order_acquire) || !kernel_ ||
         !context_->pipelines || !context_->queue || !context_->device)
@@ -905,6 +921,15 @@ Result<Event> DispatchBuilder::submit() {
     if (invocations > limits.max_compute_work_group_invocations)
         return Error(ErrorCode::InvalidDispatch, "kernel local size exceeds maxComputeWorkGroupInvocations");
 
+    const auto validation_elapsed = context_->phase_profile_enabled
+                                        ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - validation_started)
+                                              .count()
+                                        : 0;
+
+    const auto binding_preflight_started = context_->phase_profile_enabled
+                                               ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
     std::vector<detail::TransferBuffer> vk_buffers;
     vk_buffers.reserve(buffers_.size());
     for (std::size_t i = 0; i < buffers_.size(); ++i) {
@@ -940,12 +965,38 @@ Result<Event> DispatchBuilder::submit() {
             found->default_value = static_cast<std::uint64_t>(local_size[dimension]);
         }
     }
-    auto pipeline = context_->pipelines->get_or_create(kernel_->words, kernel_->metadata, specialization,
-                                                       kernel_->entry_point);
-    if (!pipeline) {
-        cancel_autotune_trial();
-        return std::move(pipeline).error();
+    const auto binding_preflight_elapsed =
+        context_->phase_profile_enabled ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - binding_preflight_started)
+                                              .count()
+                                        : 0;
+    const auto pipeline_lookup_started = context_->phase_profile_enabled
+                                             ? std::chrono::steady_clock::now()
+                                             : std::chrono::steady_clock::time_point{};
+    std::optional<detail::kernel::PipelineManager::PipelineRef> cached_pipeline;
+    if (!kernel_->local_size_id_based)
+        cached_pipeline = context_->pipelines->find_cached(kernel_->words, kernel_->metadata, specialization,
+                                                           kernel_->entry_point);
+    detail::kernel::PipelineManager::PipelineRef pipeline_ref;
+    if (cached_pipeline) {
+        pipeline_ref = std::move(*cached_pipeline);
+    } else {
+        auto pipeline = context_->pipelines->get_or_create(kernel_->words, kernel_->metadata, specialization,
+                                                           kernel_->entry_point);
+        if (!pipeline) {
+            cancel_autotune_trial();
+            return std::move(pipeline).error();
+        }
+        pipeline_ref = std::move(pipeline).value();
     }
+    const auto pipeline_lookup_elapsed = context_->phase_profile_enabled
+                                             ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   std::chrono::steady_clock::now() - pipeline_lookup_started)
+                                                   .count()
+                                             : 0;
+    const auto buffer_residency_started = context_->phase_profile_enabled
+                                              ? std::chrono::steady_clock::now()
+                                              : std::chrono::steady_clock::time_point{};
     for (std::size_t i = 0; i < buffers_.size(); ++i) {
         auto buffer = ensure_transfer_buffer(context_, buffers_[i], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         if (!buffer) {
@@ -1011,9 +1062,16 @@ Result<Event> DispatchBuilder::submit() {
         }
     }
 
+    const auto buffer_residency_elapsed =
+        context_->phase_profile_enabled ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - buffer_residency_started)
+                                              .count()
+                                        : 0;
+    const auto submission_assembly_started = context_->phase_profile_enabled
+                                                 ? std::chrono::steady_clock::now()
+                                                 : std::chrono::steady_clock::time_point{};
     auto queue = context_->queue;
     auto ctx = context_;
-    auto pipeline_ref = pipeline.value();
     auto bound_buffers = std::make_shared<std::vector<detail::TransferBuffer>>(std::move(vk_buffers));
     auto bound_handles = buffers_;
     std::vector<BufferId> written_buffers;
@@ -1026,6 +1084,14 @@ Result<Event> DispatchBuilder::submit() {
     auto record_status = std::make_shared<Status>();
     auto event = promise->event();
     detail::PendingPerformanceObservation observation;
+    if (validation_elapsed > 0)
+        observation.dispatch_validation_nanoseconds = static_cast<std::uint64_t>(validation_elapsed);
+    if (binding_preflight_elapsed > 0)
+        observation.binding_preflight_nanoseconds = static_cast<std::uint64_t>(binding_preflight_elapsed);
+    if (pipeline_lookup_elapsed > 0)
+        observation.pipeline_lookup_nanoseconds = static_cast<std::uint64_t>(pipeline_lookup_elapsed);
+    if (buffer_residency_elapsed > 0)
+        observation.buffer_residency_nanoseconds = static_cast<std::uint64_t>(buffer_residency_elapsed);
     if (adaptive_state_ && !ctx->device_uuid.empty()) {
         detail::PerformanceObservationKey observation_identity{
             .device_uuid = ctx->device_uuid,
@@ -1086,6 +1152,9 @@ Result<Event> DispatchBuilder::submit() {
                                   record_status, allocated_descriptors](
                                      std::uint64_t submission_id, std::vector<VkCommandBuffer>& commands) {
         std::lock_guard lock(ctx->submit_mutex);
+        const auto command_acquire_started = ctx->phase_profile_enabled
+                                                 ? std::chrono::steady_clock::now()
+                                                 : std::chrono::steady_clock::time_point{};
         if (!ctx->command_pool) {
             vk::CommandPoolSet::Options options;
             options.queue_family = ctx->device->compute_queue_family();
@@ -1097,12 +1166,19 @@ Result<Event> DispatchBuilder::submit() {
         if (!completed) return Status(std::move(completed).error());
         auto command = ctx->command_pool->acquire(completed.value());
         if (!command) return Status(std::move(command).error());
+        if (ctx->phase_profile_enabled)
+            work->observation.command_buffer_acquire_nanoseconds =
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - command_acquire_started)
+                                               .count());
         work->command_buffer = command.value();
         work->submission_id = submission_id;
         auto api = ctx->device->api();
         if (ctx->timestamps)
             work->timestamp_recorded = ctx->timestamps->record_start(command.value(), submission_id);
-        api.cmd_bind_pipeline(command.value(), VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_ref->handle);
+        const auto descriptor_setup_started = ctx->phase_profile_enabled
+                                                  ? std::chrono::steady_clock::now()
+                                                  : std::chrono::steady_clock::time_point{};
         std::vector<VkDescriptorSet> descriptor_sets;
         for (std::uint32_t set = 0; set < pipeline_ref->descriptor_set_layouts.size(); ++set) {
             auto descriptor = ctx->pipelines->allocate_descriptor_set(pipeline_ref, set);
@@ -1128,6 +1204,15 @@ Result<Event> DispatchBuilder::submit() {
         }
         api.update_descriptor_sets(ctx->device->handle(), static_cast<std::uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
+        if (ctx->phase_profile_enabled)
+            work->observation.descriptor_setup_nanoseconds =
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - descriptor_setup_started)
+                                               .count());
+        const auto command_recording_started = ctx->phase_profile_enabled
+                                                   ? std::chrono::steady_clock::now()
+                                                   : std::chrono::steady_clock::time_point{};
+        api.cmd_bind_pipeline(command.value(), VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_ref->handle);
         if (!descriptor_sets.empty())
             api.cmd_bind_descriptor_sets(
                 command.value(), VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_ref->layout, 0,
@@ -1140,6 +1225,11 @@ Result<Event> DispatchBuilder::submit() {
             ctx->timestamps->record_end(command.value(), submission_id);
         auto ended = ctx->command_pool->end_recording(command.value());
         if (!ended) return ended;
+        if (ctx->phase_profile_enabled)
+            work->observation.command_recording_nanoseconds =
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - command_recording_started)
+                                               .count());
         commands.push_back(command.value());
         return Status{};
     };
@@ -1194,17 +1284,25 @@ Result<Event> DispatchBuilder::submit() {
             for (std::size_t index = 0; index < accesses.size(); ++index)
                 if (accesses[index] != KernelAccess::Read) (void)bound_handles[index].mark_data_lost();
         }
-        if (ctx->timestamps && status) {
+        if ((ctx->phase_profile_enabled || ctx->timestamps) && status) {
             const auto completion_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                 std::chrono::steady_clock::now() - work->queued_at)
                                                 .count();
             if (completion_elapsed > 0) {
                 std::lock_guard lock(ctx->submit_mutex);
+                work->observation.completion_elapsed_nanoseconds =
+                    static_cast<std::uint64_t>(completion_elapsed);
+                if (ctx->phase_profile_enabled) {
+                    ctx->latest_profile_submission_id = work->submission_id;
+                    ctx->latest_profile_observation = work->observation;
+                }
                 const auto pending = ctx->pending_observations.find(work->submission_id);
                 if (pending != ctx->pending_observations.end())
                     pending->second.completion_elapsed_nanoseconds =
                         static_cast<std::uint64_t>(completion_elapsed);
             }
+        }
+        if (ctx->timestamps && status) {
             auto samples = ctx->timestamps->collect(compute_value);
             if (samples)
                 detail::observe_autotune_samples(ctx, samples.value(), ctx->performance_database,
@@ -1308,6 +1406,14 @@ Result<Event> DispatchBuilder::submit() {
             context_->device_newer_buffers.insert(id);
         }
     }
+    const auto submission_assembly_elapsed =
+        context_->phase_profile_enabled ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - submission_assembly_started)
+                                              .count()
+                                        : 0;
+    if (submission_assembly_elapsed > 0)
+        work->observation.submission_assembly_nanoseconds =
+            static_cast<std::uint64_t>(submission_assembly_elapsed);
     trial_guard.active = false;  // Submission callbacks now own cancellation/observation.
     const auto before_enqueue = std::chrono::steady_clock::now();
     const auto host_submit_elapsed =
@@ -1318,7 +1424,21 @@ Result<Event> DispatchBuilder::submit() {
             ? static_cast<std::uint64_t>(host_submit_elapsed) - upload_wait_nanoseconds
             : 0;
     work->queued_at = before_enqueue;
+    const auto queue_enqueue_started = ctx->phase_profile_enabled ? std::chrono::steady_clock::now()
+                                                                  : std::chrono::steady_clock::time_point{};
     auto submitted = queue->submit(std::move(submission));
+    if (ctx->phase_profile_enabled) {
+        const auto queue_enqueue_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                               std::chrono::steady_clock::now() - queue_enqueue_started)
+                                               .count();
+        if (queue_enqueue_elapsed > 0) {
+            std::lock_guard lock(ctx->submit_mutex);
+            work->observation.queue_enqueue_nanoseconds = static_cast<std::uint64_t>(queue_enqueue_elapsed);
+            if (ctx->latest_profile_submission_id == work->submission_id)
+                ctx->latest_profile_observation.queue_enqueue_nanoseconds =
+                    work->observation.queue_enqueue_nanoseconds;
+        }
+    }
     if (!submitted) {
         cancel_autotune_trial();
         std::lock_guard lock(context_->submit_mutex);
@@ -1781,6 +1901,7 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     state->runtime_id = impl_->runtime_id;
     state->device_index = device.id.index;
     if (reflection.value().local_size_id_based) {
+        state->local_size_id_based = true;
         state->local_size_spec_ids = reflection.value().local_size_spec_ids;
         auto candidates = detail::kernel::generate_workgroup_candidates(
             reflection.value().local_size, true, device.info.limits(), device.info.subgroup());
@@ -2012,6 +2133,8 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         auto initialized = entry->initialize();
         if (!initialized) return std::move(initialized).error();
         entry->dispatch->trace_enabled = resolved.telemetry == TelemetryLevel::Trace;
+        entry->dispatch->phase_profile_enabled =
+            resolved.telemetry == TelemetryLevel::Profile || resolved.telemetry == TelemetryLevel::Trace;
         if (entry->dispatch->timestamps)
             entry->dispatch->timestamps->enable_trace_history(entry->dispatch->trace_enabled);
         entry->dispatch->device_uuid = entry->id.uuid;
@@ -2224,21 +2347,43 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
     if (found == impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     const auto& dispatch = (*found)->dispatch;
-    if (!dispatch || !dispatch->timestamps)
+    if (!dispatch || (!dispatch->timestamps && !dispatch->phase_profile_enabled))
         return Error(ErrorCode::UnsupportedFeature, "GPU timestamp profiling is unavailable for this device");
-    const auto completed = dispatch->queue->completed_value();
-    if (!completed) return std::move(completed).error();
-    auto collected = dispatch->timestamps->collect(completed.value());
-    if (!collected) return std::move(collected).error();
-    detail::observe_autotune_samples(dispatch, collected.value(), impl_->performance_database,
-                                     impl_->performance_database_path);
-    const auto latest = dispatch->timestamps->latest_sample();
-    return RuntimeProfilingStats{dispatch->timestamps->samples_collected(),
-                                 dispatch->timestamps->dropped_samples(),
-                                 latest.submission_id,
-                                 latest.duration_nanoseconds,
-                                 latest.host_timestamp_nanoseconds,
-                                 latest.calibration_deviation_nanoseconds};
+    RuntimeProfilingStats stats;
+    if (dispatch->timestamps) {
+        const auto completed = dispatch->queue->completed_value();
+        if (!completed) return std::move(completed).error();
+        auto collected = dispatch->timestamps->collect(completed.value());
+        if (!collected) return std::move(collected).error();
+        detail::observe_autotune_samples(dispatch, collected.value(), impl_->performance_database,
+                                         impl_->performance_database_path);
+        const auto latest = dispatch->timestamps->latest_sample();
+        stats.samples_collected = dispatch->timestamps->samples_collected();
+        stats.dropped_samples = dispatch->timestamps->dropped_samples();
+        stats.last_submission_id = latest.submission_id;
+        stats.last_duration_nanoseconds = latest.duration_nanoseconds;
+        stats.last_host_timestamp_nanoseconds = latest.host_timestamp_nanoseconds;
+        stats.last_calibration_deviation_nanoseconds = latest.calibration_deviation_nanoseconds;
+    }
+    {
+        std::lock_guard lock(dispatch->submit_mutex);
+        stats.last_profile_submission_id = dispatch->latest_profile_submission_id;
+        if (dispatch->latest_profile_submission_id != 0) {
+            const auto& observation = dispatch->latest_profile_observation;
+            stats.last_dispatch_validation_nanoseconds = observation.dispatch_validation_nanoseconds;
+            stats.last_binding_preflight_nanoseconds = observation.binding_preflight_nanoseconds;
+            stats.last_pipeline_lookup_nanoseconds = observation.pipeline_lookup_nanoseconds;
+            stats.last_buffer_residency_nanoseconds = observation.buffer_residency_nanoseconds;
+            stats.last_submission_assembly_nanoseconds = observation.submission_assembly_nanoseconds;
+            stats.last_host_submission_nanoseconds = observation.submission_nanoseconds;
+            stats.last_queue_enqueue_nanoseconds = observation.queue_enqueue_nanoseconds;
+            stats.last_command_buffer_acquire_nanoseconds = observation.command_buffer_acquire_nanoseconds;
+            stats.last_descriptor_setup_nanoseconds = observation.descriptor_setup_nanoseconds;
+            stats.last_command_recording_nanoseconds = observation.command_recording_nanoseconds;
+            stats.last_queue_completion_nanoseconds = observation.completion_elapsed_nanoseconds;
+        }
+    }
+    return stats;
 }
 
 Status Runtime::calibrate() {
