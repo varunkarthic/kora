@@ -33,6 +33,7 @@
 #include "kora/task_graph.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
+#include "memory/staging_ring.hpp"
 #include "memory/suballocator.hpp"
 #include "memory/transfer_engine.hpp"
 #include "vulkan/api.hpp"
@@ -143,7 +144,7 @@ std::string cpu_model_name() {
 std::string_view measurement_domain(std::string_view name) {
     if (name.starts_with("profile_kora_")) return "runtime_dispatch_phase";
     if (name.ends_with("_gpu_execution")) return "gpu_execution_timestamp";
-    if (name.starts_with("cpu_")) return "host_cpu_execution";
+    if (name.starts_with("cpu_") || name.starts_with("staging_ring_reserve_")) return "host_cpu_execution";
     if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_vector_add_"))
         return "host_submit_completion";
     if (name.starts_with("transfer_") || name.starts_with("raw_vulkan_copy_") ||
@@ -746,6 +747,70 @@ bool add_transfer_benchmarks(std::vector<Result>& results, const Options& option
     auto staged_engine =
         TransferEngine::create(device, *queue, *upload_pool.value(), *readback_pool.value(), staged_options);
     if (!direct_engine || !staged_engine) return false;
+
+    // Measure only StagingRing::reserve() with a controlled number of live ranges. Setup and cancel
+    // are outside each timed interval; no transfer, queue submission, or timeline wait is included.
+    const auto add_reservation_benchmark = [&](std::size_t live_count, bool fragmented) {
+        const VkDeviceSize atom_size = physical.properties.limits.nonCoherentAtomSize;
+        const VkDeviceSize unit = std::max<VkDeviceSize>(256, atom_size);
+        StagingRing::Options ring_options;
+        ring_options.topology = info.memory_topology();
+        ring_options.measured_staging_benefit = true;
+        ring_options.non_coherent_atom_size = atom_size;
+        ring_options.initial_capacity = fragmented ? (3 * live_count + 2) * unit : (live_count + 2) * unit;
+        ring_options.maximum_capacity = ring_options.initial_capacity;
+        auto ring_result = StagingRing::create(device, *upload_pool.value(), ring_options);
+        if (!ring_result)
+            throw std::runtime_error("staging-ring benchmark setup failed: " +
+                                     ring_result.error().describe());
+        auto& ring = *ring_result.value();
+        std::vector<StagingSlice> live;
+        live.reserve(live_count);
+        for (std::size_t index = 0; index < live_count; ++index) {
+            auto slice = ring.reserve(fragmented ? 2 * unit : unit, 1, 0, {});
+            if (!slice)
+                throw std::runtime_error("staging-ring live-range setup failed: " + slice.error().describe());
+            live.push_back(slice.value());
+            if (fragmented) {
+                auto hole = ring.reserve(unit, 1, 0, {});
+                if (!hole || !ring.cancel(hole.value()))
+                    throw std::runtime_error("staging-ring fragmentation setup failed");
+            }
+        }
+        const auto tail = ring.reserve(2 * unit, 1, 0, {});
+        if (!tail || !ring.cancel(tail.value()))
+            throw std::runtime_error("staging-ring benchmark tail setup failed");
+
+        Result result{"staging_ring_reserve_" + std::string(fragmented ? "fragmented_" : "dense_") +
+                          std::to_string(live_count),
+                      {},
+                      0,
+                      0};
+        result.samples_ns.reserve(options.iterations);
+        const auto sample = [&] {
+            const auto begin = Clock::now();
+            auto slice = ring.reserve(2 * unit, 1, 0, {});
+            const auto end = Clock::now();
+            if (!slice)
+                throw std::runtime_error("staging-ring timed reservation failed: " +
+                                         slice.error().describe());
+            result.samples_ns.push_back(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count()));
+            if (!ring.cancel(slice.value())) throw std::runtime_error("staging-ring timed cancel failed");
+        };
+        for (std::size_t index = 0; index < options.warmup; ++index) sample();
+        result.samples_ns.clear();
+        for (std::size_t index = 0; index < options.iterations; ++index) sample();
+        result.median_ns = percentile(result.samples_ns, 50);
+        result.p95_ns = percentile(result.samples_ns, 95);
+        for (const auto& slice : live)
+            if (!ring.cancel(slice)) throw std::runtime_error("staging-ring live-range cleanup failed");
+        results.push_back(std::move(result));
+    };
+    for (const auto live_count : {0U, 1U, 8U, 32U, 128U, 512U}) {
+        add_reservation_benchmark(live_count, false);
+        add_reservation_benchmark(live_count, true);
+    }
 
     constexpr VkDeviceSize maximum_size = 1024U * 1024U;
     auto source = make_host_transfer_buffer(device, info, maximum_size);

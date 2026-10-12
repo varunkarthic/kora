@@ -46,6 +46,41 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+GPU reports also include `staging_ring_reserve_{dense,fragmented}_N` host-side measurements for
+0, 1, 8, 32, 128, and 512 live ranges. These time only `StagingRing::reserve()`; ring creation,
+live-range setup, correctness checks, cancellation, Vulkan submissions, and timeline waits are outside
+the interval. Dense cases keep adjacent reservations live. Fragmented cases interleave live ranges
+with cancelled ranges and leave a tail gap large enough for the measured request. This isolates
+reservation search cost; it is not a transfer-throughput or dispatch-latency measurement.
+
+### Staging-ring reservation scaling
+
+The reservation path previously rebuilt and sorted a temporary range list for each gap-search attempt.
+The range vector is now maintained in offset order and searched directly, so steady-state reservation
+does not allocate scratch memory or sort ranges. A single Release sample set on macOS arm64 / Apple M4,
+AppleClang 21.0.0, Vulkan 1.3.357 / MoltenVK used 1,000 measured samples and 50 warm-ups per case.
+Both runs used the same physical device and 256-byte requests; each result is host CPU time in
+nanoseconds. The full raw-sample reports are retained below.
+
+| Layout / live ranges | Before p50 / p95 (ns) | After p50 / p95 (ns) | p50 change |
+| --- | ---: | ---: | ---: |
+| Dense / 0 | 42 / 83 | 42 / 83 | 0% |
+| Dense / 8 | 83 / 84 | 42 / 84 | -49.4% |
+| Dense / 32 | 250 / 250 | 125 / 125 | -50.0% |
+| Dense / 128 | 833 / 875 | 333 / 375 | -60.0% |
+| Dense / 512 | 3,000 / 3,041 | 917 / 959 | -69.4% |
+| Fragmented / 128 | 833 / 834 | 333 / 334 | -60.0% |
+| Fragmented / 512 | 3,000 / 3,042 | 917 / 958 | -69.4% |
+
+At 0–8 live ranges the observed p50 is flat or lower (quantized timer samples make small differences
+coarse); at 128+ ranges p50 falls by 60–69%. The comparison is local evidence from one device and
+one run per revision, not a cross-platform guarantee. It establishes reservation-search improvement,
+not end-to-end transfer improvement; the remaining scan and ordered-vector insertion are linear in
+the number of live ranges. Re-run the GPU suite on target devices before extrapolating these values.
+
+- Before: [issue #215 baseline report](../benchmarks/results/issue215-before-411eb93.json)
+- After: [issue #215 optimized report](../benchmarks/results/issue215-after-local.json)
+
 ## Optional external CUDA reference
 
 KORA has no CUDA runtime dependency and does not build a CUDA runner. A separate benchmark producer

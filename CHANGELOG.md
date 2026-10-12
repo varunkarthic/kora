@@ -12,13 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-## [0.2.17] - 2026-10-12
-
 ### Added
 - Split diagnostic GPU completion profiling into completion-worker wake delay, Vulkan wait, timestamp collection, and Runtime callback phases.
 
 ### Changed
 - Avoid an idle coalescing collection delay for isolated GPU dispatches while retaining eager batching for compatible submissions already queued together.
+- Keep live staging-ring ranges ordered by buffer offset, removing per-reservation scratch allocation and sorting; add dense and fragmented reserve-only occupancy benchmarks.
 
 ## [0.2.16] - 2026-10-12
 
@@ -479,8 +478,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.17...HEAD
-[0.2.17]: https://github.com/varunkarthic/kora/compare/v0.2.16...v0.2.17
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.16...HEAD
 [0.2.16]: https://github.com/varunkarthic/kora/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/varunkarthic/kora/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/varunkarthic/kora/compare/v0.2.13...v0.2.14

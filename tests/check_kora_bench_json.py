@@ -90,6 +90,11 @@ if "--gpu" in arguments:
         "command_pool_cold_create_record_destroy",
     }
     expected_names |= {
+        f"staging_ring_reserve_{layout}_{count}"
+        for layout in ("dense", "fragmented")
+        for count in (0, 1, 8, 32, 128, 512)
+    }
+    expected_names |= {
         f"raw_vulkan_vector_add_{count}_dispatch_wait" for count in vector_sizes[1:]
     }
     expected_names |= {
