@@ -7,8 +7,10 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "core/calibration.hpp"
 #include "core/runtime_test_access.hpp"
 #include "kora/runtime.hpp"
 #include "kora/task_partition.hpp"
@@ -461,7 +463,7 @@ TEST(Runtime, CalibrationCanBeRequestedAndReplacesCorruptCache) {
     kora::RuntimeOptions options;
     options.cache_dir = directory.string();
     options.enable_startup_calibration = false;
-    options.calibration_budget_ms = 250;
+    options.calibration_budget_ms = 2000;
     auto runtime = kora::Runtime::create(options);
     if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
                      runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
@@ -472,9 +474,40 @@ TEST(Runtime, CalibrationCanBeRequestedAndReplacesCorruptCache) {
     ASSERT_FALSE(devices.empty());
     if (devices.front().uuid.empty()) GTEST_SKIP() << "device does not expose a stable UUID";
 
+    auto application_buffer_result = runtime.value().create_buffer<std::uint32_t>(4);
+    ASSERT_TRUE(application_buffer_result);
+    auto application_buffer = std::move(application_buffer_result).value();
+    const std::array<std::uint32_t, 4> application_values{11, 22, 33, 44};
+    ASSERT_TRUE(application_buffer.write(application_values));
+
     const auto path = directory / "calibration" / (devices.front().uuid + ".json");
     ASSERT_TRUE(runtime.value().calibrate());
+    auto preserved_values = application_buffer.read();
+    ASSERT_TRUE(preserved_values);
+    EXPECT_EQ(preserved_values.value(),
+              std::vector<std::uint32_t>(application_values.begin(), application_values.end()));
     ASSERT_TRUE(std::filesystem::exists(path));
+    {
+        std::ifstream calibration(path, std::ios::binary);
+        ASSERT_TRUE(calibration);
+        const std::string record((std::istreambuf_iterator<char>(calibration)),
+                                 std::istreambuf_iterator<char>());
+        const auto metric = [&](std::string_view name) {
+            const auto key = "\"" + std::string(name) + "\":";
+            const auto position = record.find(key);
+            if (position == std::string::npos) return std::uint64_t{0};
+            const auto start = position + key.size();
+            try {
+                return static_cast<std::uint64_t>(std::stoull(record.substr(start)));
+            } catch (...) {
+                return std::uint64_t{0};
+            }
+        };
+        EXPECT_EQ(metric("schema"), kora::detail::calibration::kSchemaVersion);
+        EXPECT_GT(metric("tiny_dispatch_ns"), 0U);
+        EXPECT_GT(metric("streaming_bytes_per_second"), 0U);
+        EXPECT_GT(metric("alu_operations_per_second"), 0U);
+    }
     {
         std::ofstream corrupt(path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(corrupt);

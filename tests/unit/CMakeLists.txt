@@ -38,6 +38,7 @@ kora_add_test(kora_unit_tests unit
     test_temporary_buffer_aliasing.cpp
 )
 target_link_libraries(kora_unit_tests PRIVATE ${KORA_VULKAN_HEADERS})
+target_include_directories(kora_unit_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 if(KORA_GLSLANG_VALIDATOR)
   add_dependencies(kora_unit_tests kora_spirv_fixture)
