@@ -14,7 +14,10 @@ installs the Vulkan validation layer so the integration suite exercises both sof
 enumeration and validation-enabled instance creation. On other platforms, the successful `kora-info` output check is skipped only
 when the CLI reports `NoVulkanImplementation`; failures unrelated to Vulkan availability remain
 test failures. The Linux job also rejects source-level branches on Vulkan vendor IDs to keep device
-policy capability-driven.
+policy capability-driven. On pull requests, CI checks that the branch contains the current target
+branch and that every already-published changelog section is unchanged. This catches stale issue
+branches whose changes would otherwise merge beneath an existing release heading after the automatic
+release commit arrives; new user-visible entries belong under `[Unreleased]`.
 
 Pushes to `main` additionally run macOS AppleClang and Windows MSVC jobs. These jobs use the same
 checked-in Debug preset and CTest suite. This separates fast pull-request feedback from the complete
@@ -95,7 +98,12 @@ first successful `main` CI run creates the initial release; later issue events c
 Every user-visible pull request must update `[Unreleased]` in
 [`CHANGELOG.md`](https://github.com/varunkarthic/kora/blob/main/CHANGELOG.md) under
 an appropriate Added, Changed, Deprecated, Removed, Fixed, or Security heading. The release workflow
-moves that content under the exact version and date and rewrites comparison links.
+moves that content under the exact version and date and rewrites comparison links. Pull-request CI
+compares all versioned release sections against the target branch and fails if a PR edits, adds, or
+removes a published section; historical corrections require an explicit, separately reviewed release
+maintenance change. The current correction for issue #176 is narrowly allowed to alter v0.2.5 on
+branch `issue/176-changelog-tag-alignment`; the normal immutability check remains mandatory for every
+other pull-request branch and every other released version.
 
 `tools/release/stamp_changelog.py` performs the deterministic file transformation.
 `tools/release/render_release.py` queries the GitHub API and renders usage instructions, status

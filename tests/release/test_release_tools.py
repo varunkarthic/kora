@@ -21,6 +21,7 @@ def load(name: str, path: Path):
 stamp_module = load("stamp_changelog", ROOT / "tools/release/stamp_changelog.py")
 render_module = load("render_release", ROOT / "tools/release/render_release.py")
 freshness_module = load("check_pr_branch_freshness", ROOT / "tools/ci/check_pr_branch_freshness.py")
+changelog_sections_module = load("check_changelog_sections", ROOT / "tools/ci/check_changelog_sections.py")
 
 
 class StampTests(unittest.TestCase):
@@ -74,6 +75,58 @@ class BranchFreshnessTests(unittest.TestCase):
             self.git(repo, "init", "-b", "main")
             with self.assertRaisesRegex(RuntimeError, "git merge-base failed"):
                 freshness_module.branch_contains_base("missing", "also-missing", repo)
+
+
+class ChangelogSectionTests(unittest.TestCase):
+    def test_issue_change_cannot_be_added_to_an_already_published_section(self):
+        base = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n- Existing release fix.\n"
+        )
+        stale_merge = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n"
+            "- Existing release fix.\n- Late issue-branch fix.\n"
+        )
+        with self.assertRaisesRegex(ValueError, r"published changelog section\(s\): 0\.2\.5"):
+            changelog_sections_module.validate(base, stale_merge)
+
+    def test_issue_change_under_unreleased_preserves_published_sections(self):
+        base = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n- Existing release fix.\n"
+        )
+        updated = (
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n- New issue fix.\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n- Existing release fix.\n"
+        )
+        changelog_sections_module.validate(base, updated)
+
+    def test_explicit_historical_correction_allows_only_reviewed_release_section(self):
+        base = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n- Existing release fix.\n"
+            "- Synchronize CPU executor task-drain counter updates with the worker wait mutex so graceful shutdown\n"
+            "  cannot lose the final wakeup and strand idle workers.\n"
+            "## [0.2.4] - 2026-10-12\n- Older release fix.\n"
+        )
+        correction = (
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n"
+            "- Synchronize CPU executor task-drain counter updates with the worker wait mutex so graceful shutdown\n"
+            "  cannot lose the final wakeup and strand idle workers.\n"
+            "- Reject published changelog edits.\n\n"
+            "## [0.2.5] - 2026-10-12\n\n### Fixed\n- Existing release fix.\n"
+            "## [0.2.4] - 2026-10-12\n- Older release fix.\n"
+        )
+        changelog_sections_module.validate(base, correction, {"0.2.5"})
+        unexpected_v025_edit = correction.replace(
+            "- Existing release fix.\n", "- Existing release fix.\n- Another claim.\n"
+        )
+        with self.assertRaisesRegex(ValueError, r"published changelog section\(s\): 0\.2\.5"):
+            changelog_sections_module.validate(base, unexpected_v025_edit, {"0.2.5"})
+        changed_history = correction.replace("Older release fix.", "Changed history.")
+        with self.assertRaisesRegex(ValueError, r"published changelog section\(s\): 0\.2\.4"):
+            changelog_sections_module.validate(base, changed_history, {"0.2.5"})
 
 
 class RenderTests(unittest.TestCase):
