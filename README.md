@@ -128,6 +128,11 @@ unavailable for two KORA sizes on this device. No CUDA comparison is available f
 device. Full workload definitions and caveats are in
 [Benchmarking](docs/benchmarking.md).
 
+The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are
+build/test targets, but CI smoke coverage is not a cross-OS performance study; no Linux/Windows
+hardware-GPU or CUDA result is claimed. The benchmark guide explains how to distinguish CPU
+arithmetic, software Vulkan, hardware-GPU timestamps, and KORA host overhead.
+
 ## Documentation
 
 Start with [Overview](docs/overview.md), then choose a path:

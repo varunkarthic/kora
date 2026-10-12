@@ -46,6 +46,36 @@ shader tooling or runtime Vulkan support returns exit code 3; the CTest wrapper 
 skip. The installed executable looks for its shader next to the binary or under
 `../share/kora/benchmarks`.
 
+## Comparing CPU, KORA GPU, and raw GPU paths across operating systems
+
+KORA's supported build/test environments are Linux/GCC, Windows/MSVC, and macOS/AppleClang; the
+benchmark report records the OS, architecture, compiler, build configuration, and logical CPU count
+so the execution context is visible. Run a Release build with the same workload, warm-up count, sample
+count, precision, and input sizes on each target. Compare CPU results only against CPU results, and
+compare the same timing domain across reports. CI smoke tests validate that reports are produced and
+parsed on supported platforms; GitHub-hosted runner measurements are not retained performance
+references and must not be treated as controlled hardware comparisons.
+
+| Path in report | What ran | How to interpret it |
+| --- | --- | --- |
+| `host_cpu_execution` | Single-thread CPU arithmetic baseline. | CPU workload time; not directly comparable to GPU timestamps or multi-thread throughput. |
+| `host_submit_completion` / `host_transfer_completion` | KORA API through completion, including host orchestration and waits. | End-to-end host latency, not kernel-only execution. |
+| `gpu_execution_timestamp` | Device timestamp interval around a KORA dispatch, if the selected device/driver supports valid timestamps for that size. | Best available device-side interval here, but not shader active-cycle accounting; unavailable means no value, not zero. |
+| `gpu_execution_timestamp` on `raw_vulkan_*` | Equivalent raw Vulkan dispatch interval on the same selected physical device and shader. | Lower-level dispatch reference; it omits KORA orchestration. |
+
+The `device_class` field distinguishes `cpu_vulkan` (software Vulkan, commonly executing on host
+CPU cores) from integrated/discrete hardware classes. A `cpu_vulkan` result is useful for correctness
+and driver-path overhead, but it is not a GPU-acceleration result and must not be labeled as hardware
+GPU throughput. Conversely, the standalone CPU arithmetic case is not a substitute for running the
+same shader on a device. CPU model, core topology, power policy, driver, Vulkan implementation, and
+clock state can all differ between OS machines; report them alongside any retained results before
+calculating ratios.
+
+Current retained performance data is a local Apple M4/MoltenVK run (plus a KosmicKrisp availability
+fixture) described below. It does not provide Linux/Windows hardware-GPU results or CUDA evidence.
+Those comparisons require machines with the relevant hardware and driver stack; do not infer them
+from CI smoke coverage or combine different device models into a single OS ranking.
+
 ### Python callback measurement
 
 The Python callback-boundary measurement is an optional companion report and requires the `python`
