@@ -27,6 +27,17 @@ def main() -> None:
             raise SystemExit(f"release workflow is missing Windows package contract: {contract}")
     print("validated Windows release package compiler contract")
 
+    ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    for contract in (
+        "fetch-depth: 0",
+        "Check pull request contains the latest base branch",
+        "refs/pull/${PR_NUMBER}/head",
+        "tools/ci/check_pr_branch_freshness.py",
+    ):
+        if contract not in ci:
+            raise SystemExit(f"CI workflow is missing stale-branch protection: {contract}")
+    print("validated pull-request base freshness contract")
+
 
 if __name__ == "__main__":
     main()

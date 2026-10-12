@@ -1,5 +1,7 @@
 import importlib.util
 import io
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -18,6 +20,7 @@ def load(name: str, path: Path):
 
 stamp_module = load("stamp_changelog", ROOT / "tools/release/stamp_changelog.py")
 render_module = load("render_release", ROOT / "tools/release/render_release.py")
+freshness_module = load("check_pr_branch_freshness", ROOT / "tools/ci/check_pr_branch_freshness.py")
 
 
 class StampTests(unittest.TestCase):
@@ -27,6 +30,50 @@ class StampTests(unittest.TestCase):
         self.assertIn("## [0.1.3] - 2026-10-10", result)
         self.assertIn("compare/v0.1.3...HEAD", result)
         self.assertIn("compare/v0.1.2...v0.1.3", result)
+
+    def test_empty_unreleased_section_cannot_produce_a_release(self):
+        source = "# Changelog\n\n## [Unreleased]\n\n## [0.1.2]\n- Previous.\n\n[Unreleased]: old\n"
+        with self.assertRaisesRegex(ValueError, "must contain at least one changelog entry"):
+            stamp_module.stamp(source, "0.1.3", "v0.1.2", "2026-10-10")
+
+    def test_heading_without_a_changelog_bullet_is_not_release_content(self):
+        source = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n## [0.1.2]\n- Previous.\n\n[Unreleased]: old\n"
+        with self.assertRaisesRegex(ValueError, "must contain at least one changelog entry"):
+            stamp_module.stamp(source, "0.1.3", "v0.1.2", "2026-10-10")
+
+
+class BranchFreshnessTests(unittest.TestCase):
+    @staticmethod
+    def git(repo: str, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", repo, *args], check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    def test_intervening_release_commit_requires_branch_synchronization(self):
+        with tempfile.TemporaryDirectory() as repo:
+            self.git(repo, "init", "-b", "main")
+            self.git(repo, "config", "user.name", "KORA test")
+            self.git(repo, "config", "user.email", "kora-test@example.invalid")
+            self.git(repo, "commit", "--allow-empty", "-m", "initial main")
+            self.git(repo, "switch", "-c", "issue/stale")
+            self.git(repo, "commit", "--allow-empty", "-m", "issue change")
+            stale_head = self.git(repo, "rev-parse", "HEAD")
+            self.git(repo, "switch", "main")
+            self.git(repo, "commit", "--allow-empty", "-m", "automatic release stamp")
+            release_tip = self.git(repo, "rev-parse", "HEAD")
+
+            self.assertFalse(freshness_module.branch_contains_base(release_tip, stale_head, repo))
+            self.git(repo, "switch", "issue/stale")
+            self.git(repo, "merge", "--no-edit", "main")
+            synchronized_head = self.git(repo, "rev-parse", "HEAD")
+            self.assertTrue(freshness_module.branch_contains_base(release_tip, synchronized_head, repo))
+
+    def test_missing_git_refs_fail_loudly(self):
+        with tempfile.TemporaryDirectory() as repo:
+            self.git(repo, "init", "-b", "main")
+            with self.assertRaisesRegex(RuntimeError, "git merge-base failed"):
+                freshness_module.branch_contains_base("missing", "also-missing", repo)
 
 
 class RenderTests(unittest.TestCase):
@@ -53,6 +100,19 @@ class RenderTests(unittest.TestCase):
     def test_malformed_issue_cannot_be_marked_stable(self):
         with self.assertRaisesRegex(RuntimeError, "malformed issue data"):
             render_module.render("o/r", "0.1.0", "changes", [{"number": 1, "state": "closed"}])
+
+    def test_empty_version_changelog_is_rejected(self):
+        changelog = "## [0.2.2] - 2026-10-12\n\n## [0.2.1] - 2026-10-11\n- Previous.\n"
+        with self.assertRaisesRegex(ValueError, "section for 0.2.2 has no release entries"):
+            render_module.release_changelog(changelog, "0.2.2")
+
+    def test_v022_benchmark_changes_are_not_attributed_to_v021(self):
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        v021 = render_module.release_changelog(changelog, "0.2.1")
+        v022 = render_module.release_changelog(changelog, "0.2.2")
+        benchmark_change = "same Runtime-selected physical device"
+        self.assertNotIn(benchmark_change, v021)
+        self.assertIn(benchmark_change, v022)
 
 
 class PaginationTests(unittest.TestCase):

@@ -6,7 +6,9 @@ support issues. This page documents the maintainer workflow rather than inviting
 ## Issue lifecycle
 
 1. Select the next dependency-ordered GitHub issue.
-2. Create `issue/<number>-<slug>` from an updated `main`.
+2. Create `issue/<number>-<slug>` from an updated `main`. Before review and merge, fetch and merge or
+   rebase the latest base branch; CI rejects a stale issue branch so automatic release commits cannot
+   shift its changelog entries under an already-published version.
 3. Implement only that issue and update tests, docs, and `[Unreleased]` changelog entries.
 4. Run focused tests, the full Debug suite, and risk-specific sanitizer/package/docs checks.
 5. Open a pull request containing `Closes #<number>`.
@@ -28,6 +30,8 @@ Warnings fail the documentation build locally, in CI, and on Read the Docs.
 Maintain release gates in the `vMAJOR.MINOR` milestone. Do not manually claim Stable while a gate is
 open, move published tags, or reuse a failed version. Correct failures through a new issue branch and
 allow the next successful push to receive the next patch number.
+The release workflow also requires at least one bullet entry under `Unreleased`; a blank section is a
+release validation error, not an empty release note.
 
 ## Private data
 

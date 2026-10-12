@@ -16,6 +16,13 @@ def stamp(text: str, version: str, previous_tag: str | None, date: str) -> str:
     if f"## [{version}]" in text:
         raise ValueError(f"version {version} is already present in CHANGELOG.md")
 
+    unreleased_start = text.index(heading) + len(heading)
+    next_section = re.search(r"(?m)^## \[", text[unreleased_start:])
+    unreleased_end = unreleased_start + next_section.start() if next_section else len(text)
+    unreleased = text[unreleased_start:unreleased_end]
+    if not re.search(r"(?m)^\s*[-*+]\s+\S", unreleased):
+        raise ValueError("CHANGELOG.md Unreleased section must contain at least one changelog entry")
+
     text = text.replace(heading, f"{heading}\n\n## [{version}] - {date}", 1)
     link = re.compile(r"^\[Unreleased\]:.*$", re.MULTILINE)
     if not link.search(text):

@@ -260,7 +260,10 @@ def release_changelog(text: str, version: str) -> str:
         if position >= 0
     ]
     end = min(candidates) if candidates else len(text)
-    return text[start : end if end >= 0 else len(text)]
+    section = text[start : end if end >= 0 else len(text)]
+    if not re.search(r"(?m)^\s*[-*+]\s+\S", section):
+        raise ValueError(f"CHANGELOG.md section for {version} has no release entries")
+    return section
 
 
 def main() -> None:
