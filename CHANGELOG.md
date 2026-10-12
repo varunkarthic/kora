@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-12
+
 ### Fixed
 - Paginate release milestone and issue queries, rejecting incomplete or malformed API results before calculating Beta/Stable status.
 
@@ -364,7 +366,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/varunkarthic/kora/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/varunkarthic/kora/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/varunkarthic/kora/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/varunkarthic/kora/releases/tag/v0.2.0
