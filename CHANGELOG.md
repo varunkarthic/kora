@@ -23,6 +23,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   ordinary dispatch remains device-bound and incomplete records retain the current device.
 - Learn fresh per-kernel GPU execution costs from completed adaptive-dispatch timestamp samples, with
   identity-safe keys, outlier rejection, expiry, bounded persistence, and conservative calibration blending.
+- Add the selected adaptive-placement score breakdown to its completed GPU trace event under Trace
+  telemetry; explicit dispatch and score-free cold-start fallback remain unannotated.
 
 ### Changed
 - Bump the internal calibration-record schema to 2 so older records are recalibrated.

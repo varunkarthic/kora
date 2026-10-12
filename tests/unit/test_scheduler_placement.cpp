@@ -39,8 +39,10 @@ TEST(SchedulerPlacement, ChoosesLowestMeasuredFinishTimeDeterministically) {
     const auto second = select_adaptive_device({slow, fast}, slow.id, workload());
     ASSERT_TRUE(first);
     ASSERT_TRUE(second);
-    EXPECT_EQ(first.value(), fast.id);
-    EXPECT_EQ(second.value(), first.value());
+    EXPECT_EQ(first.value().device, fast.id);
+    EXPECT_EQ(second.value().device, first.value().device);
+    ASSERT_TRUE(first.value().score);
+    EXPECT_GT(first.value().score->predicted_finish_ns, 0.0);
 }
 
 TEST(SchedulerPlacement, IncompleteCalibrationRetainsTheKernelBoundDevice) {
@@ -49,7 +51,8 @@ TEST(SchedulerPlacement, IncompleteCalibrationRetainsTheKernelBoundDevice) {
     incomplete.calibration_record.alu_operations_per_second = 0;
     const auto selected = select_adaptive_device({current, incomplete}, current.id, workload());
     ASSERT_TRUE(selected);
-    EXPECT_EQ(selected.value(), current.id);
+    EXPECT_EQ(selected.value().device, current.id);
+    EXPECT_FALSE(selected.value().score);
 }
 
 TEST(SchedulerPlacement, FiltersUnsupportedUnhealthyAndUnderBudgetCandidates) {
@@ -58,25 +61,25 @@ TEST(SchedulerPlacement, FiltersUnsupportedUnhealthyAndUnderBudgetCandidates) {
     faster.available_device_memory_bytes = 1024;
     const auto selected = select_adaptive_device({current, faster}, current.id, workload());
     ASSERT_TRUE(selected);
-    EXPECT_EQ(selected.value(), current.id);
+    EXPECT_EQ(selected.value().device, current.id);
 
     auto unhealthy = candidate(1, 10'000'000);
     unhealthy.healthy = false;
     const auto healthy_selected = select_adaptive_device({current, unhealthy}, current.id, workload());
     ASSERT_TRUE(healthy_selected);
-    EXPECT_EQ(healthy_selected.value(), current.id);
+    EXPECT_EQ(healthy_selected.value().device, current.id);
 
     auto unsupported = candidate(1, 10'000'000);
     unsupported.supported = false;
     const auto supported_selected = select_adaptive_device({current, unsupported}, current.id, workload());
     ASSERT_TRUE(supported_selected);
-    EXPECT_EQ(supported_selected.value(), current.id);
+    EXPECT_EQ(supported_selected.value().device, current.id);
 
     auto exact_limit = candidate(1, 10'000'000);
     exact_limit.available_device_memory_bytes = workload().required_device_memory_bytes;
     const auto limit_selected = select_adaptive_device({current, exact_limit}, current.id, workload());
     ASSERT_TRUE(limit_selected);
-    EXPECT_EQ(limit_selected.value(), current.id);
+    EXPECT_EQ(limit_selected.value().device, current.id);
 }
 
 TEST(SchedulerPlacement, RejectsInvalidWorkloadAndIneligibleCurrentDevice) {
@@ -100,13 +103,15 @@ TEST(SchedulerPlacement, BlendsFreshConfidentExecutionEvidenceWithCalibration) {
     execution_only.required_device_memory_bytes = 0;
     const auto selected = select_adaptive_device({current, alternate}, current.id, execution_only);
     ASSERT_TRUE(selected);
-    EXPECT_EQ(selected.value(), alternate.id);
+    EXPECT_EQ(selected.value().device, alternate.id);
+    ASSERT_TRUE(selected.value().score);
 
     current.online_execution.reset();
     alternate.online_execution->count = 4;
     const auto cold = select_adaptive_device({current, alternate}, current.id, execution_only);
     ASSERT_TRUE(cold);
-    EXPECT_EQ(cold.value(), current.id);
+    EXPECT_EQ(cold.value().device, current.id);
+    ASSERT_TRUE(cold.value().score);
 }
 
 }  // namespace

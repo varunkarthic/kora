@@ -24,9 +24,12 @@ if (trace) {
 
 `export_trace_json()` polls only completed queue work and never waits for pending GPU submissions.
 The retained history is bounded to the newest 4096 completed samples per device. Exported traces
-contain operational timing metadata only; KORA does not persist them. Current Runtime dispatches do
-not consume `ScoreBreakdown` for device selection, so this trace stream does not fabricate scheduler
-score components. The standalone scheduler cost API remains documented in `scheduler.md`.
+contain operational timing metadata only; KORA does not persist them. Adaptive Runtime dispatch records
+include the actual selected candidate's `ScoreBreakdown`, associated with the GPU event by submission
+ID. Score components are in nanoseconds and include the predicted finish estimate. Ordinary explicitly
+bound dispatches have no scheduler score, and cold-start fallback that lacks a complete calibration
+record also omits the score rather than inventing one. See [scheduler cost models](scheduler.md) for
+the meaning of the terms.
 
 ## Per-function reference
 

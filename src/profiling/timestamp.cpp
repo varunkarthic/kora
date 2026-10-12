@@ -147,8 +147,10 @@ Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t com
             GpuTimestampSample{slot.submission_id, slot.queue_value,    values[0],          values[1],
                                duration.value(),   slot.host_timestamp, slot.host_deviation};
         ++samples_collected_;
-        history_.push_back(latest_sample_);
-        if (history_.size() > 4096) history_.pop_front();
+        if (trace_history_enabled_) {
+            history_.push_back(latest_sample_);
+            if (history_.size() > 4096) history_.pop_front();
+        }
         samples.push_back(latest_sample_);
         slots_.pop_front();
     }
@@ -158,6 +160,12 @@ Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t com
 std::uint64_t TimestampRing::dropped_samples() const noexcept {
     std::lock_guard lock(mutex_);
     return dropped_samples_;
+}
+
+void TimestampRing::enable_trace_history(bool enabled) noexcept {
+    std::lock_guard lock(mutex_);
+    trace_history_enabled_ = enabled;
+    if (!enabled) history_.clear();
 }
 
 std::uint64_t TimestampRing::samples_collected() const noexcept {

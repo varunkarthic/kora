@@ -41,6 +41,8 @@ public:
     void submitted(std::uint64_t submission_id, std::uint64_t queue_value);
     /// Reads only completed slots, without WAIT_BIT. Samples still pending remain in the ring.
     Result<std::vector<GpuTimestampSample>> collect(std::uint64_t completed_queue_value);
+    /// Enable bounded historical retention for opt-in Trace export.
+    void enable_trace_history(bool enabled) noexcept;
     std::uint64_t dropped_samples() const noexcept;
     std::uint64_t samples_collected() const noexcept;
     GpuTimestampSample latest_sample() const noexcept;
@@ -71,6 +73,7 @@ private:
     std::uint64_t dropped_samples_ = 0;
     std::uint64_t samples_collected_ = 0;
     GpuTimestampSample latest_sample_{};
+    bool trace_history_enabled_ = false;
     std::deque<GpuTimestampSample> history_;
 };
 

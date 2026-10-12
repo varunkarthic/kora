@@ -84,7 +84,21 @@ TEST(GpuTimestampRing, ReadsOnlyCompletedSlotsWithoutWaiting) {
     EXPECT_EQ(fixture.flags, VK_QUERY_RESULT_64_BIT);
     EXPECT_EQ(ring.samples_collected(), 1U);
     const auto history = ring.history();
-    ASSERT_EQ(history.size(), 1U);
-    EXPECT_EQ(history.front().submission_id, 7U);
+    EXPECT_TRUE(history.empty());
+
+    ring.enable_trace_history(true);
+
+    for (std::uint64_t submission_id = 8; submission_id <= 4103; ++submission_id) {
+        ASSERT_TRUE(ring.record_start(reinterpret_cast<VkCommandBuffer>(std::uintptr_t{3}), submission_id));
+        ring.record_end(reinterpret_cast<VkCommandBuffer>(std::uintptr_t{3}), submission_id);
+        ring.submitted(submission_id, submission_id);
+        const auto collected = ring.collect(submission_id);
+        ASSERT_TRUE(collected);
+        ASSERT_EQ(collected.value().size(), 1U);
+    }
+    const auto bounded_history = ring.history();
+    ASSERT_EQ(bounded_history.size(), 4096U);
+    EXPECT_EQ(bounded_history.front().submission_id, 8U);
+    EXPECT_EQ(bounded_history.back().submission_id, 4103U);
 }
 }  // namespace
