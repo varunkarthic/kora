@@ -249,6 +249,7 @@ Status QueueContext::shutdown(ShutdownMode mode) {
 }
 
 void QueueContext::enqueue_completion(Completion completion) {
+    if (completion.on_completion_profile) completion.enqueued_at = std::chrono::steady_clock::now();
     {
         std::lock_guard lock(completion_mutex_);
         completions_.push_back(std::move(completion));
@@ -266,8 +267,14 @@ void QueueContext::fail_queued_device_lost() {
     for (auto& queued : pending) {
         auto error = Error(ErrorCode::DeviceLost, "logical device is lost; queued work was not submitted")
                          .with_vk(fault_state_->last_result());
-        enqueue_completion(
-            Completion{queued.id, 0, std::move(error), std::move(queued.submission.on_complete)});
+        enqueue_completion(Completion{queued.id,
+                                      0,
+                                      std::move(error),
+                                      std::move(queued.submission.on_complete),
+                                      VK_NULL_HANDLE,
+                                      false,
+                                      std::move(queued.submission.on_completion_profile),
+                                      {}});
     }
 }
 
@@ -307,12 +314,12 @@ void QueueContext::submission_loop() {
                     const auto& first = batch.front().submission;
                     const auto& next = candidate.submission;
                     if (!coalescing_.enabled || !use_timeline_ || coalescing_.maximum_batch_size < 2 ||
-                        coalescing_.maximum_wait_ns == 0 || !first.coalescible || !first.dependency_free ||
-                        first.priority > 1 || first.coalescing_key == 0 || !next.coalescible ||
-                        !next.dependency_free || next.priority > 1 ||
-                        next.coalescing_key != first.coalescing_key || !first.signal_semaphores.empty() ||
-                        !next.signal_semaphores.empty() || first.fence != VK_NULL_HANDLE ||
-                        next.fence != VK_NULL_HANDLE || !compatible_waits(first, next))
+                        !first.coalescible || !first.dependency_free || first.priority > 1 ||
+                        first.coalescing_key == 0 || !next.coalescible || !next.dependency_free ||
+                        next.priority > 1 || next.coalescing_key != first.coalescing_key ||
+                        !first.signal_semaphores.empty() || !next.signal_semaphores.empty() ||
+                        first.fence != VK_NULL_HANDLE || next.fence != VK_NULL_HANDLE ||
+                        !compatible_waits(first, next))
                         return false;
                     for (const auto& existing : accumulated_resources) {
                         for (const auto& access : next.resources) {
@@ -325,7 +332,7 @@ void QueueContext::submission_loop() {
                 };
                 if (batch.front().submission.coalescible && batch.front().submission.dependency_free &&
                     batch.front().submission.priority <= 1 && coalescing_.enabled && use_timeline_ &&
-                    coalescing_.maximum_batch_size > 1 && coalescing_.maximum_wait_ns > 0) {
+                    coalescing_.maximum_batch_size > 1) {
                     const auto deadline = std::chrono::steady_clock::now() +
                                           std::chrono::nanoseconds(coalescing_.maximum_wait_ns);
                     auto resources = batch.front().submission.resources;
@@ -352,15 +359,27 @@ void QueueContext::submission_loop() {
             if (fault_state_ && !fault_state_->healthy())
                 status = Error(ErrorCode::DeviceLost, "logical device is lost; queued work was not submitted")
                              .with_vk(fault_state_->last_result());
-            enqueue_completion(
-                Completion{queued.id, 0, std::move(status), std::move(queued.submission.on_complete)});
+            enqueue_completion(Completion{queued.id,
+                                          0,
+                                          std::move(status),
+                                          std::move(queued.submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(queued.submission.on_completion_profile),
+                                          {}});
             continue;
         }
         if (fault_state_ && !fault_state_->healthy()) {
             auto error = Error(ErrorCode::DeviceLost, "logical device is lost; queued work was not submitted")
                              .with_vk(fault_state_->last_result());
-            enqueue_completion(
-                Completion{queued.id, 0, std::move(error), std::move(queued.submission.on_complete)});
+            enqueue_completion(Completion{queued.id,
+                                          0,
+                                          std::move(error),
+                                          std::move(queued.submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(queued.submission.on_completion_profile),
+                                          {}});
             fail_queued_device_lost();
             continue;
         }
@@ -427,6 +446,12 @@ void QueueContext::submission_loop() {
                     }
                 }
             };
+            combined.on_completion_profile = [parts](uint64_t worker_delay, uint64_t wait_duration) {
+                for (auto& [id, part] : *parts) {
+                    (void)id;
+                    if (part.on_completion_profile) part.on_completion_profile(worker_delay, wait_duration);
+                }
+            };
             queued.submission = std::move(combined);
         } else {
             queued = std::move(batch.front());
@@ -434,9 +459,15 @@ void QueueContext::submission_loop() {
         const auto timeline_values_needed = static_cast<uint64_t>(batch.size());
         if (timeline_values_needed == 0 || next_timeline_value_ == 0 ||
             timeline_values_needed - 1 > std::numeric_limits<uint64_t>::max() - next_timeline_value_) {
-            enqueue_completion(Completion{
-                queued.id, 0, Error(ErrorCode::Overflow, "QueueContext timeline value space is exhausted"),
-                std::move(queued.submission.on_complete)});
+            enqueue_completion(
+                Completion{queued.id,
+                           0,
+                           Error(ErrorCode::Overflow, "QueueContext timeline value space is exhausted"),
+                           std::move(queued.submission.on_complete),
+                           VK_NULL_HANDLE,
+                           false,
+                           std::move(queued.submission.on_completion_profile),
+                           {}});
             continue;
         }
 
@@ -461,8 +492,14 @@ void QueueContext::submission_loop() {
                     } catch (...) {
                     }
                 }
-                enqueue_completion(
-                    Completion{queued.id, 0, std::move(record_status), std::move(submission.on_complete)});
+                enqueue_completion(Completion{queued.id,
+                                              0,
+                                              std::move(record_status),
+                                              std::move(submission.on_complete),
+                                              VK_NULL_HANDLE,
+                                              false,
+                                              std::move(submission.on_completion_profile),
+                                              {}});
                 continue;
             }
         }
@@ -475,7 +512,14 @@ void QueueContext::submission_loop() {
                 } catch (...) {
                 }
             }
-            enqueue_completion(Completion{queued.id, 0, error, std::move(submission.on_complete)});
+            enqueue_completion(Completion{queued.id,
+                                          0,
+                                          error,
+                                          std::move(submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(submission.on_completion_profile),
+                                          {}});
             continue;
         }
         std::vector<uint64_t> wait_values = submission.wait_values;
@@ -488,7 +532,14 @@ void QueueContext::submission_loop() {
                          [](auto value) { return value != 0; }))) {
             const auto error = Error(ErrorCode::UnsupportedFeature,
                                      "Fence fallback accepts binary semaphore waits and signals only");
-            enqueue_completion(Completion{queued.id, 0, error, std::move(submission.on_complete)});
+            enqueue_completion(Completion{queued.id,
+                                          0,
+                                          error,
+                                          std::move(submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(submission.on_completion_profile),
+                                          {}});
             continue;
         }
         auto signal_semaphores = submission.signal_semaphores;
@@ -556,10 +607,15 @@ void QueueContext::submission_loop() {
         const bool was_active = queue_submit_active_.test_and_set(std::memory_order_acquire);
         KORA_ASSERT(!was_active && "Concurrent host submission to one Vulkan queue");
         if (was_active) {
-            enqueue_completion(Completion{queued.id, 0,
+            enqueue_completion(Completion{queued.id,
+                                          0,
                                           Error(ErrorCode::InternalInvariantViolation,
                                                 "Concurrent host submission to one Vulkan queue"),
-                                          std::move(submission.on_complete)});
+                                          std::move(submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(submission.on_completion_profile),
+                                          {}});
             continue;
         }
         VkFence completion_fence = VK_NULL_HANDLE;
@@ -570,8 +626,14 @@ void QueueContext::submission_loop() {
             } else {
                 auto fence_result = acquire_fence();
                 if (!fence_result) {
-                    enqueue_completion(Completion{queued.id, 0, std::move(fence_result).error(),
-                                                  std::move(submission.on_complete)});
+                    enqueue_completion(Completion{queued.id,
+                                                  0,
+                                                  std::move(fence_result).error(),
+                                                  std::move(submission.on_complete),
+                                                  VK_NULL_HANDLE,
+                                                  false,
+                                                  std::move(submission.on_completion_profile),
+                                                  {}});
                     continue;
                 }
                 completion_fence = fence_result.value();
@@ -609,14 +671,27 @@ void QueueContext::submission_loop() {
             }
         }
         if (result == VK_SUCCESS) {
-            Completion completion{queued.id, timeline_value, ok_status(), std::move(submission.on_complete)};
+            Completion completion{queued.id,
+                                  timeline_value,
+                                  ok_status(),
+                                  std::move(submission.on_complete),
+                                  VK_NULL_HANDLE,
+                                  false,
+                                  std::move(submission.on_completion_profile),
+                                  {}};
             completion.fence = completion_fence;
             completion.pooled_fence = pooled_fence;
             enqueue_completion(std::move(completion));
         } else {
             if (pooled_fence) release_fence(completion_fence, false);
-            enqueue_completion(Completion{queued.id, 0, vk_error("vkQueueSubmit failed", result),
-                                          std::move(submission.on_complete)});
+            enqueue_completion(Completion{queued.id,
+                                          0,
+                                          vk_error("vkQueueSubmit failed", result),
+                                          std::move(submission.on_complete),
+                                          VK_NULL_HANDLE,
+                                          false,
+                                          std::move(submission.on_completion_profile),
+                                          {}});
         }
     }
     {
@@ -641,6 +716,8 @@ void QueueContext::completion_loop() {
             completion = std::move(completions_.front());
             completions_.pop_front();
         }
+        const auto completion_worker_started = std::chrono::steady_clock::now();
+        const auto completion_wait_started = completion_worker_started;
         if (completion.timeline_value != 0) {
             if (use_timeline_) {
                 for (;;) {
@@ -701,6 +778,21 @@ void QueueContext::completion_loop() {
                         break;
                     }
                 }
+            }
+        }
+        if (completion.on_completion_profile) {
+            const auto completion_wait_finished = std::chrono::steady_clock::now();
+            const auto worker_delay = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          completion_worker_started - completion.enqueued_at)
+                                          .count();
+            const auto wait_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           completion_wait_finished - completion_wait_started)
+                                           .count();
+            try {
+                completion.on_completion_profile(
+                    worker_delay > 0 ? static_cast<uint64_t>(worker_delay) : 0,
+                    wait_duration > 0 ? static_cast<uint64_t>(wait_duration) : 0);
+            } catch (...) {
             }
         }
         if (completion.status && fault_state_ && !fault_state_->healthy()) {

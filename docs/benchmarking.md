@@ -140,6 +140,11 @@ the corresponding device-time result is omitted. This mode adds profiling work; 
 ordinary benchmark rows as the Release performance baseline or feed the report to the comparison
 table or chart generators.
 
+The completion diagnostics further split completion-worker wake delay, the Vulkan timeline/fence
+wait, timestamp-query collection, and Runtime completion-callback work. These phases explain where
+the caller-visible Event latency is spent; they are measured only in diagnostic mode and are not
+themselves an optimization target or a substitute for the ordinary KORA/raw Vulkan comparison.
+
 Phase profiling identified repeated SPIR-V reflection as avoidable work on ordinary pipeline-cache
 hits. Static-local-size dispatches now perform an exact cache-key lookup first and only run reflection
 when a pipeline is not already cached. `LocalSizeId` dispatches retain the full validation path because
