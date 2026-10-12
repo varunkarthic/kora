@@ -65,11 +65,14 @@ and completion wait; raw Vulkan also performs required mapped-memory flushes for
 GPU timestamp rows measure the dispatch interval on the same queue and selected physical device.
 
 The raw Vulkan buffers are persistent host-visible allocations, while KORA uses its normal buffer and
-dispatch path, so host timings are not identical residency/readback contracts. They are useful for
-separating KORA orchestration cost from device execution, but should not be described as a pure
-abstraction-overhead delta. Missing or intermittently unavailable device timestamp samples are
-reported as unavailable, never interpolated. For another device or OS, rerun the same command and
-retain the raw JSON report:
+dispatch path. The report therefore keeps three host boundaries separate: KORA's default completion
+(including writable-output readback), KORA with deferred device-resident output, and raw Vulkan using
+persistent host-visible buffers. Deferred KORA is the closest dispatch/completion comparison, but it
+still differs in allocation and residency policy; none of these host rows is a pure abstraction-only
+measurement. Every measured output is explicitly read back and validated after the timer stops,
+including deferred outputs. Compute timestamp availability is reported per result name and never
+inferred from vector-add timer support. Missing device timestamps are reported as unavailable, never
+interpolated. For another device or OS, rerun the same command and retain the raw JSON report:
 
 ```sh
 KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 \
@@ -81,26 +84,30 @@ One local Release sample on macOS arm64 / Apple M4, AppleClang 21.0.0, Vulkan 1.
 used 1,000 measured samples and 50 warm-ups. This is a same-device comparison, not a cross-platform
 claim; this machine provides no CUDA result. The complete raw report, including per-sample values and
 environment metadata, is
-[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-ec51125.json).
+[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json)
+(source revision eb7092113e71a8ce4e86ac16cab31204b80e4070).
 The side-by-side tables in [the generated comparison page](benchmark-compute-results.md) are rendered
 directly from that report by [`render_comparison.py`](../tools/kora-bench/render_comparison.py).
 Regenerate them after a new run with:
 
 ```sh
 python3 tools/kora-bench/render_comparison.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-ec51125.json \
-  --sizes 4096 --kora-revision ec511252bae75d689f64337783b91c7439283737 \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json \
+  --sizes 4096 --kora-revision eb7092113e71a8ce4e86ac16cab31204b80e4070 \
   > docs/benchmark-compute-results.md
 ```
 
-On this small workload, KORA device-time medians are within roughly 3.5% of the raw Vulkan values for
-the four workloads with complete KORA timestamps; matmul's KORA p95 is a substantial outlier and
-requires repeated-device investigation. Host completion medians are about 2.1–3.3× the raw path,
-indicating that KORA host-side orchestration, transfer/readback policy, and completion handling remain
-the more visible small-workload cost. These measurements identify follow-up profiling targets; they do
-not themselves demonstrate an end-to-end optimization or generalize to larger inputs. The existing
-vector-add size sweep remains the large-workload throughput comparison, while these compute cases
-currently provide a fixed medium-sized point.
+In this run, KORA default-to-deferred host median latency fell by 36–57% across the five compute
+workloads. Deferred KORA ranged from 0.77× to 2.82× the raw Vulkan host median: tiled matrix
+multiplication was 23% faster than raw Vulkan, while SAXPY remained 2.82× slower. Device timestamp
+medians were 4–25% slower than raw Vulkan across these five workloads. The probe uses KORA's default
+completion path because deferred completion does not publish Runtime profiling durations; this does
+not change the GPU timestamp interval, which remains the dispatch region. The separate large vector-add
+sizes did not provide KORA timestamps in this run. These are measured boundaries with distinct
+residency policies, not a pure abstraction overhead delta. The report covers one fixed 4,096-element
+workload point (64×64 for matrix multiplication), not small/medium/large scaling; vector-add remains
+the separate size sweep. Results identify follow-up profiling targets and do not establish CUDA parity
+or cross-platform performance.
 
 ### Staging-ring reservation scaling
 

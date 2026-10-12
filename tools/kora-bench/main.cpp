@@ -1800,23 +1800,32 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     };
     static_assert(sizeof(SaxpyParams) == sizeof(float) + sizeof(std::uint32_t));
     const SaxpyParams params{2.0F, element_count};
-    const auto run_saxpy = [&] {
+    const auto run_saxpy = [&](bool defer_readback = false) {
         if (!y.value().write(saxpy_y)) throw std::runtime_error("SAXPY input reset failed");
-        auto event = runtime.dispatch(saxpy.value())
-                         .global(element_count)
-                         .read(x.value())
-                         .read_write(y.value())
-                         .push(params)
-                         .submit();
+        auto builder = runtime.dispatch(saxpy.value())
+                           .global(element_count)
+                           .read(x.value())
+                           .read_write(y.value())
+                           .push(params);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan SAXPY dispatch failed");
     };
+    const auto validate_saxpy = [&] {
+        auto readback = runtime.readback(y.value());
+        if (!readback || !readback.value().wait()) return false;
+        auto values = y.value().read();
+        return values && std::all_of(values.value().begin(), values.value().end(),
+                                     [](float value) { return value == 5.0F; });
+    };
     run_saxpy();
-    auto saxpy_values = y.value().read();
-    if (!saxpy_values || !std::all_of(saxpy_values.value().begin(), saxpy_values.value().end(),
-                                      [](float value) { return value == 5.0F; }))
-        return false;
-    results.push_back(run("gpu_saxpy_4096_upload_dispatch_wait", [&] { run_saxpy(); }, options));
-    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", run_saxpy);
+    if (!validate_saxpy()) return false;
+    results.push_back(
+        run_checked("gpu_saxpy_4096_upload_dispatch_wait", [&] { run_saxpy(); }, validate_saxpy, options));
+    results.push_back(run_checked(
+        "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait", [&] { run_saxpy(true); }, validate_saxpy,
+        options));
+    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", [&] { run_saxpy(); });
 
     kora::KernelMetadata reduction_metadata;
     reduction_metadata.kernel_id = "kora_bench.reduction";
@@ -1841,22 +1850,31 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     auto reduction_output = runtime.create_buffer<float>(element_count / 64);
     if (!reduction_source || !reduction_output || !reduction_source.value().write(reduction_input))
         return false;
-    const auto run_reduction = [&] {
-        auto event = runtime.dispatch(reduction.value())
-                         .global(element_count)
-                         .read(reduction_source.value())
-                         .write(reduction_output.value())
-                         .push(element_count)
-                         .submit();
+    const auto run_reduction = [&](bool defer_readback = false) {
+        auto builder = runtime.dispatch(reduction.value())
+                           .global(element_count)
+                           .read(reduction_source.value())
+                           .write(reduction_output.value())
+                           .push(element_count);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan reduction dispatch failed");
     };
+    const auto validate_reduction = [&] {
+        auto readback = runtime.readback(reduction_output.value());
+        if (!readback || !readback.value().wait()) return false;
+        auto values = reduction_output.value().read();
+        return values && std::all_of(values.value().begin(), values.value().end(),
+                                     [](float value) { return value == 64.0F; });
+    };
     run_reduction();
-    auto reduced_values = reduction_output.value().read();
-    if (!reduced_values || !std::all_of(reduced_values.value().begin(), reduced_values.value().end(),
-                                        [](float value) { return value == 64.0F; }))
-        return false;
-    results.push_back(run("gpu_reduction_4096_dispatch_wait", run_reduction, options));
-    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", run_reduction);
+    if (!validate_reduction()) return false;
+    results.push_back(run_checked(
+        "gpu_reduction_4096_dispatch_wait", [&] { run_reduction(); }, validate_reduction, options));
+    results.push_back(run_checked(
+        "gpu_reduction_4096_deferred_readback_dispatch_wait", [&] { run_reduction(true); },
+        validate_reduction, options));
+    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", [&] { run_reduction(); });
 
     kora::KernelMetadata scan_metadata;
     scan_metadata.kernel_id = "kora_bench.scan_tile64";
@@ -1880,24 +1898,33 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     auto scan_source = runtime.create_buffer<std::uint32_t>(element_count);
     auto scan_output = runtime.create_buffer<std::uint32_t>(element_count);
     if (!scan_source || !scan_output || !scan_source.value().write(scan_input)) return false;
-    const auto run_scan = [&] {
-        auto event = runtime.dispatch(scan.value())
-                         .global(element_count)
-                         .read(scan_source.value())
-                         .write(scan_output.value())
-                         .push(element_count)
-                         .submit();
+    const auto run_scan = [&](bool defer_readback = false) {
+        auto builder = runtime.dispatch(scan.value())
+                           .global(element_count)
+                           .read(scan_source.value())
+                           .write(scan_output.value())
+                           .push(element_count);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan scan dispatch failed");
     };
+    const auto validate_scan = [&] {
+        auto readback = runtime.readback(scan_output.value());
+        if (!readback || !readback.value().wait()) return false;
+        auto values = scan_output.value().read();
+        return values && std::all_of(values.value().begin(), values.value().end(),
+                                     [index = std::uint32_t{0}](std::uint32_t value) mutable {
+                                         return value == (index++ % 64) + 1;
+                                     });
+    };
     run_scan();
-    auto scanned_values = scan_output.value().read();
-    if (!scanned_values || !std::all_of(scanned_values.value().begin(), scanned_values.value().end(),
-                                        [index = std::uint32_t{0}](std::uint32_t value) mutable {
-                                            return value == (index++ % 64) + 1;
-                                        }))
-        return false;
-    results.push_back(run("gpu_tiled_scan_4096_dispatch_wait", run_scan, options));
-    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", run_scan);
+    if (!validate_scan()) return false;
+    results.push_back(
+        run_checked("gpu_tiled_scan_4096_dispatch_wait", [&] { run_scan(); }, validate_scan, options));
+    results.push_back(run_checked(
+        "gpu_tiled_scan_4096_deferred_readback_dispatch_wait", [&] { run_scan(true); }, validate_scan,
+        options));
+    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", [&] { run_scan(); });
 
     kora::KernelMetadata matmul_metadata;
     matmul_metadata.kernel_id = "kora_bench.tiled_matmul";
@@ -1927,23 +1954,32 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     if (!matrix_a || !matrix_b || !matrix_c || !matrix_a.value().write(matrix_values) ||
         !matrix_b.value().write(matrix_values))
         return false;
-    const auto run_matmul = [&] {
-        auto event = runtime.dispatch(matmul.value())
-                         .global(matrix_dimension, matrix_dimension, 1)
-                         .read(matrix_a.value())
-                         .read(matrix_b.value())
-                         .write(matrix_c.value())
-                         .push(matrix_dimension)
-                         .submit();
+    const auto run_matmul = [&](bool defer_readback = false) {
+        auto builder = runtime.dispatch(matmul.value())
+                           .global(matrix_dimension, matrix_dimension, 1)
+                           .read(matrix_a.value())
+                           .read(matrix_b.value())
+                           .write(matrix_c.value())
+                           .push(matrix_dimension);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan tiled matmul failed");
     };
+    const auto validate_matmul = [&] {
+        auto readback = runtime.readback(matrix_c.value());
+        if (!readback || !readback.value().wait()) return false;
+        auto values = matrix_c.value().read();
+        return values && std::all_of(values.value().begin(), values.value().end(),
+                                     [](float value) { return value == 64.0F; });
+    };
     run_matmul();
-    auto matrix_values_out = matrix_c.value().read();
-    if (!matrix_values_out || !std::all_of(matrix_values_out.value().begin(), matrix_values_out.value().end(),
-                                           [](float value) { return value == 64.0F; }))
-        return false;
-    results.push_back(run("gpu_tiled_matmul_64_dispatch_wait", run_matmul, options));
-    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", run_matmul);
+    if (!validate_matmul()) return false;
+    results.push_back(
+        run_checked("gpu_tiled_matmul_64_dispatch_wait", [&] { run_matmul(); }, validate_matmul, options));
+    results.push_back(run_checked(
+        "gpu_tiled_matmul_64_deferred_readback_dispatch_wait", [&] { run_matmul(true); }, validate_matmul,
+        options));
+    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", [&] { run_matmul(); });
 
     kora::KernelMetadata stencil_metadata;
     stencil_metadata.kernel_id = "kora_bench.stencil";
@@ -1967,23 +2003,32 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     auto stencil_source = runtime.create_buffer<float>(element_count);
     auto stencil_output = runtime.create_buffer<float>(element_count);
     if (!stencil_source || !stencil_output || !stencil_source.value().write(stencil_input)) return false;
-    const auto run_stencil = [&] {
-        auto event = runtime.dispatch(stencil.value())
-                         .global(element_count)
-                         .read(stencil_source.value())
-                         .write(stencil_output.value())
-                         .push(element_count)
-                         .submit();
+    const auto run_stencil = [&](bool defer_readback = false) {
+        auto builder = runtime.dispatch(stencil.value())
+                           .global(element_count)
+                           .read(stencil_source.value())
+                           .write(stencil_output.value())
+                           .push(element_count);
+        if (defer_readback) builder.defer_readback();
+        auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan stencil dispatch failed");
     };
+    const auto validate_stencil = [&] {
+        auto readback = runtime.readback(stencil_output.value());
+        if (!readback || !readback.value().wait()) return false;
+        auto values = stencil_output.value().read();
+        return values && values.value().front() == 2.0F && values.value().back() == 2.0F &&
+               std::all_of(values.value().begin() + 1, values.value().end() - 1,
+                           [](float value) { return value == 3.0F; });
+    };
     run_stencil();
-    auto stencil_values = stencil_output.value().read();
-    if (!stencil_values || stencil_values.value().front() != 2.0F || stencil_values.value().back() != 2.0F ||
-        !std::all_of(stencil_values.value().begin() + 1, stencil_values.value().end() - 1,
-                     [](float value) { return value == 3.0F; }))
-        return false;
-    results.push_back(run("gpu_stencil_4096_dispatch_wait", run_stencil, options));
-    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", run_stencil);
+    if (!validate_stencil()) return false;
+    results.push_back(
+        run_checked("gpu_stencil_4096_dispatch_wait", [&] { run_stencil(); }, validate_stencil, options));
+    results.push_back(run_checked(
+        "gpu_stencil_4096_deferred_readback_dispatch_wait", [&] { run_stencil(true); }, validate_stencil,
+        options));
+    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", [&] { run_stencil(); });
 
     auto loader = kora::vk::Loader::load();
     if (!loader) return false;
@@ -2199,7 +2244,49 @@ int main(int argc, char** argv) {
             if (index != 0) std::cout << ',';
             std::cout << gpu_device.raw_gpu_timestamp_sizes[index];
         }
-        std::cout << "],\"paths\":[\"kora_runtime\",\"kora_transfer_engine\",\"raw_vulkan\"]}";
+        const auto has_timestamp = [&](std::string_view prefix) {
+            return std::any_of(results.begin(), results.end(), [&](const Result& result) {
+                return result.name.starts_with(prefix) && result.name.ends_with("_gpu_execution");
+            });
+        };
+        const auto kora_compute_timestamps = has_timestamp("gpu_saxpy_") || has_timestamp("gpu_reduction_") ||
+                                             has_timestamp("gpu_tiled_scan_") ||
+                                             has_timestamp("gpu_tiled_matmul_") ||
+                                             has_timestamp("gpu_stencil_");
+        const auto raw_compute_timestamps =
+            has_timestamp("raw_vulkan_saxpy_") || has_timestamp("raw_vulkan_reduction_") ||
+            has_timestamp("raw_vulkan_tiled_scan_") || has_timestamp("raw_vulkan_tiled_matmul_") ||
+            has_timestamp("raw_vulkan_stencil_");
+        const auto emit_compute_timestamps = [&](bool raw) {
+            std::cout << '[';
+            bool first = true;
+            for (const auto& result : results) {
+                const auto has_prefix = [&](std::string_view prefix) {
+                    return result.name.starts_with(prefix);
+                };
+                const auto prefix = raw ? "raw_vulkan_" : "gpu_";
+                const bool is_compute = has_prefix(std::string(prefix) + "saxpy_") ||
+                                        has_prefix(std::string(prefix) + "reduction_") ||
+                                        has_prefix(std::string(prefix) + "tiled_scan_") ||
+                                        has_prefix(std::string(prefix) + "tiled_matmul_") ||
+                                        has_prefix(std::string(prefix) + "stencil_");
+                if (is_compute && result.name.ends_with("_gpu_execution")) {
+                    if (!first) std::cout << ',';
+                    json_string(std::cout, result.name);
+                    first = false;
+                }
+            }
+            std::cout << ']';
+        };
+        std::cout << "],\"kora_gpu_compute_timestamps_available\":"
+                  << (kora_compute_timestamps ? "true" : "false")
+                  << ",\"kora_gpu_compute_timestamp_workloads\":";
+        emit_compute_timestamps(false);
+        std::cout << ",\"raw_gpu_compute_timestamps_available\":"
+                  << (raw_compute_timestamps ? "true" : "false")
+                  << ",\"raw_gpu_compute_timestamp_workloads\":";
+        emit_compute_timestamps(true);
+        std::cout << ",\"paths\":[\"kora_runtime\",\"kora_transfer_engine\",\"raw_vulkan\"]}";
     }
     std::cout << ",\"results\":[";
     for (std::size_t index = 0; index < results.size(); ++index) {

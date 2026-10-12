@@ -2,15 +2,15 @@
 
 | Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | KORA GPU median | KORA GPU p95 | Raw GPU median | Raw GPU p95 |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 2.083 µs | 2.125 µs | 3.238 ms | 4.705 ms | 338.042 µs | 437.625 µs | 414.417 µs | 528.750 µs | unavailable | unavailable | 20.500 µs | 22.917 µs |
+| 4096 | 2.083 µs | 2.125 µs | 2.411 ms | 4.389 ms | 396.084 µs | 457.541 µs | 494.208 µs | 551.250 µs | unavailable | unavailable | 19.333 µs | 22.708 µs |
 
 Matched same-device Vulkan compute workloads:
-| Workload | KORA host p50 | KORA host p95 | Raw Vulkan host p50 | Raw Vulkan host p95 | KORA GPU p50 | KORA GPU p95 | Raw Vulkan GPU p50 | Raw Vulkan GPU p95 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| SAXPY / 4,096 | 1.046 ms | 1.215 ms | 315.209 µs | 374.875 µs | 20.333 µs | 23.958 µs | 21.042 µs | 23.542 µs |
-| Reduction / 4,096 | 659.375 µs | 800.750 µs | 295.875 µs | 395.542 µs | 23.167 µs | 26.208 µs | 23.000 µs | 25.875 µs |
-| Scan / 4,096 | 688.625 µs | 850.250 µs | 306.458 µs | 358.417 µs | 24.000 µs | 27.291 µs | 23.791 µs | 26.750 µs |
-| Tiled matmul / 64×64 | 654.666 µs | 803.875 µs | 318.333 µs | 348.250 µs | 33.459 µs | 124.459 µs | 32.792 µs | 35.125 µs |
-| Stencil / 4,096 | 638.875 µs | 776.125 µs | 300.042 µs | 366.667 µs | unavailable | unavailable | 20.750 µs | 23.083 µs |
+| Workload | KORA default p50 | KORA default p95 | KORA deferred p50 | KORA deferred p95 | Raw Vulkan host p50 | Raw Vulkan host p95 | KORA GPU p50 | KORA GPU p95 | Raw Vulkan GPU p50 | Raw Vulkan GPU p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SAXPY / 4,096 | 1.379 ms | 1.498 ms | 888.875 µs | 1.036 ms | 315.125 µs | 362.875 µs | 22.167 µs | 25.958 µs | 17.792 µs | 23.958 µs |
+| Reduction / 4,096 | 959.459 µs | 1.105 ms | 522.750 µs | 579.041 µs | 385.709 µs | 419.250 µs | 24.208 µs | 28.500 µs | 22.083 µs | 26.375 µs |
+| Scan / 4,096 | 925.209 µs | 1.040 ms | 396.333 µs | 466.375 µs | 370.834 µs | 416.708 µs | 24.791 µs | 29.167 µs | 23.084 µs | 28.292 µs |
+| Tiled matmul / 64×64 | 619.625 µs | 899.875 µs | 295.959 µs | 400.167 µs | 384.125 µs | 441.250 µs | 33.833 µs | 36.166 µs | 31.583 µs | 37.208 µs |
+| Stencil / 4,096 | 643.042 µs | 754.583 µs | 387.708 µs | 420.500 µs | 366.625 µs | 410.916 µs | 21.708 µs | 23.625 µs | 20.792 µs | 25.459 µs |
 
-Host rows include submit through completion and are not kernel-only. Device-timestamp rows isolate execution; unavailable samples are not estimated. Raw Vulkan uses persistent host-visible buffers on this benchmark path, so its host latency has a different residency/readback boundary from KORA.
+Host rows include submit through completion and are not kernel-only. KORA default includes writable-output readback; deferred KORA leaves output device-resident; raw Vulkan uses persistent host-visible buffers. These columns therefore expose distinct transfer/residency boundaries. Device-timestamp rows isolate execution; unavailable samples are not estimated.
