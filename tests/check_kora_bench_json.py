@@ -2,6 +2,8 @@
 """Validate tiny benchmark reports and their percentile/sample invariants."""
 
 import json
+from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -16,6 +18,11 @@ if completed.returncode == 3:
 completed.check_returncode()
 report = json.loads(completed.stdout)
 assert report["schema_version"] == 2
+benchmarking_doc = Path(__file__).resolve().parents[1] / "docs" / "benchmarking.md"
+documentation = benchmarking_doc.read_text(encoding="utf-8")
+assert re.search(r"valid JSON with schema version `2`", documentation), (
+    "docs/benchmarking.md must state the schema version emitted by kora-bench"
+)
 assert report["clock"] == "steady_clock"
 assert report["iterations"] == 3
 assert report["warmup"] == 1
