@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -196,6 +197,85 @@ TEST(Runtime, AdaptiveDispatchFallsBackToBoundDeviceWithoutCompleteCalibration) 
     ASSERT_TRUE(event) << event.error().describe();
     ASSERT_TRUE(event.value().wait());
     EXPECT_EQ(output.value().read().value(), std::vector<std::uint32_t>(count, 5));
+#endif
+}
+
+TEST(Runtime, AdaptiveDispatchPersistsCompletedExecutionObservations) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    const auto cache_directory =
+        std::filesystem::temp_directory_path() /
+        ("kora-adaptive-observations-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    kora::RuntimeOptions options;
+    options.cache_dir = cache_directory.string();
+    options.enable_startup_calibration = false;
+    auto runtime = kora::Runtime::create(options);
+    if (!runtime && (runtime.error().code == kora::ErrorCode::NoVulkanImplementation ||
+                     runtime.error().code == kora::ErrorCode::NoEligibleDevice)) {
+        KORA_REQUIRE_VULKAN(false);
+    }
+    ASSERT_TRUE(runtime) << runtime.error().describe();
+    const auto device = runtime.value().devices().front();
+    auto profiling = runtime.value().profiling_stats(device);
+    if (!profiling && profiling.error().code == kora::ErrorCode::UnsupportedFeature)
+        GTEST_SKIP() << "adaptive online observations require compute timestamp support";
+    ASSERT_TRUE(profiling) << profiling.error().describe();
+    const auto kernel =
+        runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+
+    constexpr std::uint32_t count = 257;
+    const kora::AdaptiveDispatchWorkload workload{
+        .input_bytes = 2 * count * sizeof(std::uint32_t),
+        .output_bytes = count * sizeof(std::uint32_t),
+        .kernel_work = 3 * count * sizeof(std::uint32_t),
+        .required_device_memory_bytes = 3 * count * sizeof(std::uint32_t),
+        .kernel_kind = kora::AdaptiveKernelWorkKind::StreamingBytes,
+    };
+    const auto key = kora::detail::RuntimeTestAccess::performance_observation_key(
+        runtime.value(), device, kernel.value(), workload,
+        kora::detail::PerformanceTimingDomain::DeviceExecution);
+    ASSERT_TRUE(key) << key.error().describe();
+    auto input_a = runtime.value().create_buffer<std::uint32_t>(count);
+    auto input_b = runtime.value().create_buffer<std::uint32_t>(count);
+    auto output = runtime.value().create_buffer<std::uint32_t>(count);
+    ASSERT_TRUE(input_a);
+    ASSERT_TRUE(input_b);
+    ASSERT_TRUE(output);
+    const std::vector<std::uint32_t> values_a(count, 2);
+    const std::vector<std::uint32_t> values_b(count, 3);
+    ASSERT_TRUE(input_a.value().write(values_a));
+    ASSERT_TRUE(input_b.value().write(values_b));
+    const auto push_count = count;
+    for (int sample = 0; sample < 8; ++sample) {
+        auto builder = runtime.value().dispatch_adaptive(kernel.value(), workload);
+        ASSERT_TRUE(builder) << builder.error().describe();
+        auto event = builder.value()
+                         .global(count)
+                         .read(input_a.value())
+                         .read(input_b.value())
+                         .write(output.value())
+                         .push(push_count)
+                         .submit();
+        ASSERT_TRUE(event) << event.error().describe();
+        ASSERT_TRUE(event.value().wait());
+    }
+    auto observed = kora::detail::RuntimeTestAccess::performance_stats(runtime.value(), key.value());
+    ASSERT_TRUE(observed) << observed.error().describe();
+    EXPECT_GE(observed.value().count, 5U);
+    kora::detail::PerformanceDatabase persisted;
+    const auto load_now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                         std::chrono::system_clock::now().time_since_epoch())
+                                                         .count());
+    const auto loaded = persisted.load(cache_directory / "performance-db.json", load_now);
+    ASSERT_TRUE(loaded) << loaded.error().describe();
+    const auto saved = persisted.query(key.value());
+    ASSERT_TRUE(saved) << saved.error().describe();
+    EXPECT_GE(saved.value().count, 5U);
+    std::error_code ignored;
+    std::filesystem::remove_all(cache_directory, ignored);
 #endif
 }
 

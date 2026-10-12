@@ -129,6 +129,64 @@ TEST(PerformanceDatabase, IgnoresExpiredPersistedRows) {
     std::filesystem::remove_all(directory, ignored);
 }
 
+TEST(PerformanceDatabase, ObservationKeysSeparateIdentityWorkAndTimingDomains) {
+    const PerformanceObservationKey base{
+        .device_uuid = "00112233445566778899aabbccddeeff",
+        .driver_version = 17,
+        .runtime_schema = 2,
+        .kernel_identity = 0x1234,
+        .workload_class = 1,
+        .workload_bucket = 10,
+        .timing_domain = PerformanceTimingDomain::DeviceExecution,
+    };
+    const auto encoded = performance_observation_key(base);
+    ASSERT_TRUE(encoded);
+    EXPECT_EQ(encoded.value(), performance_observation_key(base).value());
+    auto changed = base;
+    changed.driver_version++;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.timing_domain = PerformanceTimingDomain::HostTransfer;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.workload_bucket++;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.workload_class++;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.runtime_schema++;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.kernel_identity++;
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.device_uuid = "10112233445566778899aabbccddeeff";
+    EXPECT_NE(encoded.value(), performance_observation_key(changed).value());
+    changed = base;
+    changed.device_uuid = "GPU 0";
+    EXPECT_FALSE(performance_observation_key(changed));
+}
+
+TEST(PerformanceDatabase, RequiresFreshRepeatedObservationsAndBoundsKeyCount) {
+    PerformanceDatabase::Options options;
+    options.maximum_age_ms = 10;
+    options.maximum_entries = 2;
+    PerformanceDatabase database(options);
+    ASSERT_TRUE(database.observe("old", 100, 1));
+    EXPECT_FALSE(database.query_confident("old", 2));
+    for (std::uint64_t sample = 0; sample < 5; ++sample)
+        ASSERT_TRUE(database.observe("old", 100.0 + static_cast<double>(sample), 2 + sample));
+    ASSERT_TRUE(database.query_confident("old", 7));
+    EXPECT_FALSE(database.query_confident("old", 100));
+    ASSERT_TRUE(database.observe("new", 10, 8));
+    ASSERT_TRUE(database.observe("newest", 5, 9));
+    EXPECT_EQ(database.size(), 2U);
+    EXPECT_FALSE(database.query("old"));
+    EXPECT_TRUE(database.query("new"));
+    EXPECT_TRUE(database.query("newest"));
+}
+
 TEST(PerformanceDatabase, ConcurrentKeysAndUpdatesRemainConsistent) {
     PerformanceDatabase database;
     std::vector<std::thread> threads;

@@ -18,6 +18,17 @@ uses the selected compute queue family's `timestamp_valid_bits`, including wrapa
 below 64 bits. Invalid periods and overflow return structured errors. Dispatch success is independent
 of sample collection.
 
+Completed measurements from opt-in adaptive dispatch are persisted for later placement decisions when
+timestamp queries are available. Their identity includes an opaque device UUID, driver/schema versions,
+SPIR-V and entry-point fingerprint, explicit workload class, work-size bucket, and timing domain. The local
+bounded database applies outlier rejection and age expiry; no kernel source or device name is persisted.
+GPU execution duration is kept separate from CPU-side dispatch preparation, blocking input-upload time,
+and queue-enqueue-to-completion overhead (with GPU execution subtracted). Queue completion overhead also
+includes host completion service and is not a pure hardware queue-wait measurement. Placement currently
+uses fresh GPU execution observations; other recorded domains remain separate from the calibration model.
+Adaptive database snapshots are coalesced to the first sample, the five-sample confidence threshold, and
+then every eighth sample to limit completion-thread filesystem work.
+
 ## Host correlation
 
 When the calibrated-timestamps extension is enabled and both device and monotonic host domains were

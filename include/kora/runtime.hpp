@@ -43,6 +43,7 @@ public:
 private:
     friend class Runtime;
     friend class DispatchBuilder;
+    friend struct detail::RuntimeTestAccess;
     explicit Kernel(std::shared_ptr<const detail::KernelState> state) : state_(std::move(state)) {}
     std::shared_ptr<const detail::KernelState> state_;
 };

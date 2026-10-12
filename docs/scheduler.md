@@ -170,6 +170,18 @@ Workload kind (`TinyDispatch`, `StreamingBytes`, or `AluOperations`) is explicit
 from vendor, device name, or kernel identifier. `LocalSizeId` autotuned kernels currently remain on
 their original device because their per-device tuning state is not interchangeable.
 
+Successful adaptive submissions contribute completed timing observations when compute timestamps are
+available. Samples are keyed by opaque device UUID, driver and KORA schema, a semantic SPIR-V plus
+entry-point fingerprint, explicit workload class, a logarithmic work-size bucket, and timing domain;
+device names and kernel source are not written to the performance database or logs. The bounded sample
+window uses EWMA, variance, median/MAD outlier rejection, and a 30-day expiry. The domains distinguish
+GPU execution, CPU-side dispatch preparation before queue enqueue, time blocked on input uploads, and
+queue-enqueue-to-completion overhead after subtracting GPU execution. The latter includes host completion
+service and is not a pure hardware queue-wait measurement. Placement currently blends only fresh GPU
+execution observations after five samples (using mean plus standard deviation) with calibration;
+other domains are recorded for future model refinement. Timestamp-unavailable devices retain calibration
+fallback. Ordinary dispatch is unchanged.
+
 | Adaptive workload field | Meaning |
 | --- | --- |
 | `input_bytes`, `output_bytes`, `device_copy_bytes` | Transfer byte totals used with per-direction calibration rates |

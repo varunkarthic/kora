@@ -89,5 +89,25 @@ TEST(SchedulerPlacement, RejectsInvalidWorkloadAndIneligibleCurrentDevice) {
     EXPECT_FALSE(select_adaptive_device({current}, current.id, workload()));
 }
 
+TEST(SchedulerPlacement, BlendsFreshConfidentExecutionEvidenceWithCalibration) {
+    auto current = candidate(0, 1'000'000'000'000ULL);
+    auto alternate = candidate(1, 1'000'000);
+    current.online_execution = PerformanceStats{.count = 100, .ewma = 1'000'000, .ew_variance = 10000};
+    alternate.online_execution = PerformanceStats{.count = 100, .ewma = 100, .ew_variance = 25};
+    auto execution_only = workload();
+    execution_only.input_bytes = 0;
+    execution_only.output_bytes = 0;
+    execution_only.required_device_memory_bytes = 0;
+    const auto selected = select_adaptive_device({current, alternate}, current.id, execution_only);
+    ASSERT_TRUE(selected);
+    EXPECT_EQ(selected.value(), alternate.id);
+
+    current.online_execution.reset();
+    alternate.online_execution->count = 4;
+    const auto cold = select_adaptive_device({current, alternate}, current.id, execution_only);
+    ASSERT_TRUE(cold);
+    EXPECT_EQ(cold.value(), current.id);
+}
+
 }  // namespace
 }  // namespace kora::detail

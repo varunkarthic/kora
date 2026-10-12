@@ -32,6 +32,13 @@ namespace {
 constexpr std::uint64_t kSchema = 1;
 constexpr std::size_t kMaximumFileBytes = 4U * 1024U * 1024U;
 
+template <class T>
+std::string decimal(T value) {
+    char buffer[32];
+    const auto [end, error] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    return error == std::errc{} ? std::string(buffer, end) : std::string{};
+}
+
 std::string escape_json(std::string_view input) {
     std::string output;
     output.reserve(input.size() + 2);
@@ -196,6 +203,29 @@ Status write_atomic(const std::filesystem::path& path, std::string_view contents
 
 }  // namespace
 
+Result<std::string> performance_observation_key(const PerformanceObservationKey& key) {
+    if (key.device_uuid.empty() || key.runtime_schema == 0 || key.kernel_identity == 0 ||
+        static_cast<std::uint8_t>(key.timing_domain) >
+            static_cast<std::uint8_t>(PerformanceTimingDomain::QueueCompletion))
+        return Error(ErrorCode::InvalidArgument, "performance observation identity is incomplete");
+    if (!std::all_of(key.device_uuid.begin(), key.device_uuid.end(), [](unsigned char character) {
+            return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+        }))
+        return Error(ErrorCode::InvalidArgument, "performance observation device identity is invalid");
+    char identity[17]{};
+    constexpr char hex[] = "0123456789abcdef";
+    auto hash = key.kernel_identity;
+    for (int index = 15; index >= 0; --index) {
+        identity[index] = hex[hash & 0xfU];
+        hash >>= 4U;
+    }
+    return "obs-v1/" + key.device_uuid + "/d" + decimal(key.driver_version) + "/s" +
+           decimal(key.runtime_schema) + "/k" + std::string(identity, 16) + "/c" +
+           decimal(static_cast<unsigned>(key.workload_class)) + "/b" +
+           decimal(static_cast<unsigned>(key.workload_bucket)) + "/t" +
+           decimal(static_cast<unsigned>(key.timing_domain));
+}
+
 struct PerformanceDatabase::Entry {
     mutable std::mutex mutex;
     PerformanceStats stats;
@@ -206,7 +236,8 @@ PerformanceDatabase::PerformanceDatabase()
     : PerformanceDatabase(Options{0.2, 256, 30ULL * 24 * 60 * 60 * 1000}) {}
 
 PerformanceDatabase::PerformanceDatabase(Options options) : options_(options) {
-    if (!(options_.ewma_alpha > 0 && options_.ewma_alpha <= 1) || options_.sample_window == 0)
+    if (!(options_.ewma_alpha > 0 && options_.ewma_alpha <= 1) || options_.sample_window == 0 ||
+        options_.maximum_entries == 0)
         options_ = Options{0.2, 256, 30ULL * 24 * 60 * 60 * 1000};
 }
 
@@ -222,9 +253,27 @@ Status PerformanceDatabase::observe(std::string key, double sample, std::uint64_
     }
     if (!entry) {
         std::unique_lock lock(entries_mutex_);
-        auto [found, inserted] = entries_.try_emplace(std::move(key), std::make_shared<Entry>());
-        (void)inserted;
-        entry = found->second;
+        const auto existing = entries_.find(key);
+        if (existing != entries_.end()) {
+            entry = existing->second;
+        } else {
+            if (entries_.size() >= options_.maximum_entries) {
+                auto oldest = entries_.end();
+                std::uint64_t oldest_time = std::numeric_limits<std::uint64_t>::max();
+                for (auto candidate = entries_.begin(); candidate != entries_.end(); ++candidate) {
+                    std::lock_guard candidate_lock(candidate->second->mutex);
+                    const auto observed = candidate->second->stats.last_observed_unix_ms;
+                    if (oldest == entries_.end() || observed < oldest_time) {
+                        oldest = candidate;
+                        oldest_time = observed;
+                    }
+                }
+                if (oldest != entries_.end()) entries_.erase(oldest);
+            }
+            auto [found, inserted] = entries_.try_emplace(std::move(key), std::make_shared<Entry>());
+            (void)inserted;
+            entry = found->second;
+        }
     }
     std::lock_guard lock(entry->mutex);
     if (entry->stats.count != 0 && now_unix_ms > entry->stats.last_observed_unix_ms &&
@@ -278,6 +327,17 @@ Result<PerformanceStats> PerformanceDatabase::query(const std::string& key) cons
     return entry->stats;
 }
 
+std::optional<PerformanceStats> PerformanceDatabase::query_confident(const std::string& key,
+                                                                     std::uint64_t now_unix_ms,
+                                                                     std::uint64_t minimum_samples) const {
+    auto result = query(key);
+    if (!result || result.value().count < minimum_samples ||
+        now_unix_ms < result.value().last_observed_unix_ms ||
+        now_unix_ms - result.value().last_observed_unix_ms > options_.maximum_age_ms)
+        return std::nullopt;
+    return result.value();
+}
+
 std::size_t PerformanceDatabase::size() const {
     std::shared_lock lock(entries_mutex_);
     return entries_.size();
@@ -318,6 +378,9 @@ Result<std::size_t> PerformanceDatabase::load(const std::filesystem::path& path,
     if (!entries_value) return Error(ErrorCode::IoError, "performance database entries are missing");
     const auto* entries = std::get_if<json::Value::Array>(&entries_value->storage);
     if (!entries) return Error(ErrorCode::IoError, "performance database entries are invalid");
+    if (entries->size() > options_.maximum_entries)
+        return Error(ErrorCode::IoError,
+                     "performance database contains more entries than the configured bound");
     std::unordered_map<std::string, std::shared_ptr<Entry>> loaded;
     for (const auto& value : *entries) {
         std::string key;
