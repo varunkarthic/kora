@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Keep CPU-only `kora-bench` builds compiling when optional GLSL shader tooling is unavailable.
+
 ### Added
 - Add same-device raw Vulkan baselines for SAXPY, reduction, scan, tiled matrix multiplication, and stencil workloads, including host-submit and device-timestamp comparisons.
 
