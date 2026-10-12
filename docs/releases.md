@@ -3,9 +3,12 @@
 KORA releases use `MAJOR.MINOR.PATCH`. The repository `VERSION` file selects the release line and
 automation increments the patch for every successfully validated push to `main`.
 
-`VERSION` is now `0.2`, so the next successful main-branch release is `v0.2.0`; later successful
-main commits produce `v0.2.1`, `v0.2.2`, and so on. The workflow looks up the matching `v0.2`
+`VERSION` is `0.2`, so successful main-branch releases start at `v0.2.0` and increment the patch
+number for every validated commit (`v0.2.1`, `v0.2.2`, and so on). The workflow looks up the matching `v0.2`
 milestone. An empty release milestone is never Stable; any open issue keeps the release Beta.
+Milestone and issue lists are read across every GitHub API page. The release renderer fails closed if
+pagination is malformed, incomplete, repeated, or unavailable, so it never treats a partial issue list
+as proof of Stable status.
 
 ## Choosing a release
 

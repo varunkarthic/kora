@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Paginate release milestone and issue queries, rejecting incomplete or malformed API results before calculating Beta/Stable status.
+
 ## [0.2.1] - 2026-10-12
 
 ### Fixed
