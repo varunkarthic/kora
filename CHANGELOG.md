@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-10-12
+
 ### Added
 - Generate deterministic, timing-domain-separated benchmark SVG charts from retained schema-3
   reports and document their methodology and limitations.
@@ -434,7 +436,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.9...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/varunkarthic/kora/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/varunkarthic/kora/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/varunkarthic/kora/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/varunkarthic/kora/compare/v0.2.6...v0.2.7
