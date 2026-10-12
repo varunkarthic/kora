@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-12
+
 ### Fixed
 - Synchronize CPU executor task-drain counter updates with the worker wait mutex so graceful shutdown
   cannot lose the final wakeup and strand idle workers.
@@ -406,7 +408,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/varunkarthic/kora/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/varunkarthic/kora/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/varunkarthic/kora/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/varunkarthic/kora/compare/v0.2.2...v0.2.3
