@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-12
+
 ### Changed
 - Expand `kora-bench` JSON to schema 3 with platform/compiler/build metadata and explicit timing
   domains; add matched size-swept raw Vulkan vector-add results beside CPU and KORA results, including
@@ -421,7 +423,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/varunkarthic/kora/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/varunkarthic/kora/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/varunkarthic/kora/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/varunkarthic/kora/compare/v0.2.4...v0.2.5
