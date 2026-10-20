@@ -1,0 +1,14 @@
+#version 450
+
+// SAXPY that a Cluster can split: each invocation handles element `base + gl_GlobalInvocationID.x`.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer InputX { float values[]; } input_x;
+layout(set = 0, binding = 1, std430) buffer InputY { float values[]; } input_y;
+
+layout(push_constant) uniform Parameters { float scale; uint count; uint base; } parameters;
+
+void main() {
+    uint index = parameters.base + gl_GlobalInvocationID.x;
+    if (index < parameters.count) input_y.values[index] = parameters.scale * input_x.values[index] + input_y.values[index];
+}

@@ -58,6 +58,9 @@ public:
     Status cancel(const StagingSlice& slice);
     Status flush(const StagingSlice& slice) const;
     Status invalidate(const StagingSlice& slice) const;
+    /// Marks a readback slice's bytes as copied to the host, so it can be reclaimed once its
+    /// timeline completes. Until then a readback slice is never reclaimed or reused.
+    Status consumed(const StagingSlice& slice);
     /// Reclaims submitted reservations whose release timeline is at or below this value.
     Status reclaim_completed(std::uint64_t completed_timeline);
 

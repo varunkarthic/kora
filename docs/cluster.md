@@ -1,4 +1,4 @@
-# Remote workers and hot-swap
+# Multi-device, remote workers, and hot-swap
 
 `kora::Cluster` lets one application use the GPUs of other machines or devices it owns. A
 `kora-worker` process runs KORA on the other device; the host offloads dispatches to it over TCP and
@@ -77,11 +77,71 @@ The local GPU is protected the same way: if the local device is lost, the Cluste
 local Runtime, reloads its kernels, and re-runs the failed dispatch once. Outputs of work that was
 in flight on the lost device follow the normal [recovery rules](recovery.md).
 
+## Every local GPU is a target
+
+When `ClusterOptions::local.device_policy` is unset (and `KORA_DEVICE` is not set), the Cluster opens
+every eligible local Vulkan device and routes each dispatch among those devices and the connected
+workers. Host buffers remain the single source of truth, so a dispatch can run on any device and the
+next one can run somewhere else. `Cluster::local_devices()` reports dispatches, slices, and
+in-flight work for each local device.
+
+On an Apple M4 with three Vulkan drivers, 4,096-element SAXPY through the Cluster went from 335 µs
+to 78 µs p50 after the Cluster measured all three drivers and picked the fastest. Previously it
+always used the default device.
+
+### Hot-plugged GPUs
+
+Every `device_rescan_interval` (default 5 s; zero disables it) a monitor thread compares the physical
+device list with the one in use. When a GPU appears or disappears, the Cluster waits until no local
+work is in flight, then calls `Runtime::rebuild_devices()`. Buffers survive, kernels reload on the
+new devices, and queued dispatches continue. `ClusterStats::device_rescans` counts rebuilds. Rescan
+is off when you pin a device policy, because a pinned policy is a request for specific devices.
+
+### Splitting one dispatch across devices
+
+```cpp
+auto event = cluster.dispatch(kernel)
+                 .global(count)
+                 .read(x)
+                 .read_write(y)
+                 .push(Params{2.0F, count, 0})
+                 .split(sizeof(float))  // Bytes of each output element per invocation.
+                 .submit();
+```
+
+`split()` lets the Cluster divide a large one-dimensional elementwise dispatch among its devices.
+The kernel must declare a `u32` push constant named `base` and handle element `base + gl_GlobalInvocationID.x`;
+invocation *i* of every written buffer must touch only element *i*. Slices are multiples of the
+workgroup size. Each device's range is read back, merged into one snapshot, and committed with a
+single version-checked write, so a failed slice (an unplugged worker, a lost device) re-runs the
+whole dispatch and never leaves a partial result.
+
+The planner splits only when doing so should beat the best single device, using measured
+per-device throughput and `split_overhead` (default 150 µs) for each extra slice. Dispatches below
+`split_min_elements` (default 65,536) are never split. The throughput model assumes the devices run
+independently. That is false for two drivers of one GPU, or for a CPU renderer that shares memory
+bandwidth. So the planner also records how long finished splits actually take and stops splitting a
+kernel and size once splits measure no faster than one device, re-trying every 16th time.
+
+Measured on an Apple M4 whose three "devices" are one GPU behind two drivers plus llvmpipe (Release,
+20 interleaved ABBA pairs after warm-up, median of per-pair ratios):
+
+| SAXPY elements | One device p50 | `split()` p50 | Speedup | Splits chosen |
+| ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 127 µs | 129 µs | 1.01× | 0 (below `split_min_elements`) |
+| 1,048,576 | 679 µs | 680 µs | 1.00× | 3 of 46 |
+| 2,097,152 | 1.32 ms | 1.27 ms | 1.00× | 3 of 46 |
+
+Before the planner checked its predictions against measured splits, the same 1M-element dispatch
+split nearly every time and took 1.19 ms, 0.70× the single-device speed. On this machine the
+right result is not to split, and the planner now reaches it on its own. Machines with
+independent GPUs are where splitting can pay off; this repository has not measured one.
+
 ## Placement
 
 | `OffloadPolicy` | Behavior |
 | --- | --- |
-| `Auto` (default) | Runs each kernel locally first to measure it, tries each connected worker occasionally, then picks the target with the lowest expected completion time for that kernel and data size, including work already queued on each target. |
+| `Auto` (default) | Runs each kernel on each local device first to measure it, tries each connected worker occasionally, then picks the target with the lowest expected completion time for that kernel and data size, including work already queued on each target. |
 | `PreferRemote` | Runs on the least-busy connected worker that can load the kernel; local otherwise. |
 | `LocalOnly` | Never offloads. |
 
@@ -134,6 +194,8 @@ adds its own latency and bandwidth limits. The raw reports are in
 - One request is in flight per worker; transfers and kernel execution on a worker are not pipelined.
 - Outputs always return to the host, so chains of remote dispatches pay a round trip each; the
   worker keeps returned outputs cached, so the next dispatch does not resend them.
+- A 1D dispatch is still limited by each device's `maxComputeWorkGroupCount[0]` (65,535 groups on
+  the M4, about 4.19M elements at a workgroup size of 64), including with `split()`.
 - Measurements in this repository use a loopback worker on the same Apple M4; they demonstrate
   correctness and hot-swap behavior, not cross-machine speed.
 
@@ -142,5 +204,7 @@ adds its own latency and bandwidth limits. The raw reports are in
 `tests/integration/test_cluster.cpp` checks remote results against local ones, a worker that starts
 after the Cluster, unplug/replug and detach mid-stream, wrong tokens, and a randomized test that
 stops and restarts the worker every 5–60 ms while 300 dependent dispatches run; every result must be
-exact. `tests/unit/test_remote_protocol.cpp` covers SHA-256/HMAC test vectors, CRC32C (hardware and table paths), framing, and
+exact. Further tests cover routing across every local device, split results against a CPU
+reference with an element count that is not a multiple of the workgroup, splits while a worker is
+toggled every 5–40 ms, and rejection of `split()` for kernels without a `base` field. `tests/unit/test_remote_protocol.cpp` covers SHA-256/HMAC test vectors, CRC32C (hardware and table paths), framing, and
 corrupted, oversized, and truncated frames.

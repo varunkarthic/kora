@@ -1,5 +1,8 @@
 # Multiple Vulkan devices
 
+For automatic routing across every local GPU, splitting dispatches, and hot-plugged devices, see
+[Multi-device, remote workers, and hot-swap](cluster.md). This page covers explicit control.
+
 KORA can create a runtime that owns more than one eligible Vulkan device. Each selected device has
 its own logical device, memory manager, pipeline cache, transfer engine, compute/transfer queues,
 completion timeline, timestamp state, and device-buffer replicas. Runtime selection and capability

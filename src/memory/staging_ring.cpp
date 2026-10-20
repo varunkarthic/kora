@@ -22,6 +22,9 @@ struct StagingRing::Segment {
     VkDeviceSize size = 0;
     VkDeviceSize reserved_size = 0;
     std::optional<std::uint64_t> release_timeline;
+    // Readback bytes not yet copied to the host. Such a segment is never reclaimed, even after its
+    // timeline completes, until consumed() is called.
+    bool host_pending = false;
 };
 
 struct StagingRing::Block {
@@ -123,7 +126,8 @@ Result<void> StagingRing::add_block(VkDeviceSize capacity) {
 void StagingRing::reclaim(std::uint64_t completed_timeline) {
     for (auto& block : blocks_) {
         std::erase_if(block->segments, [completed_timeline](const Segment& segment) {
-            return segment.release_timeline && *segment.release_timeline <= completed_timeline;
+            return segment.release_timeline && *segment.release_timeline <= completed_timeline &&
+                   !segment.host_pending;
         });
     }
 }
@@ -180,7 +184,9 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
                 if (next_reservation_ == std::numeric_limits<std::uint64_t>::max())
                     return Error(ErrorCode::Overflow, "staging reservation ID space is exhausted");
                 const auto id = next_reservation_++;
-                const Segment reservation{id, *offset, size, *reserved_size, std::nullopt};
+                const Segment reservation{id,           *offset,
+                                          size,         *reserved_size,
+                                          std::nullopt, options_.direction == StagingDirection::Readback};
                 const auto insertion = std::lower_bound(
                     block.segments.begin(), block.segments.end(), *offset,
                     [](const Segment& segment, VkDeviceSize offset) { return segment.offset < offset; });
@@ -209,11 +215,15 @@ Result<StagingSlice> StagingRing::reserve(VkDeviceSize size, VkDeviceSize alignm
         std::optional<std::uint64_t> oldest;
         for (const auto& block : blocks_)
             for (const auto& segment : block->segments)
-                if (segment.release_timeline && (!oldest || *segment.release_timeline < *oldest))
+                if (segment.release_timeline && !segment.host_pending &&
+                    (!oldest || *segment.release_timeline < *oldest))
                     oldest = segment.release_timeline;
+        // Segments still waiting for their host copy are released by consumed(), possibly on the
+        // thread calling this; fail instead of waiting for them.
         if (!oldest || !wait_for)
-            return Error(ErrorCode::AllocationFailed,
-                         "staging ring is full with unsubmitted reservations or has no wait callback");
+            return Error(
+                ErrorCode::AllocationFailed,
+                "staging ring is full with unsubmitted or unconsumed reservations, or has no wait callback");
         lock.unlock();
         auto waited = wait_for(*oldest);
         if (!waited) return std::move(waited).error();
@@ -240,6 +250,19 @@ Status StagingRing::retire(const StagingSlice& slice, std::uint64_t release_time
         }
     }
     return Error(ErrorCode::InvalidArgument, "staging reservation is unknown or was already reclaimed");
+}
+
+Status StagingRing::consumed(const StagingSlice& slice) {
+    std::lock_guard lock(mutex_);
+    for (auto& block : blocks_) {
+        if (block->buffer != slice.buffer) continue;
+        for (auto& segment : block->segments) {
+            if (segment.id != slice.reservation || segment.offset != slice.offset) continue;
+            segment.host_pending = false;
+            return ok_status();
+        }
+    }
+    return Error(ErrorCode::InvalidArgument, "staging reservation is unknown or already released");
 }
 
 Status StagingRing::cancel(const StagingSlice& slice) {

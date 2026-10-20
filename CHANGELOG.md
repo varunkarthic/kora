@@ -12,6 +12,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- `kora::Cluster` now uses every local GPU as well as remote workers. Each dispatch goes to the target
+  with the lowest measured expected completion time. `ClusterDispatch::split()` divides a large
+  elementwise dispatch across devices for kernels with a `u32` `base` push constant. The results are
+  committed to the host buffer atomically.
+- `kora::Cluster` rescans physical devices every `device_rescan_interval` (default 5 s). It rebuilds
+  its local devices when a GPU appears or disappears, without losing buffers.
+- Add `Cluster::local_devices()` with per-device dispatch, slice, and in-flight counts, and add split,
+  slice, and rescan counters to `ClusterStats`.
+- Add `Runtime::rebuild_devices()` to recreate every logical device and re-enumerate physical
+  devices while keeping buffers.
+
+### Fixed
+- Fix a race in which a concurrent staging reservation could reclaim a completed readback slice
+  before its completion callback copied the bytes to the host. Concurrent downloads then failed with
+  "staging readback slice is unknown or not submitted".
+
 ## [0.2.26] - 2026-10-20
 
 ### Added
