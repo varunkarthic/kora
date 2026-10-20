@@ -74,9 +74,10 @@ struct WorkerServer::Impl {
     Status dispatch(remote::Socket& socket, const remote::Message& message);
     void reset_session();
     void evict_until(std::uint64_t needed, const std::vector<std::uint64_t>& keep);
-    void count(std::uint64_t WorkerStats::* field) {
+    template <class Update>
+    void update_stats(Update update) {
         std::lock_guard lock(stats_mutex);
-        ++(stats.*field);
+        update(stats);
     }
     Status reply_failure(remote::Socket& socket, std::uint64_t request, const std::string& message) {
         remote::Writer writer;
@@ -170,7 +171,7 @@ void WorkerServer::Impl::accept_loop() {
                                                 : "worker authentication failed");
             (void)remote::send_message(*socket, remote::MessageType::Reject, 0, reason.view(),
                                        kHandshakeTimeout);
-            count(&WorkerStats::rejected_connections);
+            update_stats([](WorkerStats& value) { ++value.rejected_connections; });
             continue;
         }
         std::thread previous;
@@ -274,7 +275,7 @@ Status WorkerServer::Impl::load_kernel(remote::Socket& socket, const remote::Mes
     auto kernel = runtime.load_kernel(module, entry.value(), std::move(metadata).value(), devices.front());
     if (!kernel) return reply_failure(socket, message.request_id, kernel.error().describe());
     kernels.insert_or_assign(key.value(), std::move(kernel).value());
-    count(&WorkerStats::kernels_loaded);
+    update_stats([](WorkerStats& value) { ++value.kernels_loaded; });
     return remote::send_message(socket, remote::MessageType::KernelLoaded, message.request_id, {},
                                 options.io_timeout);
 }
@@ -439,7 +440,7 @@ Status WorkerServer::Impl::dispatch(remote::Socket& socket, const remote::Messag
         outputs.bytes(std::span<const std::byte>(bytes.value().data(), bytes.value().size()));
         buffers.at(bindings[i].key).version = bindings[i].result_version;
     }
-    count(&WorkerStats::dispatches);
+    update_stats([](WorkerStats& value) { ++value.dispatches; });
     return remote::send_message(socket, remote::MessageType::Outputs, message.request_id, outputs.view(),
                                 options.io_timeout);
 }
