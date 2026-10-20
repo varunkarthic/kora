@@ -156,6 +156,11 @@ struct DispatchContext {
     detail::PendingPerformanceObservation latest_profile_observation;
     bool trace_enabled = false;
     bool autotuning_enabled = false;
+    // Record GPU timestamps on every Nth ordinary dispatch (0 = never). Timestamp queries are not
+    // free on every driver, so they are taken only as often as telemetry needs them; autotuning
+    // trials and adaptive observations always record. Guarded by submit_mutex.
+    std::uint32_t timestamp_sample_interval = 1;
+    std::uint64_t timestamp_sample_counter = 0;
     struct PendingAutotune {
         std::shared_ptr<detail::kernel::WorkgroupAutotuner> tuner;
         detail::kernel::WorkgroupAutotuner::Trial trial;
@@ -328,6 +333,20 @@ void observe_autotune_samples(const std::shared_ptr<DispatchContext>& dispatch,
 }  // namespace detail
 
 namespace {
+// Basic telemetry keeps profiling_stats() fresh while paying for timestamp queries on only one
+// ordinary dispatch in 16; Profile and Trace need every dispatch.
+std::uint32_t timestamp_sample_interval(TelemetryLevel level) {
+    switch (level) {
+        case TelemetryLevel::Off:
+            return 0;
+        case TelemetryLevel::Basic:
+            return 16;
+        case TelemetryLevel::Profile:
+        case TelemetryLevel::Trace:
+            return 1;
+    }
+    return 1;
+}
 
 std::string uuid_string(const VkPhysicalDeviceIDProperties& properties) {
     static constexpr char kHex[] = "0123456789abcdef";
@@ -1290,7 +1309,11 @@ Result<Event> DispatchBuilder::submit() {
         work->command_buffer = command.value();
         work->submission_id = submission_id;
         auto api = ctx->device->api();
-        if (ctx->timestamps)
+        const bool timestamp_needed = work->autotune_trial.tracked ||
+                                      !work->observation.execution_key.empty() ||
+                                      (ctx->timestamp_sample_interval != 0 &&
+                                       ctx->timestamp_sample_counter++ % ctx->timestamp_sample_interval == 0);
+        if (ctx->timestamps && timestamp_needed)
             work->timestamp_recorded = ctx->timestamps->record_start(command.value(), submission_id);
         const auto descriptor_setup_started = ctx->phase_profile_enabled
                                                   ? std::chrono::steady_clock::now()
@@ -2323,6 +2346,7 @@ Result<Runtime> Runtime::create(const RuntimeOptions& options) {
         entry->dispatch->trace_enabled = resolved.telemetry == TelemetryLevel::Trace;
         entry->dispatch->phase_profile_enabled =
             resolved.telemetry == TelemetryLevel::Profile || resolved.telemetry == TelemetryLevel::Trace;
+        entry->dispatch->timestamp_sample_interval = timestamp_sample_interval(resolved.telemetry);
         if (entry->dispatch->timestamps)
             entry->dispatch->timestamps->enable_trace_history(entry->dispatch->trace_enabled);
         entry->dispatch->device_uuid = entry->id.uuid;
