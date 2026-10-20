@@ -1388,3 +1388,62 @@ TEST(Runtime, InFlightDispatchKeepsInputsSubmittedBeforeALaterHostWrite) {
     }
 #endif
 }
+
+TEST(Runtime, FreesDeviceCopiesOfReleasedBuffers) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    const auto devices = runtime_devices_or_skip();
+    if (devices.empty()) KORA_REQUIRE_VULKAN(false);
+    constexpr std::uint32_t count = 65536;
+    const std::vector<std::uint32_t> values(count, 2U);
+    for (const auto& device : devices) {
+        SCOPED_TRACE(testing::Message() << "device " << device.index);
+        kora::RuntimeOptions options;
+        options.device_policy = kora::DevicePolicy::ByIndex;
+        options.device_index = device.index;
+        auto runtime = kora::Runtime::create(options);
+        ASSERT_TRUE(runtime) << runtime.error().describe();
+        auto kernel =
+            runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+        ASSERT_TRUE(kernel) << kernel.error().describe();
+        const auto run_once = [&](bool wait) -> std::optional<kora::Event> {
+            auto a = runtime.value().create_buffer<std::uint32_t>(count);
+            auto b = runtime.value().create_buffer<std::uint32_t>(count);
+            auto output = runtime.value().create_buffer<std::uint32_t>(count);
+            EXPECT_TRUE(a && b && output);
+            EXPECT_TRUE(a.value().write(values) && b.value().write(values));
+            auto event = runtime.value()
+                             .dispatch(kernel.value())
+                             .global(count)
+                             .read(a.value())
+                             .read(b.value())
+                             .write(output.value())
+                             .push(count)
+                             .submit();
+            EXPECT_TRUE(event) << event.error().describe();
+            if (!event) return std::nullopt;
+            if (wait) {
+                EXPECT_TRUE(event.value().wait());
+                EXPECT_EQ(output.value().read().value(), std::vector<std::uint32_t>(count, 4U));
+                return std::nullopt;
+            }
+            return std::move(event).value();  // Handles drop while the dispatch may still run.
+        };
+        run_once(true);
+        const auto baseline = runtime.value().memory_stats(device);
+        ASSERT_TRUE(baseline) << baseline.error().describe();
+        std::vector<kora::Event> in_flight;
+        for (int iteration = 0; iteration < 48; ++iteration) {
+            if (auto event = run_once(iteration % 2 == 0)) in_flight.push_back(std::move(*event));
+        }
+        for (auto& event : in_flight) ASSERT_TRUE(event.wait());
+        run_once(true);  // Gives the runtime a chance to reap buffers whose work just completed.
+        const auto after = runtime.value().memory_stats(device);
+        ASSERT_TRUE(after) << after.error().describe();
+        EXPECT_LE(after.value().live_allocations, baseline.value().live_allocations + 3U)
+            << "baseline " << baseline.value().live_allocations << ", after "
+            << after.value().live_allocations;
+    }
+#endif
+}

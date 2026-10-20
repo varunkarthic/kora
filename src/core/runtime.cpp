@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/buffer_manager_access.hpp"
 #include "core/calibration.hpp"
 #include "core/calibration_spv.hpp"
 #include "core/device_caps.hpp"
@@ -170,6 +171,56 @@ struct DispatchContext {
     std::filesystem::path performance_database_path;
     std::unordered_map<BufferId, detail::PoolAllocation, BufferIdHash> allocations;
     std::unordered_map<BufferId, detail::MemoryPool*, BufferIdHash> allocation_pools;
+    // Buffers whose last handle was released; their device copies are freed once idle.
+    std::mutex released_mutex;
+    std::vector<BufferId> released_buffers;
+
+    void queue_released_buffer(BufferId id) {
+        std::lock_guard lock(released_mutex);
+        released_buffers.push_back(id);
+    }
+
+    // Frees device copies of released buffers that no queued or executing GPU work can access.
+    // Buffers still in use stay queued and are retried on the next call.
+    void reap_released_buffers() {
+        std::vector<BufferId> candidates;
+        {
+            std::lock_guard lock(released_mutex);
+            candidates.swap(released_buffers);
+        }
+        if (candidates.empty()) return;
+        std::vector<BufferId> still_busy;
+        {
+            std::lock_guard lock(submit_mutex);
+            for (const auto id : candidates) {
+                const auto found = buffers.find(id);
+                if (found != buffers.end()) {
+                    if (found->second.queue_use &&
+                        found->second.queue_use->pending.load(std::memory_order_acquire) != 0) {
+                        still_busy.push_back(id);
+                        continue;
+                    }
+                    if (device && found->second.buffer != VK_NULL_HANDLE)
+                        device->api().destroy_buffer(device->handle(), found->second.buffer, nullptr);
+                    buffers.erase(found);
+                }
+                const auto allocation = allocations.find(id);
+                const auto pool = allocation_pools.find(id);
+                if (allocation != allocations.end() && pool != allocation_pools.end())
+                    (void)pool->second->deallocate(allocation->second);
+                if (allocation != allocations.end()) allocations.erase(allocation);
+                if (pool != allocation_pools.end()) allocation_pools.erase(pool);
+                resident_host_versions.erase(id);
+                device_newer_buffers.erase(id);
+                device_last_use.erase(id);
+                eviction_policy.forget(id);
+            }
+        }
+        if (still_busy.empty()) return;
+        std::lock_guard lock(released_mutex);
+        released_buffers.insert(released_buffers.end(), still_busy.begin(), still_busy.end());
+    }
+
     void release_buffers() noexcept {
         for (const auto& [id, buffer] : buffers) {
             (void)id;
@@ -901,6 +952,7 @@ Result<Event> DispatchBuilder::submit() {
         return Error(ErrorCode::ValidationError, "device is quarantined after a verification mismatch");
     if (kernel_->runtime_id != context_->runtime_id || kernel_->device_index != context_->device_index)
         return Error(ErrorCode::InvalidArgument, "kernel was not loaded for this runtime device");
+    context_->reap_released_buffers();
     auto metadata_status = validate_kernel_metadata(kernel_->metadata);
     if (!metadata_status) return std::move(metadata_status).error();
     if (buffers_.size() != kernel_->metadata.bindings.size() || accesses_.size() != buffers_.size())
@@ -1875,8 +1927,24 @@ Result<Event> DispatchBuilder::submit_verified() {
 }
 
 Runtime::Runtime() = default;
+namespace {
+// Lets each device context free its copy of a buffer once the buffer's last handle is released.
+template <class DeviceEntries>
+void register_buffer_release(BufferManager& buffers, const DeviceEntries& devices) {
+    for (const auto& device : devices) {
+        if (!device || !device->dispatch) continue;
+        std::weak_ptr<detail::DispatchContext> context = device->dispatch;
+        detail::BufferManagerAccess::add_release_listener(buffers, context, [context](BufferId id) {
+            if (auto locked = context.lock()) locked->queue_released_buffer(id);
+        });
+    }
+}
+}  // namespace
+
 Runtime::Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options)
-    : impl_(std::move(impl)), options_(std::move(options)) {}
+    : impl_(std::move(impl)), options_(std::move(options)) {
+    if (impl_) register_buffer_release(buffers_, impl_->devices);
+}
 Runtime::~Runtime() noexcept = default;
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
@@ -2337,6 +2405,7 @@ Status Runtime::recover() {
     replacement.buffers_ = std::move(buffers_);
     impl_.swap(replacement.impl_);
     buffers_ = std::move(replacement.buffers_);
+    register_buffer_release(buffers_, impl_->devices);
     options_ = std::move(replacement.options_);
     // `replacement` now owns the failed implementation; its destructor drains old queue callbacks
     // before this method returns. Host-backed BufferHandles remain backed by the retained state.
@@ -2423,6 +2492,7 @@ Result<MemoryStats> Runtime::memory_stats(const DeviceId& id) const {
     if (found == impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     const auto& entry = **found;
+    if (entry.dispatch) entry.dispatch->reap_released_buffers();
     auto refreshed = entry.refresh_budget_if_due(true);
     if (!refreshed) return std::move(refreshed).error();
     std::lock_guard lock(entry.pools_mutex);
@@ -2772,6 +2842,7 @@ Result<Event> Runtime::readback(const BufferHandle& buffer, const DeviceId& devi
     if (selected_device == impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
     const auto context = (*selected_device)->dispatch;
+    context->reap_released_buffers();
     const auto host_version = buffer.host_version();
     if (!host_version) return std::move(host_version).error();
     {
