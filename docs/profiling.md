@@ -3,6 +3,21 @@
 `RuntimeOptions::telemetry` and `KORA_PROFILE` select `Off`, `Basic`, `Profile`, or `Trace` in
 increasing detail. The default is `Basic`; `KORA_TRACE=true` is a compatibility shorthand for
 `Trace`. `Runtime::profiling_stats()` provides completed timestamp counters and the latest sample.
+
+GPU timestamp queries are not free: on Apple M4 / MoltenVK, writing them on every dispatch added
+10–36% to small dispatches' host submit-to-completion latency. The level therefore controls how often
+an ordinary dispatch is timestamped:
+
+| Level | Dispatches with GPU timestamps |
+| --- | --- |
+| `Off` | none; `profiling_stats()` reports no samples |
+| `Basic` (default) | one in 16, so `profiling_stats()` still returns recent samples |
+| `Profile`, `Trace` | every dispatch |
+
+Autotuning trials and adaptive-dispatch performance observations are always timestamped at every
+level, because they cannot work without the measurement. To time a specific dispatch at `Basic`,
+read `profiling_stats().last_submission_id` before and after; a changed ID means the latest sample
+belongs to your work.
 Trace export is explicitly opt-in: create the runtime with `TelemetryLevel::Trace`, then call
 `Runtime::export_trace_json()` after dispatch work. The returned document uses Chrome Trace Event
 JSON (`traceEvents`, complete `X` events) and can be opened directly in Perfetto. It includes GPU

@@ -12,6 +12,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Record per-dispatch GPU timestamps only as often as telemetry needs them: none at
+  `TelemetryLevel::Off`, one dispatch in 16 at the default `Basic`, and every dispatch at `Profile` and
+  `Trace`. Autotuning trials and adaptive observations are always timestamped. Across 10 interleaved
+  pairs on Apple M4/MoltenVK, every matched benchmark case got faster at the median (2–27%), with no
+  regressions.
+- `kora-bench` now measures at the default `Basic` telemetry level, and `render_ab.py` reads
+  compressed `.json.gz` reports and takes `--change`/`--prefix` for chart titles and names.
+
 ## [0.2.23] - 2026-10-20
 
 ### Fixed

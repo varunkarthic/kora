@@ -1447,3 +1447,53 @@ TEST(Runtime, FreesDeviceCopiesOfReleasedBuffers) {
     }
 #endif
 }
+
+TEST(Runtime, RecordsDispatchTimestampsOnlyAsOftenAsTelemetryNeeds) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    const auto devices = runtime_devices_or_skip();
+    if (devices.empty()) KORA_REQUIRE_VULKAN(false);
+    constexpr std::uint32_t count = 256;
+    constexpr int dispatches = 32;
+    const std::vector<std::uint32_t> values(count, 1U);
+    for (const auto& [level, expected] :
+         {std::pair{kora::TelemetryLevel::Off, 0U}, std::pair{kora::TelemetryLevel::Basic, 2U},
+          std::pair{kora::TelemetryLevel::Trace, 32U}}) {
+        SCOPED_TRACE(testing::Message() << "telemetry " << static_cast<int>(level));
+        kora::RuntimeOptions options;
+        options.device_policy = kora::DevicePolicy::ByIndex;
+        options.device_index = devices.front().index;
+        options.telemetry = level;
+        options.disable_autotune = true;
+        auto runtime = kora::Runtime::create(options);
+        ASSERT_TRUE(runtime) << runtime.error().describe();
+        auto kernel =
+            runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+        ASSERT_TRUE(kernel) << kernel.error().describe();
+        auto a = runtime.value().create_buffer<std::uint32_t>(count);
+        auto b = runtime.value().create_buffer<std::uint32_t>(count);
+        auto output = runtime.value().create_buffer<std::uint32_t>(count);
+        ASSERT_TRUE(a && b && output);
+        ASSERT_TRUE(a.value().write(values) && b.value().write(values));
+        for (int i = 0; i < dispatches; ++i) {
+            auto event = runtime.value()
+                             .dispatch(kernel.value())
+                             .global(count)
+                             .read(a.value())
+                             .read(b.value())
+                             .write(output.value())
+                             .push(count)
+                             .defer_readback()
+                             .submit();
+            ASSERT_TRUE(event) << event.error().describe();
+            ASSERT_TRUE(event.value().wait());
+        }
+        auto profiling = runtime.value().profiling_stats(runtime.value().devices().front());
+        if (!profiling && profiling.error().code == kora::ErrorCode::UnsupportedFeature)
+            GTEST_SKIP() << "selected queue does not support timestamps";
+        ASSERT_TRUE(profiling) << profiling.error().describe();
+        EXPECT_EQ(profiling.value().samples_collected + profiling.value().dropped_samples, expected);
+    }
+#endif
+}

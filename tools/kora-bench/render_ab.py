@@ -10,6 +10,7 @@ drift, which can move a single run's median several-fold on some devices, from f
 from __future__ import annotations
 
 import argparse
+import gzip
 import importlib.util
 import json
 import statistics
@@ -53,10 +54,16 @@ def cases() -> list[tuple[str, str, str, str, str]]:
     return rows
 
 
+def read_report(path: Path) -> dict[str, Any]:
+    """Reads a JSON report, transparently decompressing retained `.json.gz` files."""
+    data = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
+    return json.loads(data.decode("utf-8"))
+
+
 def load_runs(paths: list[Path]) -> tuple[list[dict[str, dict[str, Any]]], str]:
     runs, revisions = [], set()
     for path in paths:
-        report = json.loads(path.read_text(encoding="utf-8"))
+        report = read_report(path)
         if report.get("schema_version") != 3 or report.get("diagnostic_profile") is True:
             raise ValueError(f"{path} is not a schema-3 comparison report")
         if not report.get("gpu_measurements", {}).get("same_physical_device_for_kora_and_raw_vulkan"):
@@ -85,7 +92,14 @@ def paired_change(before: list[dict[str, dict[str, Any]]], after: list[dict[str,
     return f"{100 * (statistics.median(ratios) - 1):+.0f}% ({wins}/{len(ratios)})"
 
 
-def render(before_paths: list[Path], after_paths: list[Path], output_dir: Path, title_suffix: str) -> str:
+def render(
+    before_paths: list[Path],
+    after_paths: list[Path],
+    output_dir: Path,
+    title_suffix: str,
+    change: str = "#227",
+    prefix: str = "uma-direct",
+) -> str:
     before, before_revision = load_runs(before_paths)
     after, after_revision = load_runs(after_paths)
     if len(before) != len(after):
@@ -132,7 +146,7 @@ def render(before_paths: list[Path], after_paths: list[Path], output_dir: Path, 
             {"label": f"{heading} · after", "color": "#2563eb", "points": new},
             {"label": "Raw Vulkan", "color": "#15803d", "points": raw},
         ]
-        title = f"{heading} before and after #227 — host submit to completion · {title_suffix}"
+        title = f"{heading} before and after {change} — host submit to completion · {title_suffix}"
         svg = charts.render_svg(
             title,
             f"{title}. Median across interleaved runs of each run's p50 (dot) and p95 (whisker).",
@@ -143,7 +157,7 @@ def render(before_paths: list[Path], after_paths: list[Path], output_dir: Path, 
             groups=groups,
             width=1520,
         )
-        (output_dir / f"uma-direct-{kind}.svg").write_text(svg, encoding="utf-8", newline="\n")
+        (output_dir / f"{prefix}-{kind}.svg").write_text(svg, encoding="utf-8", newline="\n")
     return "\n".join(lines) + "\n"
 
 
@@ -153,9 +167,11 @@ def main() -> int:
     parser.add_argument("--after", type=Path, nargs="+", required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/charts"))
     parser.add_argument("--title-suffix", default="Apple M4 / MoltenVK")
+    parser.add_argument("--change", default="#227", help="change name used in chart titles")
+    parser.add_argument("--prefix", default="uma-direct", help="chart file name prefix")
     args = parser.parse_args()
     try:
-        print(render(args.before, args.after, args.output_dir, args.title_suffix), end="")
+        print(render(args.before, args.after, args.output_dir, args.title_suffix, args.change, args.prefix), end="")
     except (OSError, KeyError, ValueError, json.JSONDecodeError) as error:
         parser.error(str(error))
     return 0
