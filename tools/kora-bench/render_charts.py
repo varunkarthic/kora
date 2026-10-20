@@ -38,14 +38,38 @@ SERIES = {
             "gpu_execution_timestamp",
         ),
     ),
+    "compute": (
+        ("KORA default readback", "#c2410c", "gpu_{size}_dispatch_wait", "host_submit_completion"),
+        (
+            "KORA deferred readback",
+            "#2563eb",
+            "gpu_{size}_deferred_readback_dispatch_wait",
+            "host_submit_completion",
+        ),
+        ("Raw Vulkan", "#15803d", "raw_vulkan_{size}_dispatch_wait", "host_submit_completion"),
+    ),
 }
+
+# Matched compute cases: (workload group, tick label, result-name case).
+COMPUTE_CASES = tuple(
+    (group, label, case)
+    for group, workload, suffix, tiers in (
+        ("SAXPY", "saxpy", "_upload", ((4096, "4K"), (65536, "64K"), (1048576, "1M"))),
+        ("Reduction", "reduction", "", ((4096, "4K"), (65536, "64K"), (1048576, "1M"))),
+        ("Scan", "tiled_scan", "", ((4096, "4K"), (65536, "64K"), (1048576, "1M"))),
+        ("Stencil", "stencil", "", ((4096, "4K"), (65536, "64K"), (1048576, "1M"))),
+        ("Tiled matmul", "tiled_matmul", "", ((16, "16²"), (64, "64²"), (128, "128²"))),
+    )
+    for size, label in tiers
+    for case in (f"{workload}_{size}{suffix}",)
+)
 
 
 def _valid_ns(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value) and value > 0
 
 
-def report_series(report: dict[str, Any], kind: str, sizes: tuple[int, ...] = SIZES) -> list[dict[str, Any]]:
+def report_series(report: dict[str, Any], kind: str, sizes: tuple[int | str, ...] = SIZES) -> list[dict[str, Any]]:
     """Validate report identity/schema and return only available, correctly-domain-tagged values."""
     if report.get("diagnostic_profile") is True:
         raise ValueError("diagnostic profile reports include telemetry overhead and are not comparison charts")
@@ -87,16 +111,29 @@ def report_series(report: dict[str, Any], kind: str, sizes: tuple[int, ...] = SI
     return chart_series
 
 
-def _size_label(size: int) -> str:
-    return f"{size:,}"
+def _size_label(size: int | str) -> str:
+    return f"{size:,}" if isinstance(size, int) else size
 
 
-def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes: tuple[int, ...]) -> str:
+def render_svg(
+    title: str,
+    description: str,
+    series: list[dict[str, Any]],
+    sizes: tuple[int | str, ...],
+    *,
+    x_label: str = "Vector elements · problem size",
+    labels: dict[Any, str] | None = None,
+    groups: dict[Any, str] | None = None,
+    width: int = 1040,
+) -> str:
+    """Render p50/p95 series; ``groups`` labels contiguous categories and breaks lines between them."""
     points = [point for item in series for point in item["points"]]
     if not points:
         raise ValueError("cannot render a chart without measurements")
+    labels = labels or {}
+    groups = groups or {}
 
-    width, height = 1040, 660
+    height = 660
     left, right, top, bottom = 112, 44, 112, 180
     plot_width, plot_height = width - left - right, height - top - bottom
     minimum = min(point["median"] for point in points)
@@ -127,8 +164,8 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
         f'<rect class="card" x="18" y="18" width="{width-36}" height="{height-36}" rx="14"/>',
         f'<text x="{left}" y="55" font-size="27" font-weight="700">{heading}</text>',
         f'<text class="muted" x="{left}" y="82" font-size="15">{detail}</text>',
-        f'<rect class="pill" x="{width-316}" y="37" width="{width- left - (width-316) + 0}" height="30" rx="15"/>',
-        f'<text x="{width-300}" y="57" font-size="11" font-weight="700" letter-spacing="1.1">{timing_label} · P50 / P95</text>',
+        f'<rect class="pill" x="{width-right-312}" y="37" width="312" height="30" rx="15"/>',
+        f'<text x="{width-right-156}" y="57" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.1">{timing_label} · P50 / P95</text>',
         f'<rect class="plot-bg" x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" rx="8"/>',
     ]
     for exponent in range(min_exp, max_exp + 1):
@@ -141,24 +178,38 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
             f'<line class="axis" x1="{left}" y1="{top}" x2="{left}" y2="{height-bottom}"/>',
             f'<line class="axis" x1="{left}" y1="{height-bottom}" x2="{width-right}" y2="{height-bottom}"/>',
             f'<text class="muted" x="29" y="{top + plot_height/2:.1f}" transform="rotate(-90 29 {top + plot_height/2:.1f})" text-anchor="middle" font-size="13">Latency ({unit}, logarithmic scale)</text>',
-            f'<text class="muted" x="{left + plot_width/2:.1f}" y="{height-bottom+57}" text-anchor="middle" font-size="13">Vector elements · problem size</text>',
+            f'<text class="muted" x="{left + plot_width/2:.1f}" y="{height-bottom+(72 if groups else 57)}" text-anchor="middle" font-size="13">{html.escape(x_label)}</text>',
         ]
     )
 
     centers = {size: left + plot_width * (index + 0.5) / len(sizes) for index, size in enumerate(sizes)}
     group_width = plot_width / max(1, len(sizes))
     for size in sizes:
-        parts.append(f'<text class="muted tick" x="{centers[size]:.1f}" y="{height-bottom+26}" text-anchor="middle" font-size="13">{_size_label(size)}</text>')
+        parts.append(f'<text class="muted tick" x="{centers[size]:.1f}" y="{height-bottom+26}" text-anchor="middle" font-size="13">{html.escape(labels.get(size, _size_label(size)))}</text>')
+    group_members: dict[str, list[Any]] = {}
+    for size in sizes:
+        if size in groups:
+            group_members.setdefault(groups[size], []).append(size)
+    for index, (group, members) in enumerate(group_members.items()):
+        center = sum(centers[size] for size in members) / len(members)
+        parts.append(f'<text x="{center:.1f}" y="{height-bottom+47}" text-anchor="middle" font-size="13" font-weight="600">{html.escape(group)}</text>')
+        if index:
+            divider = centers[members[0]] - group_width / 2
+            parts.append(f'<line class="grid" x1="{divider:.1f}" y1="{top}" x2="{divider:.1f}" y2="{height-bottom}"/>')
     for series_index, item in enumerate(series):
         count = len(series)
         offset = (series_index - (count - 1) / 2) * min(20, group_width / max(2, count + 1))
-        ordered = sorted(item["points"], key=lambda point: point["size"])
         size_indices = {size: index for index, size in enumerate(sizes)}
+        ordered = sorted(item["points"], key=lambda point: size_indices[point["size"]])
         commands = []
         previous_index = None
+        previous_size = None
         for point in ordered:
             current_index = size_indices[point["size"]]
-            command = "L" if previous_index is not None and current_index == previous_index + 1 else "M"
+            contiguous = previous_index is not None and current_index == previous_index + 1
+            same_group = groups.get(point["size"]) == groups.get(previous_size)
+            command = "L" if contiguous and same_group else "M"
+            previous_size = point["size"]
             commands.append(command + f" {centers[point['size']] + offset:.1f} {y(point['median']):.1f}")
             previous_index = current_index
         line_path = " ".join(commands)
@@ -169,7 +220,7 @@ def render_svg(title: str, description: str, series: list[dict[str, Any]], sizes
             median_y, p95_y = y(point["median"]), y(point["p95"])
             parts.append(f'<line class="whisker" stroke="{item["color"]}" x1="{x_pos:.1f}" y1="{p95_y:.1f}" x2="{x_pos:.1f}" y2="{median_y:.1f}"/>')
             parts.append(f'<line class="whisker" stroke="{item["color"]}" x1="{x_pos-6:.1f}" y1="{p95_y:.1f}" x2="{x_pos+6:.1f}" y2="{p95_y:.1f}"/>')
-            parts.append(f'<circle class="median" fill="{item["color"]}" cx="{x_pos:.1f}" cy="{median_y:.1f}" r="7"><title>{html.escape(item["label"])}: median {point["median"]:g} ns, p95 {point["p95"]:g} ns at {_size_label(point["size"])} elements</title></circle>')
+            parts.append(f'<circle class="median" fill="{item["color"]}" cx="{x_pos:.1f}" cy="{median_y:.1f}" r="7"><title>{html.escape(item["label"])}: median {point["median"]:g} ns, p95 {point["p95"]:g} ns at {html.escape(" ".join(filter(None, (groups.get(point["size"]), labels.get(point["size"], _size_label(point["size"]))))))}{"" if groups else " elements"}</title></circle>')
 
     legend_y = height - 79
     total_width = plot_width
@@ -210,6 +261,24 @@ def render_report(report: dict[str, Any], output_dir: Path, sizes: tuple[int, ..
         svg = render_svg(f"{title} · {device} / {driver}", f"{title}. {explanation} Reference configuration: {configuration}.", series, sizes)
         filename = {"cpu": "cpu-arithmetic.svg", "host": "host-latency.svg", "gpu": "gpu-timestamps.svg"}[kind]
         output = output_dir / filename
+        output.write_text(svg, encoding="utf-8", newline="\n")
+        outputs.append(output)
+    cases = tuple(case for _, _, case in COMPUTE_CASES)
+    compute_series = report_series(report, "compute", cases)
+    if any(item["points"] for item in compute_series):
+        title = "Matched compute — host submit to completion"
+        svg = render_svg(
+            f"{title} · {device} / {driver}",
+            f"{title}. SAXPY, reduction, scan, stencil, and tiled matmul at three sizes each; KORA default includes "
+            f"output readback, deferred KORA and raw Vulkan keep output device-resident. Reference configuration: {configuration}.",
+            compute_series,
+            cases,
+            x_label="Workload · problem size (elements, or matrix dimension²)",
+            labels={case: label for _, label, case in COMPUTE_CASES},
+            groups={case: group for group, _, case in COMPUTE_CASES},
+            width=1400,
+        )
+        output = output_dir / "compute-host-latency.svg"
         output.write_text(svg, encoding="utf-8", newline="\n")
         outputs.append(output)
     return outputs

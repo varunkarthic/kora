@@ -141,6 +141,46 @@ def validate_cuda_report(kora_report: dict, cuda_report: dict) -> list[dict]:
     return sorted(validated, key=lambda item: (item["workload_id"], item["size"], item["comparison_class"]))
 
 
+COMPUTE_SIZES = (4096, 65536, 1048576)
+MATRIX_DIMENSIONS = (16, 64, 128)
+
+
+def matched_compute_rows() -> list[tuple[str, str, str, str, str, str]]:
+    """Return ordered (label, KORA default, KORA deferred, raw host, KORA GPU, raw GPU) result names."""
+    rows = []
+    for label, workload, suffix in (
+        ("SAXPY", "saxpy", "_upload"),
+        ("Reduction", "reduction", ""),
+        ("Scan", "tiled_scan", ""),
+        ("Stencil", "stencil", ""),
+    ):
+        for size in COMPUTE_SIZES:
+            case = f"{workload}_{size}{suffix}"
+            rows.append(
+                (
+                    f"{label} / {size:,}",
+                    f"gpu_{case}_dispatch_wait",
+                    f"gpu_{case}_deferred_readback_dispatch_wait",
+                    f"raw_vulkan_{case}_dispatch_wait",
+                    f"gpu_{workload}_{size}_gpu_execution",
+                    f"raw_vulkan_{case}_gpu_execution",
+                )
+            )
+    for dimension in MATRIX_DIMENSIONS:
+        case = f"tiled_matmul_{dimension}"
+        rows.append(
+            (
+                f"Tiled matmul / {dimension}×{dimension}",
+                f"gpu_{case}_dispatch_wait",
+                f"gpu_{case}_deferred_readback_dispatch_wait",
+                f"raw_vulkan_{case}_dispatch_wait",
+                f"gpu_{case}_gpu_execution",
+                f"raw_vulkan_{case}_gpu_execution",
+            )
+        )
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="schema-3 kora-bench JSON report")
@@ -200,59 +240,17 @@ def main() -> int:
             ],
         ]
         print("| " + " | ".join(values) + " |")
-    matched_compute_workloads = (
-        (
-            "SAXPY / 4,096",
-            "gpu_saxpy_4096_upload_dispatch_wait",
-            "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait",
-            "raw_vulkan_saxpy_4096_upload_dispatch_wait",
-            "gpu_saxpy_4096_gpu_execution",
-            "raw_vulkan_saxpy_4096_upload_gpu_execution",
-        ),
-        (
-            "Reduction / 4,096",
-            "gpu_reduction_4096_dispatch_wait",
-            "gpu_reduction_4096_deferred_readback_dispatch_wait",
-            "raw_vulkan_reduction_4096_dispatch_wait",
-            "gpu_reduction_4096_gpu_execution",
-            "raw_vulkan_reduction_4096_gpu_execution",
-        ),
-        (
-            "Scan / 4,096",
-            "gpu_tiled_scan_4096_dispatch_wait",
-            "gpu_tiled_scan_4096_deferred_readback_dispatch_wait",
-            "raw_vulkan_tiled_scan_4096_dispatch_wait",
-            "gpu_tiled_scan_4096_gpu_execution",
-            "raw_vulkan_tiled_scan_4096_gpu_execution",
-        ),
-        (
-            "Tiled matmul / 64×64",
-            "gpu_tiled_matmul_64_dispatch_wait",
-            "gpu_tiled_matmul_64_deferred_readback_dispatch_wait",
-            "raw_vulkan_tiled_matmul_64_dispatch_wait",
-            "gpu_tiled_matmul_64_gpu_execution",
-            "raw_vulkan_tiled_matmul_64_gpu_execution",
-        ),
-        (
-            "Stencil / 4,096",
-            "gpu_stencil_4096_dispatch_wait",
-            "gpu_stencil_4096_deferred_readback_dispatch_wait",
-            "raw_vulkan_stencil_4096_dispatch_wait",
-            "gpu_stencil_4096_gpu_execution",
-            "raw_vulkan_stencil_4096_gpu_execution",
-        ),
-    )
-    if all(
-        kora_name in results and deferred_name in results and raw_name in results
-        for _, kora_name, deferred_name, raw_name, _, _ in matched_compute_workloads
-    ):
+    matched_compute_workloads = [
+        row for row in matched_compute_rows() if all(name in results for name in row[1:4])
+    ]
+    if matched_compute_workloads:
         print("\nMatched same-device Vulkan compute workloads:")
         print(
             "| Workload | KORA default p50 | KORA default p95 | KORA deferred p50 | KORA deferred p95 | "
-            "Raw Vulkan host p50 | Raw Vulkan host p95 | "
+            "Raw Vulkan host p50 | Raw Vulkan host p95 | Deferred/raw p50 | "
             "KORA GPU p50 | KORA GPU p95 | Raw Vulkan GPU p50 | Raw Vulkan GPU p95 |"
         )
-        print("| " + " | ".join(["---"] + ["---:"] * 10) + " |")
+        print("| " + " | ".join(["---"] + ["---:"] * 11) + " |")
         for label, kora_name, deferred_name, raw_name, kora_gpu_name, raw_gpu_name in matched_compute_workloads:
             kora_host = results[kora_name]
             deferred_host = results[deferred_name]
@@ -274,6 +272,7 @@ def main() -> int:
                 format_ns(deferred_host["p95"]),
                 format_ns(raw_host["median"]),
                 format_ns(raw_host["p95"]),
+                f"{deferred_host['median'] / raw_host['median']:.2f}×",
                 *[
                     format_ns(gpu_result[stat]) if gpu_result is not None else "unavailable"
                     for gpu_result in gpu_results

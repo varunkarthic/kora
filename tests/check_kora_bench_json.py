@@ -48,13 +48,13 @@ expected_names |= {f"cpu_vector_add_{count}" for count in vector_sizes}
 compute_sizes = (4096, 65536, 1048576)
 expected_names |= {
     f"cpu_{workload}_{count}"
-    for workload in ("saxpy", "reduction", "stencil")
+    for workload in ("saxpy", "reduction", "stencil", "tiled_scan")
     for count in compute_sizes
 }
 expected_names |= {f"cpu_tiled_matmul_{dimension}" for dimension in (16, 64, 128)}
 expected_names |= {
     f"cpu_{workload}_parallel_{count}"
-    for workload in ("vector_add", "saxpy", "reduction", "stencil")
+    for workload in ("vector_add", "saxpy", "reduction", "stencil", "tiled_scan")
     for count in compute_sizes
 }
 expected_names |= {f"cpu_tiled_matmul_parallel_{dimension}" for dimension in (16, 64, 128)}
@@ -81,17 +81,23 @@ if "--gpu" in arguments:
     expected_names |= {
         "gpu_tiny_dispatch_1",
         "gpu_tiny_dispatch_batch_10",
-        "gpu_saxpy_4096_upload_dispatch_wait",
     }
     expected_names |= {f"gpu_vector_add_{count}_dispatch_wait" for count in vector_sizes[1:]}
     expected_names |= {
         f"gpu_vector_add_{count}_deferred_readback_dispatch_wait" for count in vector_sizes[1:]
     }
+    matrix_dimensions = (16, 64, 128)
+    compute_workloads = {
+        *(f"{workload}_{count}" for workload in ("reduction", "tiled_scan", "stencil") for count in compute_sizes),
+        *(f"tiled_matmul_{dimension}" for dimension in matrix_dimensions),
+    }
+    saxpy_workloads = {f"saxpy_{count}_upload" for count in compute_sizes}
     expected_names |= {
-        "gpu_reduction_4096_dispatch_wait",
-        "gpu_tiled_scan_4096_dispatch_wait",
-        "gpu_tiled_matmul_64_dispatch_wait",
-        "gpu_stencil_4096_dispatch_wait",
+        f"gpu_{name}_{suffix}"
+        for name in compute_workloads | saxpy_workloads
+        for suffix in ("dispatch_wait", "deferred_readback_dispatch_wait")
+    }
+    expected_names |= {
         "command_pool_reuse_steady_state",
         "command_pool_cold_create_record_destroy",
     }
@@ -103,22 +109,10 @@ if "--gpu" in arguments:
     expected_names |= {
         f"raw_vulkan_vector_add_{count}_dispatch_wait" for count in vector_sizes[1:]
     }
-    raw_compute_workloads = {
-        "saxpy_4096_upload",
-        "reduction_4096",
-        "tiled_scan_4096",
-        "tiled_matmul_64",
-        "stencil_4096",
-    }
-    expected_names |= {f"raw_vulkan_{name}_dispatch_wait" for name in raw_compute_workloads}
-    expected_names |= set(gpu["kora_gpu_compute_timestamp_workloads"])
     expected_names |= {
-        "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait",
-        "gpu_reduction_4096_deferred_readback_dispatch_wait",
-        "gpu_tiled_scan_4096_deferred_readback_dispatch_wait",
-        "gpu_tiled_matmul_64_deferred_readback_dispatch_wait",
-        "gpu_stencil_4096_deferred_readback_dispatch_wait",
+        f"raw_vulkan_{name}_dispatch_wait" for name in compute_workloads | saxpy_workloads
     }
+    expected_names |= set(gpu["kora_gpu_compute_timestamp_workloads"])
     expected_names |= set(gpu["raw_gpu_compute_timestamp_workloads"])
     expected_names |= {
         f"gpu_vector_add_{count}_gpu_execution" for count in gpu["kora_gpu_timestamp_sizes"]
