@@ -1681,7 +1681,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
                         GpuDeviceReport& device_report) {
     kora::RuntimeOptions runtime_options;
     runtime_options.telemetry =
-        options.profile_phases ? kora::TelemetryLevel::Profile : kora::TelemetryLevel::Off;
+        options.profile_phases ? kora::TelemetryLevel::Profile : kora::TelemetryLevel::Basic;
     runtime_options.enable_startup_calibration = false;
     runtime_options.disable_autotune = true;
     runtime_options.debug_safety = false;
@@ -1735,19 +1735,24 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         auto event = builder.submit();
         if (!event || !event.value().wait()) throw std::runtime_error("Vulkan dispatch failed");
     };
-    const auto add_kora_gpu_timestamp = [&](std::string name, const std::function<void()>& operation) {
-        auto result = run_timestamps(
-            std::move(name),
-            [&]() -> std::optional<std::uint64_t> {
-                auto before = runtime.profiling_stats(selected_devices.front());
-                if (!before) return std::nullopt;
-                operation();
-                auto after = runtime.profiling_stats(selected_devices.front());
-                if (!after || after.value().last_submission_id == before.value().last_submission_id)
-                    return std::nullopt;
+    // Basic telemetry timestamps one dispatch in 16 (the Runtime default), so repeat the operation
+    // until a new device-time sample arrives; each sample is still a single dispatch's interval.
+    const auto sample_kora_timestamp =
+        [&](const std::function<void()>& operation) -> std::optional<std::uint64_t> {
+        auto before = runtime.profiling_stats(selected_devices.front());
+        if (!before) return std::nullopt;
+        for (int attempt = 0; attempt < 32; ++attempt) {
+            operation();
+            auto after = runtime.profiling_stats(selected_devices.front());
+            if (!after) return std::nullopt;
+            if (after.value().last_submission_id != before.value().last_submission_id)
                 return after.value().last_duration_nanoseconds;
-            },
-            options);
+        }
+        return std::nullopt;
+    };
+    const auto add_kora_gpu_timestamp = [&](std::string name, const std::function<void()>& operation) {
+        auto result =
+            run_timestamps(std::move(name), [&] { return sample_kora_timestamp(operation); }, options);
         if (result) results.push_back(std::move(*result));
     };
     results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
@@ -1776,16 +1781,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         results.push_back(run(deferred_name, [&, count] { dispatch(count, true); }, options));
         const auto gpu_execution = run_timestamps(
             "gpu_vector_add_" + std::to_string(count) + "_gpu_execution",
-            [&, count]() -> std::optional<std::uint64_t> {
-                auto before = runtime.profiling_stats(selected_devices.front());
-                if (!before) return std::nullopt;
-                dispatch(count, true);
-                auto after = runtime.profiling_stats(selected_devices.front());
-                if (!after || after.value().last_submission_id == before.value().last_submission_id)
-                    return std::nullopt;
-                return after.value().last_duration_nanoseconds;
-            },
-            options);
+            [&, count] { return sample_kora_timestamp([&] { dispatch(count, true); }); }, options);
         if (gpu_execution) {
             device_report.kora_gpu_timestamp_sizes.push_back(count);
             results.push_back(std::move(*gpu_execution));
