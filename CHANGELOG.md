@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.28] - 2026-10-20
+
 ### Added
 - Add `kora-top`, a live terminal view of a `kora::Cluster`. It shows each local device and remote
   worker, which of them received work in the last second, device memory against the driver budget,
@@ -620,7 +622,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.27...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.28...HEAD
+[0.2.28]: https://github.com/varunkarthic/kora/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/varunkarthic/kora/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/varunkarthic/kora/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/varunkarthic/kora/compare/v0.2.24...v0.2.25
