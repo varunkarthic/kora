@@ -1651,7 +1651,8 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     };
     // Basic telemetry timestamps one dispatch in 16 (the Runtime default), so repeat the operation
     // until a new device-time sample arrives; each sample is still a single dispatch's interval.
-    const auto sample_kora_timestamp = [&](const std::function<void()>& operation) -> std::optional<std::uint64_t> {
+    const auto sample_kora_timestamp =
+        [&](const std::function<void()>& operation) -> std::optional<std::uint64_t> {
         auto before = runtime.profiling_stats(selected_devices.front());
         if (!before) return std::nullopt;
         for (int attempt = 0; attempt < 32; ++attempt) {
@@ -1664,7 +1665,8 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         return std::nullopt;
     };
     const auto add_kora_gpu_timestamp = [&](std::string name, const std::function<void()>& operation) {
-        auto result = run_timestamps(std::move(name), [&] { return sample_kora_timestamp(operation); }, options);
+        auto result =
+            run_timestamps(std::move(name), [&] { return sample_kora_timestamp(operation); }, options);
         if (result) results.push_back(std::move(*result));
     };
     results.push_back(run("gpu_tiny_dispatch_1", [&] { dispatch(1); }, options));
@@ -1693,8 +1695,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         results.push_back(run(deferred_name, [&, count] { dispatch(count, true); }, options));
         const auto gpu_execution = run_timestamps(
             "gpu_vector_add_" + std::to_string(count) + "_gpu_execution",
-            [&, count] { return sample_kora_timestamp([&] { dispatch(count, true); }); },
-            options);
+            [&, count] { return sample_kora_timestamp([&] { dispatch(count, true); }); }, options);
         if (gpu_execution) {
             device_report.kora_gpu_timestamp_sizes.push_back(count);
             results.push_back(std::move(*gpu_execution));

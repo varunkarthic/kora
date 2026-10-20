@@ -723,6 +723,68 @@ regenerated snapshot charts and [comparison tables](benchmark-compute-results.md
 1,000-sample/50-warm-up report at 8ca0de7,
 [retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json).
 
+(issue-235-timestamps-on-demand)=
+### Issue #235: GPU timestamps only when needed
+
+The #227 phase profile showed KORA's own host work at about 25 µs of a 4K dispatch; most of the rest
+was device completion. Before #235 every dispatch also wrote two GPU timestamp queries, which the
+raw-Vulkan, Metal, and OpenCL latency loops do not. Removing them in an experiment build (six
+interleaved pairs) cut most small-dispatch latencies by 10–36%, consistent with the driver splitting
+its command encoding around each query. KORA now records timestamps only as often as telemetry needs
+them (none at `Off`, one dispatch in 16 at the default `Basic`, every dispatch at `Profile`/`Trace`;
+autotuning and adaptive observations always record); see [profiling](profiling.md).
+
+The comparison below uses 10 ABBA-interleaved pairs of `main` before the change (f6e5f15) and the
+change (0481ee1), 150 samples and 20 warm-ups per run, at each build's default telemetry level, on
+macOS arm64 / Apple M4, AppleClang 21 Release, MoltenVK. Change is the median per-pair p50 ratio and
+the number of pairs the new build won:
+
+Before: `f6e5f156b7a9f5ec98953168b37768b08a76266d` (10 runs); after: `0481ee1c2e70d9c0fe586086822854fb7e653afa` (10 runs). Latencies are the median across runs of the per-run p50. Change is the median of per-pair after/before p50 ratios, with the number of pairs the after build won.
+
+| Workload | Size | KORA default before | after | change | KORA deferred before | after | change | Raw Vulkan (after runs) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SAXPY | 4K | 437.687 µs | 357.333 µs | -19% (10/10) | 432.271 µs | 351.625 µs | -18% (9/10) | 313.854 µs |
+| SAXPY | 64K | 445.979 µs | 408.541 µs | -9% (9/10) | 446.729 µs | 408.604 µs | -10% (9/10) | 402.583 µs |
+| SAXPY | 1M | 892.583 µs | 803.979 µs | -2% (5/10) | 705.333 µs | 670.500 µs | -4% (9/10) | 642.395 µs |
+| Reduction | 4K | 417.312 µs | 331.020 µs | -18% (8/10) | 430.458 µs | 350.458 µs | -17% (8/10) | 335.333 µs |
+| Reduction | 64K | 434.146 µs | 376.791 µs | -11% (9/10) | 410.792 µs | 387.375 µs | -7% (8/10) | 378.729 µs |
+| Reduction | 1M | 753.000 µs | 639.646 µs | -13% (10/10) | 728.271 µs | 653.792 µs | -12% (10/10) | 308.750 µs |
+| Scan | 4K | 438.354 µs | 362.479 µs | -16% (9/10) | 413.000 µs | 369.458 µs | -14% (9/10) | 326.917 µs |
+| Scan | 64K | 446.500 µs | 423.979 µs | -5% (8/10) | 433.312 µs | 418.854 µs | -3% (6/10) | 416.896 µs |
+| Scan | 1M | 1.006 ms | 860.749 µs | -14% (7/10) | 444.979 µs | 411.354 µs | -9% (8/10) | 396.916 µs |
+| Stencil | 4K | 426.563 µs | 336.084 µs | -20% (10/10) | 425.458 µs | 347.792 µs | -17% (10/10) | 322.271 µs |
+| Stencil | 64K | 444.958 µs | 341.021 µs | -27% (10/10) | 431.854 µs | 325.958 µs | -23% (10/10) | 328.854 µs |
+| Stencil | 1M | 1.315 ms | 889.375 µs | -14% (8/10) | 432.312 µs | 400.083 µs | -9% (9/10) | 382.166 µs |
+| Tiled matmul | 16² | 432.062 µs | 347.583 µs | -16% (10/10) | 443.104 µs | 359.124 µs | -17% (10/10) | 219.124 µs |
+| Tiled matmul | 64² | 433.875 µs | 376.938 µs | -12% (8/10) | 425.083 µs | 364.646 µs | -11% (8/10) | 309.541 µs |
+| Tiled matmul | 128² | 471.771 µs | 453.958 µs | -5% (8/10) | 462.958 µs | 443.750 µs | -6% (9/10) | 442.437 µs |
+| Vector add | 4K | 1.375 ms | 1.331 ms | -3% (7/10) | 382.396 µs | 283.229 µs | -27% (9/10) | 430.895 µs |
+| Vector add | 64K | 1.383 ms | 1.299 ms | -2% (8/10) | 417.062 µs | 313.812 µs | -19% (9/10) | 422.729 µs |
+| Vector add | 1M | 2.062 ms | 1.796 ms | -3% (6/10) | 855.125 µs | 976.709 µs | -4% (7/10) | 1.220 ms |
+| Vector add | 4M | 2.748 ms | 2.619 ms | -2% (5/10) | 1.397 ms | 1.788 ms | -9% (7/10) | 1.870 ms |
+
+![KORA default readback before and after #235](../benchmarks/charts/timestamps-on-demand-default.svg)
+
+![KORA deferred readback before and after #235](../benchmarks/charts/timestamps-on-demand-deferred.svg)
+
+Every matched case improved at the median, by 2–27%, and none regressed. Small dispatches gained the
+most (for example 4K stencil −17–20% and 4K vector add deferred −27%); 1M-element cases, dominated by
+data movement, gained least. KORA deferred is now within a few percent of raw Vulkan for most small
+cases. The 20 compressed reports are in
+[`benchmarks/results/issue235-timestamps-on-demand/`](https://github.com/varunkarthic/kora/tree/main/benchmarks/results/issue235-timestamps-on-demand);
+`render_ab.py` reads `.json.gz` directly:
+
+```sh
+python3 tools/kora-bench/render_ab.py \
+  --before benchmarks/results/issue235-timestamps-on-demand/before-*.json.gz \
+  --after benchmarks/results/issue235-timestamps-on-demand/after-*.json.gz \
+  --change "#235" --prefix timestamps-on-demand
+```
+
+A second hypothesis, that timeline-semaphore completion is slower than fences on MoltenVK, was
+tested the same way (`KORA_FORCE_LEGACY_SYNC=1`, six pairs) and rejected: results moved in both
+directions with no consistent winner, so KORA keeps timeline semaphores.
+
 ### Optimization decisions and limits
 
 The evidence above supports keeping the existing bounded command-buffer pool reuse: it reduced
