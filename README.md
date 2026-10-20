@@ -23,6 +23,10 @@ visible to the caller.
   orchestration.
 - Offers CPU execution/fallback, multi-device primitives, profiling, trace export, recovery
   diagnostics, and a thin optional Python API.
+- Offloads dispatches to KORA workers on other machines or devices you own with `kora::Cluster`.
+  Workers can be connected, unplugged, or reconnected while work is running; a dispatch whose
+  worker disappears re-runs locally, so results are never lost or corrupted
+  ([remote workers and hot-swap](docs/cluster.md)).
 - Uses Vulkan as a vendor-neutral GPU interface; it does not require CUDA, ROCm/HIP, oneAPI, or
   OpenCL.
 
@@ -49,6 +53,8 @@ flowchart LR
   QUEUE --> GPU["Vulkan compute device"]
   API --> MEMORY["Buffers / transfers / replicas"]
   API --> OBS["Profiling / trace / diagnostics"]
+  CLUSTER["Cluster (optional)"] --> API
+  CLUSTER -->|"TCP, hot-swappable"| WORKER["kora-worker on another device"]
 ```
 
 ### A dispatch lifecycle
@@ -109,45 +115,81 @@ options and build presets are in [Building](docs/building.md).
 
 ## Performance snapshot
 
-These are captured local Release measurements on one Apple M4 (MoltenVK, Vulkan 1.3.357,
-AppleClang 21), not portable promises. Every chart and table here is rendered by
-[`tools/kora-bench`](tools/kora-bench) from retained raw JSON in [`benchmarks/results`](benchmarks/results);
-nothing is hand-drawn or estimated. Lines and dots show p50, whiskers p95, on a logarithmic latency
-axis. CPU arithmetic, host submit-to-completion, and device timestamps are separate timing domains.
-KORA default mode reads writable outputs back to the host; deferred KORA and raw Vulkan leave outputs
-on the device. No CUDA, Linux, or Windows hardware result is claimed; the
-[benchmark guide](docs/benchmarking.md) explains the methodology and limitations.
+These are measured local Release results on one Apple M4 (AppleClang 21; KORA on MoltenVK unless
+noted), not portable promises. Every chart and table is rendered by [`tools/kora-bench`](tools/kora-bench)
+from raw JSON retained in [`benchmarks/results`](benchmarks/results); nothing is hand-drawn or
+estimated. Dots are p50 and whiskers p95 on a logarithmic axis. Host submit-to-completion, device
+timestamps, and CPU execution are separate timing domains. KORA *default* reads writable outputs
+back to the host; KORA *deferred*, raw Vulkan, Metal, and OpenCL leave outputs in device-visible
+memory. Single runs on this machine vary by up to several-fold with GPU clock state, so every
+comparison below interleaves runs and reports medians across them. No CUDA, Linux, or Windows
+hardware result is claimed; see the [benchmark guide](docs/benchmarking.md) for methodology.
 
-### Unified-memory direct access (#227)
+### How KORA compares with other APIs on the same GPU
 
-KORA now detects unified memory from the device's memory heaps and, on such devices, writes inputs
-and reads outputs through the buffer's mapping instead of staging every transfer through a separate
-submission. Across 15 interleaved before/after pairs on the same device:
+Six interleaved runs each of `kora-bench` and the optional
+[`competitor-bench`](docs/benchmark-competitors.md) (Metal, OpenCL 1.2, OpenGL 4.1, Accelerate), with
+identical kernels, sizes, inputs, and output checks. Host submit-to-completion, median of per-run p50:
 
-- **Default readback** (KORA's default dispatch mode) got 15–60% faster in all 19 matched cases,
-  for example 4K SAXPY 1.09 ms → 0.43 ms and 1M vector add 4.30 ms → 1.76 ms.
-- **Deferred SAXPY**, which rewrites a large input every call, got 37–46% faster.
-- Other deferred compute cases were unchanged within noise (−0% to +6%), and **deferred vector add
-  with 16 MiB buffers regressed 10–26%**: MoltenVK's host-visible memory, which direct mapping
-  needs, costs more per dispatch than its host-invisible memory.
-- KORA device timestamps are now reported for every matched case instead of being intermittently
-  dropped.
+| Workload | KORA deferred | Raw Vulkan | Metal | OpenCL 1.2 | OpenGL 4.1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SAXPY, 4K | 342 µs | 315 µs | 198 µs | 217 µs | 360 µs |
+| Stencil, 64K | 375 µs | 326 µs | 208 µs | 180 µs | 335 µs |
+| Tiled matmul, 128² | 491 µs | 444 µs | 224 µs | 233 µs | 346 µs* |
+| SAXPY, 1M | 673 µs | 897 µs | 484 µs | 513 µs | 695 µs |
+| Vector add, 4M | **1.03 ms** | 1.58 ms | 1.36 ms | 1.37 ms | 1.80 ms |
 
-![KORA default readback before and after unified-memory direct access](benchmarks/charts/uma-direct-default.svg)
+\* OpenGL 4.1 has no compute shaders; its matmul, reduction, and scan are vertex-shader emulations.
 
-![KORA deferred readback before and after unified-memory direct access](benchmarks/charts/uma-direct-deferred.svg)
+![KORA vs Metal, OpenCL, OpenGL host latency](benchmarks/charts/competitors-host.svg)
 
-The [full paired table and method](docs/benchmarking.md#issue-227-unified-memory-direct-access) and all
-30 raw reports are retained. KORA kernels at 1M elements still run about 3× longer than raw Vulkan
-on MoltenVK by device timestamp (not on KosmicKrisp); that is tracked in
-[#229](https://github.com/varunkarthic/kora/issues/229).
+Native Metal is the fastest GPU path for small dispatches; KORA deferred is 1.0–2.2× Metal there
+(typically 1.7–2.0×) and 1.15–2.2× at 1M elements, and the fastest path of all on the 4M vector add
+(0.76× Metal). Raw Vulkan pays the same
+120–150 µs over Metal, so most of that gap is the Vulkan-on-Metal layer (MoltenVK), not KORA, which
+is now level with raw Vulkan on most small cases. The same GPU through the KosmicKrisp Vulkan driver
+(`KORA_DEVICE=0`) brings KORA within about 15–30% of Metal for most small dispatches, but lacks GPU
+timestamps, so it is not the default. Full tables (including device time and Accelerate vs KORA's
+CPU baselines): [KORA vs Metal, OpenCL, OpenGL, and Accelerate](docs/benchmark-competitors.md).
+
+### What recent optimizations changed
+
+Each change below was measured with interleaved before/after builds; the change column is the
+median per-pair change in p50.
+
+| Change | Effect on KORA (host submit to completion) |
+| --- | --- |
+| [#227](docs/benchmarking.md#issue-227-unified-memory-direct-access) unified-memory direct access | Default readback 15–60% faster in all 19 cases (15 pairs); deferred SAXPY 37–46% faster; deferred vector add with 16 MiB buffers 10–26% slower |
+| [#235](docs/benchmarking.md#issue-235-gpu-timestamps-only-when-needed) GPU timestamps only when needed | All 38 cells faster, 2–27%, no regressions (10 pairs) |
+| [#231](https://github.com/varunkarthic/kora/issues/231) free released device buffers | Device allocations no longer grow with every created buffer (5 → 152 live allocations before the fix) |
+
+![KORA deferred readback before and after #235](benchmarks/charts/timestamps-on-demand-deferred.svg)
+
+![KORA default readback before and after #227](benchmarks/charts/uma-direct-default.svg)
+
+### Remote workers
+
+`kora::Cluster` offloads dispatches to `kora-worker` processes and survives workers being unplugged
+and replugged mid-stream (a randomized test restarts the worker every 5–60 ms while hundreds of
+dependent dispatches run, and every result must be exact). Cost of offloading over loopback to a
+worker on the same GPU, five runs of 300 samples:
+
+| SAXPY | Local p50 | Remote (loopback) p50 |
+| ---: | ---: | ---: |
+| 4K | 335 µs | 431 µs |
+| 64K | 417 µs | 650 µs |
+| 1M | 664 µs | 4.76 ms |
+
+Small dispatches cost one extra round trip; large ones pay for moving their output back, so
+offloading helps when the other device is much faster or the local one is busy. A real USB-C or LAN
+link adds its own latency. See [remote workers and hot-swap](docs/cluster.md).
 
 ### Current snapshot
 
-From one 1,000-sample, 50-warm-up report after #227
-([raw JSON](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json),
-[generated tables](docs/benchmark-compute-results.md)). Single runs on this device vary by up to
-several-fold with GPU clock state, so use the paired study above for before/after conclusions.
+One 1,000-sample, 50-warm-up run at source 0a71f8c
+([raw JSON](benchmarks/results/macos-arm64-apple-m4-moltenvk-snapshot-1000x50-0a71f8c.json),
+[generated tables](docs/benchmark-compute-results.md)). Use the interleaved studies above, not this
+single run, to compare builds or APIs.
 
 ![KORA and raw Vulkan matched compute host-latency chart](benchmarks/charts/compute-host-latency.svg)
 
@@ -157,19 +199,10 @@ several-fold with GPU clock state, so use the paired study above for before/afte
 
 ![CPU arithmetic benchmark chart](benchmarks/charts/cpu-arithmetic.svg)
 
-| Elements | CPU median | KORA default | KORA deferred | Raw Vulkan | KORA GPU | Raw GPU |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 2.083 µs | 1.264 ms | 268.416 µs | 260.459 µs | 12.834 µs | 12.417 µs |
-| 1048576 | 563.166 µs | 2.046 ms | 1.129 ms | 1.247 ms | 416.417 µs | 582.916 µs |
-| 4194240 | 2.243 ms | 2.670 ms | 1.790 ms | 1.847 ms | 1.240 ms | 1.239 ms |
-
-Vector add: CPU is single-thread arithmetic; KORA and raw Vulkan columns are host submit-to-completion
-medians; GPU columns are device timestamps. The vector-add default column reads back a 16 MiB output
-buffer regardless of the dispatched element count. Earlier optimization studies
-([#196 dispatch overhead](docs/benchmarking.md#dispatch-overhead-case-study),
+Earlier optimization studies ([#196 dispatch overhead](docs/benchmarking.md#dispatch-overhead-case-study),
 [#214 completion latency](docs/benchmarking.md#issue-214-eager-submission-coalescing-and-completion-latency))
 and the optional [external CUDA report contract](docs/benchmarking.md#optional-external-cuda-reference)
-are documented in the benchmark guide.
+are in the benchmark guide.
 
 ## Documentation
 
@@ -180,8 +213,9 @@ Start with [Overview](docs/overview.md), then choose a path:
 | Build, install, and run tests | [Getting started](docs/getting-started.md) · [Building](docs/building.md) · [Testing](docs/testing.md) |
 | Understand the boundaries and ownership model | [Architecture](docs/architecture.md) · [Invariants](docs/internals/invariants.md) |
 | Select devices and manage buffers/transfers | [Device selection](docs/device-selection.md) · [Memory model](docs/memory-model.md) |
+| Offload work to other devices, hot-swappably | [Remote workers and hot-swap](docs/cluster.md) |
 | Load kernels and dispatch work | [Kernel format](docs/kernel-format.md) · [Runtime API](docs/api/runtime.md) |
-| Profile or compare performance | [Profiling](docs/profiling.md) · [Benchmarking](docs/benchmarking.md) |
+| Profile or compare performance | [Profiling](docs/profiling.md) · [Benchmarking](docs/benchmarking.md) · [vs Metal/OpenCL/OpenGL](docs/benchmark-competitors.md) |
 | Diagnose failures or device loss | [Debugging](docs/debugging.md) · [Recovery](docs/recovery.md) |
 | Use Python | [Python API](docs/python-api.md) |
 | Check release status and installation | [Releases](docs/releases.md) · [Platform support](docs/platform-support.md) |

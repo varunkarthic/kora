@@ -23,26 +23,26 @@
 <text class="muted tick" x="259.3" y="506" text-anchor="middle" font-size="13">4,096</text>
 <text class="muted tick" x="554.0" y="506" text-anchor="middle" font-size="13">1,048,576</text>
 <text class="muted tick" x="848.7" y="506" text-anchor="middle" font-size="13">4,194,240</text>
-<path class="series-line" stroke="#7c3aed" d="M 249.3 466.7 L 544.0 281.3 L 838.7 223.2"/>
-<line class="whisker" stroke="#7c3aed" x1="249.3" y1="456.1" x2="249.3" y2="466.7"/>
-<line class="whisker" stroke="#7c3aed" x1="243.3" y1="456.1" x2="255.3" y2="456.1"/>
-<circle class="median" fill="#7c3aed" cx="249.3" cy="466.7" r="7"><title>KORA Runtime: median 12834 ns, p95 15667 ns at 4,096 elements</title></circle>
-<line class="whisker" stroke="#7c3aed" x1="544.0" y1="259.1" x2="544.0" y2="281.3"/>
-<line class="whisker" stroke="#7c3aed" x1="538.0" y1="259.1" x2="550.0" y2="259.1"/>
-<circle class="median" fill="#7c3aed" cx="544.0" cy="281.3" r="7"><title>KORA Runtime: median 416417 ns, p95 632042 ns at 1,048,576 elements</title></circle>
-<line class="whisker" stroke="#7c3aed" x1="838.7" y1="216.2" x2="838.7" y2="223.2"/>
-<line class="whisker" stroke="#7c3aed" x1="832.7" y1="216.2" x2="844.7" y2="216.2"/>
-<circle class="median" fill="#7c3aed" cx="838.7" cy="223.2" r="7"><title>KORA Runtime: median 1.23979e+06 ns, p95 1.41438e+06 ns at 4,194,240 elements</title></circle>
-<path class="series-line" stroke="#0891b2" d="M 269.3 468.5 L 564.0 263.4 L 858.7 223.2"/>
-<line class="whisker" stroke="#0891b2" x1="269.3" y1="464.8" x2="269.3" y2="468.5"/>
-<line class="whisker" stroke="#0891b2" x1="263.3" y1="464.8" x2="275.3" y2="464.8"/>
-<circle class="median" fill="#0891b2" cx="269.3" cy="468.5" r="7"><title>Raw Vulkan: median 12417 ns, p95 13291 ns at 4,096 elements</title></circle>
-<line class="whisker" stroke="#0891b2" x1="564.0" y1="258.0" x2="564.0" y2="263.4"/>
-<line class="whisker" stroke="#0891b2" x1="558.0" y1="258.0" x2="570.0" y2="258.0"/>
-<circle class="median" fill="#0891b2" cx="564.0" cy="263.4" r="7"><title>Raw Vulkan: median 582916 ns, p95 645708 ns at 1,048,576 elements</title></circle>
-<line class="whisker" stroke="#0891b2" x1="858.7" y1="216.5" x2="858.7" y2="223.2"/>
-<line class="whisker" stroke="#0891b2" x1="852.7" y1="216.5" x2="864.7" y2="216.5"/>
-<circle class="median" fill="#0891b2" cx="858.7" cy="223.2" r="7"><title>Raw Vulkan: median 1.23933e+06 ns, p95 1.40596e+06 ns at 4,194,240 elements</title></circle>
+<path class="series-line" stroke="#7c3aed" d="M 249.3 436.3 L 544.0 264.6 L 838.7 231.8"/>
+<line class="whisker" stroke="#7c3aed" x1="249.3" y1="428.4" x2="249.3" y2="436.3"/>
+<line class="whisker" stroke="#7c3aed" x1="243.3" y1="428.4" x2="255.3" y2="428.4"/>
+<circle class="median" fill="#7c3aed" cx="249.3" cy="436.3" r="7"><title>KORA Runtime: median 22708 ns, p95 26333 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#7c3aed" x1="544.0" y1="260.1" x2="544.0" y2="264.6"/>
+<line class="whisker" stroke="#7c3aed" x1="538.0" y1="260.1" x2="550.0" y2="260.1"/>
+<circle class="median" fill="#7c3aed" cx="544.0" cy="264.6" r="7"><title>KORA Runtime: median 570209 ns, p95 620708 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#7c3aed" x1="838.7" y1="218.4" x2="838.7" y2="231.8"/>
+<line class="whisker" stroke="#7c3aed" x1="832.7" y1="218.4" x2="844.7" y2="218.4"/>
+<circle class="median" fill="#7c3aed" cx="838.7" cy="231.8" r="7"><title>KORA Runtime: median 1.05538e+06 ns, p95 1.35767e+06 ns at 4,194,240 elements</title></circle>
+<path class="series-line" stroke="#0891b2" d="M 269.3 436.1 L 564.0 344.4 L 858.7 263.3"/>
+<line class="whisker" stroke="#0891b2" x1="269.3" y1="422.8" x2="269.3" y2="436.1"/>
+<line class="whisker" stroke="#0891b2" x1="263.3" y1="422.8" x2="275.3" y2="422.8"/>
+<circle class="median" fill="#0891b2" cx="269.3" cy="436.1" r="7"><title>Raw Vulkan: median 22791 ns, p95 29250 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#0891b2" x1="564.0" y1="343.0" x2="564.0" y2="344.4"/>
+<line class="whisker" stroke="#0891b2" x1="558.0" y1="343.0" x2="570.0" y2="343.0"/>
+<circle class="median" fill="#0891b2" cx="564.0" cy="344.4" r="7"><title>Raw Vulkan: median 127583 ns, p95 130917 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#0891b2" x1="858.7" y1="221.5" x2="858.7" y2="263.3"/>
+<line class="whisker" stroke="#0891b2" x1="852.7" y1="221.5" x2="864.7" y2="221.5"/>
+<circle class="median" fill="#0891b2" cx="858.7" cy="263.3" r="7"><title>Raw Vulkan: median 583958 ns, p95 1.27921e+06 ns at 4,194,240 elements</title></circle>
 <line stroke="#7c3aed" stroke-width="3" x1="112.0" y1="581" x2="132.0" y2="581"/>
 <circle fill="#7c3aed" stroke="#fff" stroke-width="1.5" cx="122.0" cy="581" r="5"/>
 <text x="142.0" y="586" font-size="13" font-weight="600">KORA Runtime</text>

@@ -117,9 +117,10 @@ Metal, OpenCL, and raw Vulkan keep outputs in device-visible memory, like KORA d
 
 ## What this shows
 
-- **Metal is the fastest GPU path for small dispatches here**, completing in about 180–225 µs. KORA
-  deferred takes about 290–490 µs, 1.4–2.2× Metal. The gap narrows with size (1.2–1.4× at 1M
-  elements), and on the 4M-element vector add KORA deferred is the fastest of all paths.
+- **Metal is the fastest GPU path for small dispatches here**, completing in about 180–290 µs. KORA
+  deferred takes about 290–490 µs, 1.0–2.2× Metal (typically 1.7–2.0×). At 1M elements it is
+  1.15–2.2× Metal (the 2.2× is reduction, whose kernel runs long on the device; see #229), and on the
+  4M-element vector add KORA deferred is the fastest of all paths (0.76× Metal).
 - **Most of that gap is the Vulkan-on-Metal layer, not KORA.** Raw Vulkan through MoltenVK pays the
   same 120–150 µs over Metal, and KORA deferred is now level with raw Vulkan on most small cases after
   #227 and #235.
