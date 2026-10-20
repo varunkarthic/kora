@@ -93,7 +93,9 @@ policy; explicit dispatch and score-free calibration fallback events do not incl
 
 `load_kernel(path, entry_point, metadata)` reads and structurally validates a bounded SPIR-V module
 for the first selected device. Pass a `DeviceId` as a fourth argument to validate and associate the
-kernel with another selected device. `dispatch(kernel)` routes using that kernel's owning runtime and
+kernel with another selected device. `load_kernel(words, entry_point, metadata, device)` takes an
+in-memory `std::span<const std::uint32_t>` module (at most 16 MiB) with the same validation, for embedded
+kernels or modules received at run time. `dispatch(kernel)` routes using that kernel's owning runtime and
 device. The metadata is checked against reflected descriptor bindings, push-constant size, local size,
 and specialization constants when the pipeline is created. It returns a fluent `DispatchBuilder`; each
 `.read`, `.write`, or `.read_write` call corresponds to the next metadata

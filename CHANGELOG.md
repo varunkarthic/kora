@@ -12,6 +12,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add `kora::Cluster`, `kora::WorkerServer`, and the `kora-worker` tool: offload dispatches to KORA
+  workers on other machines or devices you own, with workers connecting, disconnecting, or
+  reconnecting at any time. Host buffers stay authoritative; a remote result is committed atomically
+  or the dispatch re-runs locally, so unplugging a worker never loses or corrupts work. Clients
+  authenticate with an HMAC-SHA256 challenge; without a token, workers accept only loopback clients.
+- Add `Runtime::load_kernel()` for in-memory SPIR-V words.
+- Add `kora-bench --cluster` to measure `Cluster` dispatches locally and on a loopback worker.
+
 ### Changed
 - Record per-dispatch GPU timestamps only as often as telemetry needs them: none at
   `TelemetryLevel::Off`, one dispatch in 16 at the default `Basic`, and every dispatch at `Profile` and
