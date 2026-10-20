@@ -129,6 +129,12 @@ if "--gpu" in arguments:
             f"raw_vulkan_copy_{count}",
             f"kora_transfer_copy_{count}",
         }
+if "--cluster" in arguments:
+    expected_names |= {
+        f"cluster_{target}_saxpy_{count}_dispatch_wait"
+        for target in ("local", "remote_loopback")
+        for count in compute_sizes
+    }
 actual_names = {item["name"] for item in report["results"]}
 assert actual_names == expected_names, (
     f"benchmark result contract mismatch; missing={sorted(expected_names - actual_names)}, "

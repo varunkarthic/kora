@@ -31,6 +31,7 @@ struct DispatchContext;
 struct VerificationTargetSet;
 struct AdaptiveDispatchState;
 struct RuntimeTestAccess;
+struct BufferManagerAccess;
 }  // namespace detail
 
 class Kernel final {
@@ -252,6 +253,9 @@ public:
     /// Loads and validates a kernel for a specific device owned by this Runtime.
     Result<Kernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
                                KernelMetadata metadata, const DeviceId& device);
+    /// Loads and validates an in-memory SPIR-V module (at most 16 MiB) for a device owned by this Runtime.
+    Result<Kernel> load_kernel(std::span<const std::uint32_t> spirv_words, std::string entry_point,
+                               KernelMetadata metadata, const DeviceId& device);
     DispatchBuilder dispatch(const Kernel& kernel) const;
     /// Select a compatible initialized device using complete per-device calibration data, then
     /// return its dispatch builder. If measurements are incomplete, the kernel's bound device is
@@ -279,6 +283,7 @@ public:
 
 private:
     friend struct detail::RuntimeTestAccess;
+    friend struct detail::BufferManagerAccess;
     struct Impl;
     explicit Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options);
     void calibrate_compute_probes() noexcept;

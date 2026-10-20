@@ -17,6 +17,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   comparison of KORA with Metal, OpenCL 1.2, OpenGL 4.1, Accelerate, and raw Vulkan, including a
   KosmicKrisp-versus-MoltenVK driver comparison.
 
+## [0.2.25] - 2026-10-20
+
+### Fixed
+- Fix the Windows build of the remote-worker socket layer, where `windows.h` `min`/`max` macros broke
+  `std::min`/`std::max`.
+
+### Added
+- Add `kora::Cluster`, `kora::WorkerServer`, and the `kora-worker` tool: offload dispatches to KORA
+  workers on other machines or devices you own, with workers connecting, disconnecting, or
+  reconnecting at any time. Host buffers stay authoritative; a remote result is committed atomically
+  or the dispatch re-runs locally, so unplugging a worker never loses or corrupts work. Clients
+  authenticate with an HMAC-SHA256 challenge; without a token, workers accept only loopback clients.
+- Add `Runtime::load_kernel()` for in-memory SPIR-V words.
+- Add `kora-bench --cluster` to measure `Cluster` dispatches locally and on a loopback worker.
+
+## [0.2.24] - 2026-10-20
+
 ### Changed
 - Record per-dispatch GPU timestamps only as often as telemetry needs them: none at
   `TelemetryLevel::Off`, one dispatch in 16 at the default `Basic`, and every dispatch at `Profile` and
@@ -561,7 +578,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.23...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.25...HEAD
+[0.2.25]: https://github.com/varunkarthic/kora/compare/v0.2.24...v0.2.25
+[0.2.24]: https://github.com/varunkarthic/kora/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/varunkarthic/kora/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/varunkarthic/kora/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/varunkarthic/kora/compare/v0.2.20...v0.2.21

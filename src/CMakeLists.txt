@@ -40,6 +40,11 @@ add_library(kora
   vulkan/hazard_tracker.cpp
   vulkan/queue_family_transfer.cpp
   vulkan/queue_context.cpp
+  remote/sha256.cpp
+  remote/socket.cpp
+  remote/protocol.cpp
+  remote/worker_server.cpp
+  remote/cluster.cpp
 )
 add_library(kora::kora ALIAS kora)
 target_include_directories(kora PUBLIC
@@ -49,6 +54,9 @@ target_include_directories(kora PUBLIC
 target_include_directories(kora PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kora PUBLIC Threads::Threads
   PRIVATE $<BUILD_INTERFACE:${KORA_VULKAN_HEADERS}> ${CMAKE_DL_LIBS})
+if(WIN32)
+  target_link_libraries(kora PRIVATE ws2_32)
+endif()
 target_include_directories(kora PRIVATE ${KORA_SPIRV_HEADERS_INCLUDE_DIR})
 target_compile_definitions(kora PRIVATE VK_NO_PROTOTYPES)
 if(KORA_HAVE_SPIRV_TOOLS)

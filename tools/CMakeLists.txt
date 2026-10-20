@@ -4,6 +4,11 @@ target_link_libraries(kora-info PRIVATE kora::kora ${KORA_VULKAN_HEADERS})
 kora_configure_target(kora-info)
 install(TARGETS kora-info RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+add_executable(kora-worker kora-worker/main.cpp)
+target_link_libraries(kora-worker PRIVATE kora::kora)
+kora_configure_target(kora-worker)
+install(TARGETS kora-worker RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 add_executable(kora-bench kora-bench/main.cpp)
 target_include_directories(kora-bench PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(kora-bench PRIVATE kora::kora ${KORA_VULKAN_HEADERS})
