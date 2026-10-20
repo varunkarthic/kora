@@ -433,10 +433,10 @@ Status WorkerServer::Impl::dispatch(remote::Socket& socket, const remote::Messag
     outputs.u32(output_count);
     for (std::uint32_t i = 0; i < bindings.size(); ++i) {
         if (bindings[i].access == KernelAccess::Read) continue;
-        auto bytes = handles[i].read_bytes();
+        auto bytes = handles[i].map(MapAccess::Read);  // Copy straight from the host shadow.
         if (!bytes) return reply_failure(socket, message.request_id, bytes.error().describe());
         outputs.u32(i);
-        outputs.bytes(bytes.value());
+        outputs.bytes(std::span<const std::byte>(bytes.value().data(), bytes.value().size()));
         buffers.at(bindings[i].key).version = bindings[i].result_version;
     }
     count(&WorkerStats::dispatches);

@@ -72,6 +72,12 @@ Error io_error(const std::string& what) {
 void configure(NativeHandle handle) {
     int one = 1;
     setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
+    // Large buffers let a multi-megabyte frame move in a few wake-ups instead of thousands.
+    int buffer_bytes = 4 * 1024 * 1024;
+    setsockopt(handle, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer_bytes),
+               sizeof(buffer_bytes));
+    setsockopt(handle, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buffer_bytes),
+               sizeof(buffer_bytes));
 #ifdef SO_NOSIGPIPE
     setsockopt(handle, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif

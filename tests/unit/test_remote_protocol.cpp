@@ -70,9 +70,19 @@ TEST(RemoteProtocol, HmacMatchesRfc4231) {
     EXPECT_FALSE(remote::constant_time_equal(digest, other));
 }
 
-TEST(RemoteProtocol, Crc32MatchesStandardCheckValue) {
+TEST(RemoteProtocol, Crc32cMatchesStandardCheckValueOnEveryPath) {
     const std::string check = "123456789";
-    EXPECT_EQ(remote::crc32(std::as_bytes(std::span(check.data(), check.size()))), 0xCBF43926U);
+    const auto bytes = std::as_bytes(std::span(check.data(), check.size()));
+    EXPECT_EQ(remote::crc32c(bytes), 0xE3069283U);
+    EXPECT_EQ(remote::crc32c_portable(bytes), 0xE3069283U);
+    // Hardware and table paths must agree on every length and alignment, including the tail.
+    std::vector<std::byte> data(1027);
+    for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<std::byte>((i * 131U + 7U) & 0xFFU);
+    for (std::size_t offset = 0; offset < 8; ++offset)
+        for (std::size_t length : {0U, 1U, 7U, 8U, 9U, 63U, 64U, 1000U}) {
+            const auto view = std::span<const std::byte>(data).subspan(offset, length);
+            EXPECT_EQ(remote::crc32c(view), remote::crc32c_portable(view)) << offset << "+" << length;
+        }
 }
 
 TEST(RemoteProtocol, ParsesEndpointsAndRejectsMalformedOnes) {
@@ -126,7 +136,7 @@ TEST(RemoteProtocol, FramesRoundTripAndCorruptionIsDetected) {
     frame.buffer().push_back(std::byte{0});
     frame.u64(1);
     frame.u64(payload.size());
-    frame.u32(remote::crc32(payload));
+    frame.u32(remote::crc32c(payload));
     frame.u32(0);
     auto corrupted = payload;
     corrupted[1] = std::byte{99};

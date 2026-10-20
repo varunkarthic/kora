@@ -28,9 +28,11 @@
 
 #include "core/device_caps.hpp"
 #include "core/scheduler_cost.hpp"
+#include "kora/cluster.hpp"
 #include "kora/execution_plan.hpp"
 #include "kora/runtime.hpp"
 #include "kora/task_graph.hpp"
+#include "kora/worker.hpp"
 #include "memory/memory_manager.hpp"
 #include "memory/memory_pool.hpp"
 #include "memory/staging_ring.hpp"
@@ -53,6 +55,7 @@ struct Options {
     std::size_t warmup = 10;
     bool gpu = false;
     bool profile_phases = false;
+    bool cluster = false;
 };
 
 struct Result {
@@ -150,7 +153,8 @@ std::string_view measurement_domain(std::string_view name) {
     if (name.starts_with("profile_kora_")) return "runtime_dispatch_phase";
     if (name.ends_with("_gpu_execution")) return "gpu_execution_timestamp";
     if (name.starts_with("cpu_") || name.starts_with("staging_ring_reserve_")) return "host_cpu_execution";
-    if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_")) return "host_submit_completion";
+    if (name.starts_with("gpu_") || name.starts_with("raw_vulkan_") || name.starts_with("cluster_"))
+        return "host_submit_completion";
     if (name.starts_with("transfer_") || name.starts_with("raw_vulkan_copy_") ||
         name.starts_with("kora_transfer_copy_"))
         return "host_transfer_completion";
@@ -228,9 +232,11 @@ bool parse_options(int argc, char** argv, Options& options) {
         const std::string_view argument(argv[index]);
         if (argument == "--help" || argument == "-h") {
             std::cout
-                << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke] [--gpu] [--profile-phases]\n"
-                   "Runs CPU microbenchmarks; --gpu adds Vulkan workloads and --profile-phases\n"
-                   "adds telemetry-instrumented dispatch phase diagnostics.\n";
+                << "Usage: kora-bench [--iterations N] [--warmup N] [--smoke] [--gpu] [--profile-phases] "
+                   "[--cluster]\n"
+                   "Runs CPU microbenchmarks; --gpu adds Vulkan workloads, --profile-phases adds\n"
+                   "telemetry-instrumented dispatch phase diagnostics, and --cluster adds kora::Cluster\n"
+                   "dispatches run locally and on a loopback kora-worker on the same device.\n";
             return false;
         }
         if (argument == "--smoke") {
@@ -240,6 +246,11 @@ bool parse_options(int argc, char** argv, Options& options) {
         }
         if (argument == "--gpu") {
             options.gpu = true;
+            continue;
+        }
+        if (argument == "--cluster") {
+            options.gpu = true;
+            options.cluster = true;
             continue;
         }
         if (argument == "--profile-phases") {
@@ -1591,6 +1602,81 @@ bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const O
 #endif
 
 #ifdef KORA_BENCH_VECTOR_ADD_FIXTURE_NAME
+// kora::Cluster SAXPY (y += 2x) run locally and on an in-process loopback worker that uses the same
+// device. The remote rows measure the worker protocol's cost (request, execution on the worker's
+// own Runtime, and the output returned to the host), not a second machine's speed.
+bool add_cluster_benchmarks(std::vector<Result>& results, const Options& options,
+                            const std::filesystem::path& saxpy_fixture,
+                            const kora::KernelMetadata& metadata) {
+    kora::WorkerOptions worker_options;
+    worker_options.listen = "127.0.0.1:0";
+    auto worker = kora::WorkerServer::start(worker_options);
+    if (!worker) {
+        std::cerr << "cluster benchmarks unavailable: " << worker.error().describe() << '\n';
+        return false;
+    }
+    struct SaxpyParams {
+        float scale;
+        std::uint32_t count;
+    };
+    for (const auto& [policy, prefix] :
+         {std::pair{kora::OffloadPolicy::LocalOnly, "cluster_local"},
+          std::pair{kora::OffloadPolicy::PreferRemote, "cluster_remote_loopback"}}) {
+        kora::ClusterOptions cluster_options;
+        cluster_options.workers = {"127.0.0.1:" + std::to_string(worker.value()->port())};
+        cluster_options.policy = policy;
+        auto cluster = kora::Cluster::create(cluster_options);
+        if (!cluster) {
+            std::cerr << "cluster benchmarks unavailable: " << cluster.error().describe() << '\n';
+            return false;
+        }
+        if (policy == kora::OffloadPolicy::PreferRemote) {
+            const auto deadline = Clock::now() + std::chrono::seconds(5);
+            while (Clock::now() < deadline && !cluster.value().workers().front().connected)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (!cluster.value().workers().front().connected) {
+                std::cerr << "cluster benchmarks unavailable: loopback worker did not connect\n";
+                return false;
+            }
+        }
+        auto kernel = cluster.value().load_kernel(saxpy_fixture, "main", metadata);
+        if (!kernel) throw std::runtime_error("cluster kernel load failed: " + kernel.error().describe());
+        for (const auto count : kComputeSizes) {
+            auto x = cluster.value().create_buffer<float>(count);
+            auto y = cluster.value().create_buffer<float>(count);
+            if (!x || !y || !x.value().write(std::vector<float>(count, 1.0F)) ||
+                !y.value().write(std::vector<float>(count, 0.0F)))
+                throw std::runtime_error("cluster buffer setup failed");
+            float expected = 0.0F;
+            const SaxpyParams params{2.0F, count};
+            const auto operation = [&] {
+                auto event = cluster.value()
+                                 .dispatch(kernel.value())
+                                 .global(count)
+                                 .read(x.value())
+                                 .read_write(y.value())
+                                 .push(params)
+                                 .submit();
+                if (!event || !event.value().wait()) throw std::runtime_error("cluster dispatch failed");
+                expected += 2.0F;
+            };
+            const auto validate = [&] {
+                auto values = y.value().read();
+                return values && std::all_of(values.value().begin(), values.value().end(),
+                                             [&](float value) { return value == expected; });
+            };
+            results.push_back(
+                run_checked(std::string(prefix) + "_saxpy_" + std::to_string(count) + "_dispatch_wait",
+                            operation, validate, options));
+        }
+        const auto stats = cluster.value().stats();
+        if (policy == kora::OffloadPolicy::PreferRemote &&
+            (stats.local_dispatches != 0 || stats.failovers != 0))
+            throw std::runtime_error("loopback cluster benchmark did not run every dispatch remotely");
+    }
+    return true;
+}
+
 bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, const char* executable_path,
                         GpuDeviceReport& device_report) {
     kora::RuntimeOptions runtime_options;
@@ -1833,7 +1919,7 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
     if (!std::filesystem::exists(saxpy_fixture))
         saxpy_fixture = fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" /
                         KORA_BENCH_SAXPY_FIXTURE_NAME;
-    auto saxpy = runtime.load_kernel(saxpy_fixture, "main", std::move(saxpy_metadata));
+    auto saxpy = runtime.load_kernel(saxpy_fixture, "main", saxpy_metadata);
     if (!saxpy) {
         std::cerr << "GPU benchmarks unavailable: " << saxpy.error().describe() << '\n';
         return false;
@@ -2165,6 +2251,8 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
             record_and_discard(pool);
         },
         options));
+    if (options.cluster && !add_cluster_benchmarks(results, options, saxpy_fixture, saxpy_metadata))
+        return false;
     return true;
 }
 #endif

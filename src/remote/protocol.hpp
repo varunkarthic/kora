@@ -13,8 +13,8 @@
 namespace kora::detail::remote {
 
 // Wire format: 32-byte little-endian header followed by `payload_size` bytes.
-//   u32 magic 'KORA' | u16 version | u16 type | u64 request_id | u64 payload_size | u32 crc32 | u32 reserved
-// A bad magic, version, size, or CRC is a link failure: the connection is dropped and the caller
+//   u32 magic 'KORA' | u16 version | u16 type | u64 request_id | u64 payload_size | u32 crc32c | u32 reserved
+// A bad magic, version, size, or CRC32C is a link failure: the connection is dropped and the caller
 // re-executes outstanding work locally. Payload fields use the Writer/Reader encodings below.
 inline constexpr std::uint32_t kMagic = 0x41524F4BU;
 inline constexpr std::uint16_t kProtocolVersion = 1;
@@ -43,7 +43,10 @@ struct Message {
     std::vector<std::byte> payload;
 };
 
-std::uint32_t crc32(std::span<const std::byte> bytes) noexcept;
+/// CRC32C (Castagnoli) of `bytes`, using CPU instructions when the target provides them.
+std::uint32_t crc32c(std::span<const std::byte> bytes) noexcept;
+/// The table-driven CRC32C used on targets without CRC instructions (exposed for testing).
+std::uint32_t crc32c_portable(std::span<const std::byte> bytes) noexcept;
 
 Status send_message(Socket& socket, MessageType type, std::uint64_t request_id,
                     std::span<const std::byte> payload, std::chrono::milliseconds timeout);
