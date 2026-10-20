@@ -41,6 +41,14 @@ Otherwise, and on all other topologies, KORA keeps the queue-ordered staging pat
 readback dispatches record the shader-write to host-read barrier that direct reads require;
 `Runtime::readback()` after a deferred dispatch uses a transfer download.
 
+### Releasing device copies
+
+When the last handle to a runtime buffer is released, every device context is notified. Each frees
+its device copy, pool allocation, and per-buffer bookkeeping as soon as no queued or executing GPU
+operation can access the buffer (the same per-buffer pending-use count that guards direct access),
+checking again before each later dispatch, readback, or `memory_stats()` call. A buffer dropped
+while its dispatch is still running is therefore freed only after that dispatch completes.
+
 ## Memory heaps and types
 
 `DeviceInfo::memory_heaps()` preserves each heap's byte size, device-local flag, and multi-instance
