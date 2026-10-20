@@ -28,6 +28,7 @@ resizable BAR adds a host-visible device-local type. A device whose only heaps a
 (for example, an integrated GPU that advertises host-visible and host-invisible types in one shared
 heap) is therefore classified `Uma`.
 
+(unified-memory-direct-access)=
 ### Unified-memory direct access
 
 On `Uma` devices, runtime buffers use the `Auto` policy, which prefers host-visible device-local

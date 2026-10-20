@@ -645,6 +645,7 @@ All raw samples and environment/device assertions are retained in the five inter
 [pair 4 before](../benchmarks/results/issue214-before-f854b91-pair-4.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-4.json), and
 [pair 5 before](../benchmarks/results/issue214-before-f854b91-pair-5.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-5.json).
 
+(issue-227-unified-memory-direct-access)=
 ### Issue #227: unified-memory direct access
 
 Before #227, every dirty input upload and every default-mode output readback went through the
@@ -653,7 +654,7 @@ and blocked on that transfer before recording the dispatch; default readback add
 transfer and copy. MoltenVK on Apple M4 was also classified `DiscreteWithBar`, so runtime buffers
 used its host-invisible memory type. #227 classifies single-heap devices as unified memory and, on
 unified devices, writes and reads host-visible runtime buffers through their mapping whenever no
-queued GPU work can access them (see [the memory model](memory-model.md#unified-memory-direct-access)).
+queued GPU work can access them (see [the memory model](#unified-memory-direct-access)).
 It also fixes dropped KORA device timestamps: results that MoltenVK publishes shortly after the
 queue signal are now harvested by `Runtime::profiling_stats()`, so the 1,000-sample report has KORA
 device timestamps for all 15 matched compute cases (previously 9) and all eight vector-add sizes
@@ -717,7 +718,7 @@ python3 tools/kora-bench/render_ab.py --before before-*.json --after after-*.jso
 ```
 
 All 30 retained reports are in
-[`benchmarks/results/issue227-uma-direct/`](../benchmarks/results/issue227-uma-direct/). The
+[`benchmarks/results/issue227-uma-direct/`](https://github.com/varunkarthic/kora/tree/main/benchmarks/results/issue227-uma-direct). The
 regenerated snapshot charts and [comparison tables](benchmark-compute-results.md) come from a separate
 1,000-sample/50-warm-up report at 8ca0de7,
 [retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json).
