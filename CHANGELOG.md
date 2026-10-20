@@ -25,6 +25,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add `Cluster::load_kernel()` for in-memory SPIR-V words.
 
 ### Changed
+- Start the 0.3 release line. Releases are `v0.3.x` and remain Beta until the v0.3 release-validation
+  issues close.
 - Redesign the documentation landing page with feature cards and a measured comparison chart, and
   group the sidebar into Getting started, Guides, Performance, API reference, Internals, and
   Project.
