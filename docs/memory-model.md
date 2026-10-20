@@ -14,14 +14,31 @@ dereferenced.
 | `MemoryTopology` | Heuristic | Benchmark flag |
 | --- | --- | --- |
 | `Discrete` | At least one device-local type is not host-visible, and no device-local host-visible type is reported | No |
-| `Uma` | Device-local host-visible types exist, with no device-local host-invisible type | No |
-| `DiscreteWithBar` | Both device-local host-visible and device-local host-invisible types exist | Yes |
+| `Uma` | Device-local host-visible types exist, and either no device-local host-invisible type exists or every heap is device-local | No |
+| `DiscreteWithBar` | Both device-local host-visible and device-local host-invisible types exist, and a separate non-device-local (system-memory) heap exists | Yes |
 | `Unknown` | The properties do not provide evidence for one of the layouts above | No |
 
 `DiscreteWithBar` is deliberately marked `memory_topology_needs_benchmark()`: the
 `DEVICE_LOCAL | HOST_VISIBLE` flags alone do not establish that direct host access is faster than
 staging. The heuristic reports the observed flags and leaves that performance decision to measured
 behavior. A mixed topology and every memory type remain visible to callers.
+
+A discrete GPU always exposes a system-memory heap alongside its device-local heap, even when a
+resizable BAR adds a host-visible device-local type. A device whose only heaps are device-local
+(for example, an integrated GPU that advertises host-visible and host-invisible types in one shared
+heap) is therefore classified `Uma`.
+
+### Unified-memory direct access
+
+On `Uma` devices, runtime buffers use the `Auto` policy, which prefers host-visible device-local
+memory. A dispatch then writes a changed host shadow directly into the buffer's mapping (with a
+flush for non-coherent memory) instead of staging it through a transfer submission, and a dispatch
+with default readback copies its writable outputs from the mapping after completion. Each runtime
+buffer counts the GPU operations that are queued or executing against it; the direct path is used
+only while that count is zero, so a host write can never change bytes that queued work will read.
+Otherwise, and on all other topologies, KORA keeps the queue-ordered staging path. Only default
+readback dispatches record the shader-write to host-read barrier that direct reads require;
+`Runtime::readback()` after a deferred dispatch uses a transfer download.
 
 ## Memory heaps and types
 

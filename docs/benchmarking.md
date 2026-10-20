@@ -94,20 +94,22 @@ per-sample values and environment metadata, is
 [retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json)
 (source revision f43b1ef91e2cbd118233992b7d2e2e7c49c6c195). The earlier single-size report remains
 [available](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json).
-The side-by-side tables in [the generated comparison page](benchmark-compute-results.md) are rendered
-directly from the sweep report by [`render_comparison.py`](../tools/kora-bench/render_comparison.py).
-Regenerate them after a new run with:
+That report is the pre-#227 baseline. The side-by-side tables in
+[the generated comparison page](benchmark-compute-results.md) and the chart below are rendered from
+the post-#227 report at 8ca0de7 by [`render_comparison.py`](../tools/kora-bench/render_comparison.py)
+and [`render_charts.py`](../tools/kora-bench/render_charts.py). Regenerate them after a new run with:
 
 ```sh
-python3 tools/kora-bench/render_comparison.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json \
+R=benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json
+python3 tools/kora-bench/render_comparison.py "$R" \
   --sizes 4096 65536 1048576 4194240 > docs/benchmark-compute-results.md
+python3 tools/kora-bench/render_charts.py "$R"
 ```
 
 ![Matched compute host latency across sizes, Apple M4/MoltenVK](../benchmarks/charts/compute-host-latency.svg)
 
-Across the 15 matched cases, deferred KORA ranged from 0.82× (64K scan) to 6.38× (1M SAXPY) the raw
-Vulkan host median and was faster in three cases. Default-to-deferred host medians improved 17–58%.
+In the pre-#227 baseline, across the 15 matched cases, deferred KORA ranged from 0.82× (64K scan) to
+6.38× (1M SAXPY) the raw Vulkan host median and was faster in three cases. Default-to-deferred host medians improved 17–58%.
 The gap grows with size for workloads whose inputs are rewritten or whose outputs are large: SAXPY
 rewrites its 4 MiB input before every 1M sample, and KORA stages that upload through a separate
 transfer submission and waits for it before recording the dispatch, whereas raw Vulkan writes its
@@ -116,7 +118,9 @@ difference is that the runtime selected MoltenVK's host-invisible memory type wh
 host-visible memory.
 KORA timestamps were unavailable for several cases in this run and are shown as gaps. These are
 measured boundaries with distinct residency policies, not a pure abstraction overhead delta, and do
-not establish CUDA parity or cross-platform performance.
+not establish CUDA parity or cross-platform performance. The upload and placement causes were
+addressed by [#227](#issue-227-unified-memory-direct-access); compare that section's interleaved
+before/after pairs rather than these two single runs, because single runs vary several-fold here.
 
 ### Staging-ring reservation scaling
 
@@ -524,8 +528,9 @@ remain inspectable.
 
 ### Visual comparison and methodology
 
-The following plots are generated from the same retained JSON file as the table below; they are not
-hand-transcribed. The vertical latency axis is logarithmic, with units chosen for the range shown in
+The following plots and the table below are generated from the retained 1,000-sample, 50-warm-up
+report taken after #227 (source 8ca0de7); they are not hand-transcribed. The 100-sample table in the
+previous section is the original reference run and is kept for history. The vertical latency axis is logarithmic, with units chosen for the range shown in
 each panel. Lines and dots show the median (p50); whiskers extend to the nearest-rank p95. The raw
 samples remain in the linked JSON report. A missing KORA timestamp is a gap because that timer result
 is unavailable for the size; it is not zero, interpolated, or estimated from host time.
@@ -542,11 +547,11 @@ Vulkan result is a lower-level baseline, not an equivalent API surface.
 
 ![GPU timestamp dispatch intervals, Apple M4/MoltenVK](../benchmarks/charts/gpu-timestamps.svg)
 
-Regenerate the visualizations from the checked-in 100-sample report (10 warm-ups) with:
+Regenerate the visualizations from the checked-in report with:
 
 ```sh
 python3 tools/kora-bench/render_charts.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json \
   --output-dir benchmarks/charts
 ```
 
@@ -559,14 +564,16 @@ sample count before comparing implementations.
 
 | Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | KORA GPU median | KORA GPU p95 | Raw GPU median | Raw GPU p95 |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 375 ns | 375 ns | 2.259 ms | 3.668 ms | 595.208 µs | 652.208 µs | 404.667 µs | 449.417 µs | 14.041 µs | 18.458 µs | 21.334 µs | 25.208 µs |
-| 1048576 | 224.375 µs | 249.791 µs | 2.517 ms | 5.543 ms | 799.750 µs | 871.083 µs | 996.000 µs | 1.251 ms | unavailable | unavailable | 359.125 µs | 404.583 µs |
-| 4194240 | 984.125 µs | 1.215 ms | 2.942 ms | 3.799 ms | 2.349 ms | 2.981 ms | 1.964 ms | 2.112 ms | unavailable | unavailable | 1.315 ms | 1.398 ms |
+| 4096 | 2.083 µs | 2.125 µs | 1.264 ms | 1.619 ms | 268.416 µs | 303.750 µs | 260.459 µs | 301.958 µs | 12.834 µs | 15.667 µs | 12.417 µs | 13.291 µs |
+| 1048576 | 563.166 µs | 573.667 µs | 2.046 ms | 2.333 ms | 1.129 ms | 1.282 ms | 1.247 ms | 1.385 ms | 416.417 µs | 632.042 µs | 582.916 µs | 645.708 µs |
+| 4194240 | 2.243 ms | 2.328 ms | 2.670 ms | 3.341 ms | 1.790 ms | 2.092 ms | 1.847 ms | 2.109 ms | 1.240 ms | 1.414 ms | 1.239 ms | 1.406 ms |
 
 Regenerate the comparison rows from the retained raw report with:
 
 ```sh
-python3 tools/kora-bench/render_comparison.py benchmarks/results/macos-arm64-apple-m4-moltenvk-100x10.json
+python3 tools/kora-bench/render_comparison.py \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json \
+  --sizes 4096 1048576 4194240
 ```
 
 ### Local command-pool sample
@@ -637,6 +644,83 @@ All raw samples and environment/device assertions are retained in the five inter
 [pair 3 before](../benchmarks/results/issue214-before-f854b91-pair-3.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-3.json),
 [pair 4 before](../benchmarks/results/issue214-before-f854b91-pair-4.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-4.json), and
 [pair 5 before](../benchmarks/results/issue214-before-f854b91-pair-5.json) / [after](../benchmarks/results/issue214-after-32c0cb1-pair-5.json).
+
+### Issue #227: unified-memory direct access
+
+Before #227, every dirty input upload and every default-mode output readback went through the
+staging ring: KORA copied the host shadow into a temporary vector, staged it, submitted a transfer,
+and blocked on that transfer before recording the dispatch; default readback added a second
+transfer and copy. MoltenVK on Apple M4 was also classified `DiscreteWithBar`, so runtime buffers
+used its host-invisible memory type. #227 classifies single-heap devices as unified memory and, on
+unified devices, writes and reads host-visible runtime buffers through their mapping whenever no
+queued GPU work can access them (see [the memory model](memory-model.md#unified-memory-direct-access)).
+It also fixes dropped KORA device timestamps: results that MoltenVK publishes shortly after the
+queue signal are now harvested by `Runtime::profiling_stats()`, so the 1,000-sample report has KORA
+device timestamps for all 15 matched compute cases (previously 9) and all eight vector-add sizes
+(previously none).
+
+Single runs on this machine are not comparable: the same binary's per-run median moved by up to 5×
+between runs (for example raw Vulkan 4M vector add ranged 0.84–2.44 ms), apparently with GPU clock
+state. The comparison therefore uses 15 interleaved pairs of the `main` build before the change
+(63d5f1b) and the change (8ca0de7), alternating which build ran first, with 200–300 measured samples
+and 30 warm-ups per run on macOS arm64 / Apple M4, AppleClang 21.0.0 Release, Vulkan 1.3.357 /
+MoltenVK. Change is the median of each pair's after/before p50 ratio, followed by how many of the 15
+pairs the new build won:
+
+Before: `63d5f1b6a1617fb5324cf306e68fd0f10393aec1` (15 runs); after: `8ca0de7e6b4e87acd1a432fb93293123bf71d22a` (15 runs). Latencies are the median across runs of the per-run p50. Change is the median of per-pair after/before p50 ratios, with the number of pairs the after build won.
+
+| Workload | Size | KORA default before | after | change | KORA deferred before | after | change | Raw Vulkan (after runs) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SAXPY | 4K | 1.085 ms | 434.791 µs | -59% (15/15) | 735.417 µs | 412.917 µs | -44% (15/15) | 323.541 µs |
+| SAXPY | 64K | 1.129 ms | 441.333 µs | -60% (15/15) | 825.375 µs | 444.833 µs | -46% (14/15) | 370.833 µs |
+| SAXPY | 1M | 2.752 ms | 893.375 µs | -60% (13/15) | 1.633 ms | 758.750 µs | -37% (10/15) | 537.458 µs |
+| Reduction | 4K | 713.500 µs | 427.167 µs | -40% (14/15) | 392.917 µs | 419.167 µs | +3% (7/15) | 321.417 µs |
+| Reduction | 64K | 714.375 µs | 428.541 µs | -42% (14/15) | 405.333 µs | 412.000 µs | +3% (5/15) | 371.792 µs |
+| Reduction | 1M | 1.079 ms | 753.000 µs | -29% (15/15) | 719.334 µs | 738.042 µs | +2% (5/15) | 311.667 µs |
+| Scan | 4K | 732.375 µs | 434.083 µs | -44% (15/15) | 415.333 µs | 430.584 µs | +4% (6/15) | 317.833 µs |
+| Scan | 64K | 771.208 µs | 432.833 µs | -41% (14/15) | 424.417 µs | 426.833 µs | +0% (7/15) | 398.875 µs |
+| Scan | 1M | 2.309 ms | 738.209 µs | -46% (13/15) | 460.708 µs | 460.958 µs | +6% (5/15) | 406.041 µs |
+| Stencil | 4K | 690.875 µs | 424.666 µs | -41% (15/15) | 401.292 µs | 424.292 µs | +6% (6/15) | 325.208 µs |
+| Stencil | 64K | 805.291 µs | 414.500 µs | -45% (15/15) | 387.083 µs | 417.167 µs | -0% (8/15) | 332.166 µs |
+| Stencil | 1M | 2.299 ms | 810.416 µs | -49% (12/15) | 727.000 µs | 458.916 µs | +2% (5/15) | 378.958 µs |
+| Tiled matmul | 16² | 712.000 µs | 423.125 µs | -40% (15/15) | 410.542 µs | 420.125 µs | +3% (6/15) | 223.500 µs |
+| Tiled matmul | 64² | 676.125 µs | 443.083 µs | -37% (14/15) | 410.583 µs | 413.375 µs | +1% (5/15) | 326.500 µs |
+| Tiled matmul | 128² | 781.958 µs | 477.375 µs | -40% (15/15) | 431.417 µs | 474.417 µs | +1% (5/15) | 429.167 µs |
+| Vector add | 4K | 2.006 ms | 1.374 ms | -32% (13/15) | 316.875 µs | 402.041 µs | +26% (3/15) | 406.041 µs |
+| Vector add | 64K | 2.046 ms | 1.409 ms | -32% (14/15) | 333.000 µs | 358.209 µs | +13% (6/15) | 407.375 µs |
+| Vector add | 1M | 4.297 ms | 1.764 ms | -56% (14/15) | 738.958 µs | 1.124 ms | +22% (5/15) | 1.203 ms |
+| Vector add | 4M | 3.333 ms | 2.696 ms | -15% (12/15) | 1.659 ms | 1.864 ms | +10% (3/15) | 1.988 ms |
+
+![KORA default readback before and after #227, Apple M4/MoltenVK](../benchmarks/charts/uma-direct-default.svg)
+
+![KORA deferred readback before and after #227, Apple M4/MoltenVK](../benchmarks/charts/uma-direct-deferred.svg)
+
+Default readback, KORA's default dispatch mode, improved in every case: 15–60% lower median latency,
+winning at least 12 of 15 pairs everywhere. Deferred SAXPY, which rewrites its input every sample,
+improved 37–46%. Deferred compute workloads that upload nothing changed by −0% to +6%, within run
+noise. **Deferred vector add regressed** by 10–26% (the new build won only 3–6 of 15 pairs): its
+16 MiB buffers now live in MoltenVK's host-visible memory type, which costs more per dispatch than
+the host-invisible type it used before. Direct mapping needs host-visible memory, so this is a
+trade-off of the change rather than noise. KORA kernels at 1M elements still execute about 3× longer
+than raw Vulkan on MoltenVK by device timestamp (but not on KosmicKrisp); #229 tracks that separately.
+These are host-boundary measurements on one device, not kernel-only or CUDA comparisons.
+
+Reproduce with two builds and alternate them; then render the table and charts:
+
+```sh
+for i in 01 02 03; do
+  KORA_DEVICE=2 before/tools/kora-bench --gpu --iterations 200 --warmup 30 > before-$i.json
+  KORA_DEVICE=2 after/tools/kora-bench --gpu --iterations 200 --warmup 30 > after-$i.json
+done
+python3 tools/kora-bench/render_ab.py --before before-*.json --after after-*.json \
+  --output-dir benchmarks/charts
+```
+
+All 30 retained reports are in
+[`benchmarks/results/issue227-uma-direct/`](../benchmarks/results/issue227-uma-direct/). The
+regenerated snapshot charts and [comparison tables](benchmark-compute-results.md) come from a separate
+1,000-sample/50-warm-up report at 8ca0de7,
+[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json).
 
 ### Optimization decisions and limits
 

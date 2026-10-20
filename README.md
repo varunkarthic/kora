@@ -109,76 +109,67 @@ options and build presets are in [Building](docs/building.md).
 
 ## Performance snapshot
 
-These are captured local Release measurements, not portable promises. The comparison separates
-single-thread CPU arithmetic from KORA-on-Vulkan and raw Vulkan host-submit/completion times. These
-are not kernel-only GPU times; rerun on each target OS, compiler, driver, device, and workload. The
-[benchmark guide](docs/benchmarking.md) includes the methodology and limitations.
+These are captured local Release measurements on one Apple M4 (MoltenVK, Vulkan 1.3.357,
+AppleClang 21), not portable promises. Every chart and table here is rendered by
+[`tools/kora-bench`](tools/kora-bench) from retained raw JSON in [`benchmarks/results`](benchmarks/results);
+nothing is hand-drawn or estimated. Lines and dots show p50, whiskers p95, on a logarithmic latency
+axis. CPU arithmetic, host submit-to-completion, and device timestamps are separate timing domains.
+KORA default mode reads writable outputs back to the host; deferred KORA and raw Vulkan leave outputs
+on the device. No CUDA, Linux, or Windows hardware result is claimed; the
+[benchmark guide](docs/benchmarking.md) explains the methodology and limitations.
 
-These generated charts use separate panels for CPU arithmetic, host completion, and device
-timestamps. Lines and dots show p50; whiskers extend to p95. Each panel uses a logarithmic latency
-axis with units selected for its range. Missing device timestamps remain visibly unavailable rather
-than being estimated. This single Apple M4/MoltenVK sample is not CUDA or cross-platform performance
-evidence.
+### Unified-memory direct access (#227)
 
-![CPU arithmetic benchmark chart](benchmarks/charts/cpu-arithmetic.svg)
+KORA now detects unified memory from the device's memory heaps and, on such devices, writes inputs
+and reads outputs through the buffer's mapping instead of staging every transfer through a separate
+submission. Across 15 interleaved before/after pairs on the same device:
+
+- **Default readback** (KORA's default dispatch mode) got 15–60% faster in all 19 matched cases,
+  for example 4K SAXPY 1.09 ms → 0.43 ms and 1M vector add 4.30 ms → 1.76 ms.
+- **Deferred SAXPY**, which rewrites a large input every call, got 37–46% faster.
+- Other deferred compute cases were unchanged within noise (−0% to +6%), and **deferred vector add
+  with 16 MiB buffers regressed 10–26%**: MoltenVK's host-visible memory, which direct mapping
+  needs, costs more per dispatch than its host-invisible memory.
+- KORA device timestamps are now reported for every matched case instead of being intermittently
+  dropped.
+
+![KORA default readback before and after unified-memory direct access](benchmarks/charts/uma-direct-default.svg)
+
+![KORA deferred readback before and after unified-memory direct access](benchmarks/charts/uma-direct-deferred.svg)
+
+The [full paired table and method](docs/benchmarking.md#issue-227-unified-memory-direct-access) and all
+30 raw reports are retained. KORA kernels at 1M elements still run about 3× longer than raw Vulkan
+on MoltenVK by device timestamp (not on KosmicKrisp); that is tracked in
+[#229](https://github.com/varunkarthic/kora/issues/229).
+
+### Current snapshot
+
+From one 1,000-sample, 50-warm-up report after #227
+([raw JSON](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json),
+[generated tables](docs/benchmark-compute-results.md)). Single runs on this device vary by up to
+several-fold with GPU clock state, so use the paired study above for before/after conclusions.
+
+![KORA and raw Vulkan matched compute host-latency chart](benchmarks/charts/compute-host-latency.svg)
 
 ![KORA and raw Vulkan host-latency chart](benchmarks/charts/host-latency.svg)
 
 ![KORA and raw Vulkan device-timestamp chart](benchmarks/charts/gpu-timestamps.svg)
 
+![CPU arithmetic benchmark chart](benchmarks/charts/cpu-arithmetic.svg)
+
 | Elements | CPU median | KORA default | KORA deferred | Raw Vulkan | KORA GPU | Raw GPU |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 2.084 µs | 4.404 ms | 526.291 µs | 402.500 µs | unavailable | 20.375 µs |
-| 1048576 | 562.500 µs | 5.008 ms | 1.343 ms | 920.250 µs | unavailable | 388.042 µs |
-| 4194240 | 2.312 ms | 5.627 ms | 1.031 ms | 1.859 ms | unavailable | 1.260 ms |
+| 4096 | 2.083 µs | 1.264 ms | 268.416 µs | 260.459 µs | 12.834 µs | 12.417 µs |
+| 1048576 | 563.166 µs | 2.046 ms | 1.129 ms | 1.247 ms | 416.417 µs | 582.916 µs |
+| 4194240 | 2.243 ms | 2.670 ms | 1.790 ms | 1.847 ms | 1.240 ms | 1.239 ms |
 
-Benchmark sample: 100 measured iterations after 10 warm-ups on macOS arm64 / Apple M4, AppleClang 21
-Release; GPU paths were pinned to device 2 (MoltenVK, Vulkan 1.3.357). KORA default includes output
-readback, while deferred KORA and raw Vulkan keep outputs device-resident. CPU arithmetic, host
-submit/completion, and GPU timestamp columns are different timing domains; KORA device timestamps
-were unavailable on this run. The benchmarking guide also reports separate single-thread and
-four-worker CPU baselines for SAXPY, reduction, stencil, and matrix multiplication. No CUDA comparison
-is available from this non-CUDA device. Full workload definitions and caveats are in
-[Benchmarking](docs/benchmarking.md).
-
-The same device also runs matched raw-Vulkan compute fixtures for SAXPY, reduction, scan, tiled
-matrix multiplication, and stencil at three sizes each (4K/64K/1M elements; 16²/64²/128² matrices).
-In a 1,000-sample/50-warm-up Release sweep, KORA deferred host medians were 0.82–6.38× raw Vulkan,
-faster in three of 15 cases; the gap is largest where a large input is rewritten every sample
-(1M SAXPY). Default KORA-to-deferred host medians improved 17–58% because deferred mode leaves
-outputs device-resident. These policies are not identical memory-residency contracts, and one
-M4/MoltenVK run is not cross-platform or CUDA evidence. See the
-[matched compute methodology](docs/benchmarking.md#matched-raw-vulkan-compute-workloads),
-[generated comparison tables](docs/benchmark-compute-results.md),
-and [raw sample report](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json).
-
-![KORA and raw Vulkan matched compute host-latency chart](benchmarks/charts/compute-host-latency.svg)
-
-The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are
-build/test targets, but CI smoke coverage is not a cross-OS performance study; no Linux/Windows
-hardware-GPU or CUDA result is claimed. The benchmark guide explains how to distinguish CPU
-arithmetic, software Vulkan, hardware-GPU timestamps, and KORA host overhead.
-
-The subsequent #196 dispatch-path optimization was measured separately against raw Vulkan on the
-same Apple M4/MoltenVK device. In 1,000-sample Release runs, 4K deferred-readback KORA changed from
-676.5 µs to 524.0 µs median (raw Vulkan: 346.9 µs to 406.7 µs). The KORA/raw host-latency ratio
-changed from 1.95× to 1.29×. These sequential local runs show host-load variation and do not establish
-CUDA parity; a second post-change sample measured KORA at 522.2 µs and raw Vulkan at 465.5 µs.
-Raw JSON, exact revisions, and the profiling breakdown are in
-[the dispatch-overhead study](docs/benchmarking.md#dispatch-overhead-case-study).
-An optional external CUDA report can be validated and rendered separately; no CUDA result is included
-until a same-device NVIDIA run is available. The report contract and invocation are in the
-[benchmark guide](docs/benchmarking.md#optional-external-cuda-reference).
-
-The follow-up #214 optimization removed the idle coalescing collection delay while preserving
-batching of compatible submissions already queued together. Across five interleaved 1,000-sample
-Release pairs on the same M4/MoltenVK device, 4K deferred KORA host completion improved from a
-547.9 µs median to 381.0 µs (−30.5%); median per-run p95 improved from 612.0 µs to 444.1 µs. The
-matched raw Vulkan 4K median was 409.5 µs before and 408.0 µs after, putting post-change KORA at
-0.93× raw host latency on this device. Deferred KORA medians also improved at 64K, 256K, 1M, and
-4M elements; the 4M p50 improved 9.7% with no p95 regression. These are host-side timings, not
-kernel-only GPU timings, and do not establish CUDA parity. The [full paired study](docs/benchmarking.md#issue-214-eager-submission-coalescing-and-completion-latency)
-includes the methodology, per-size p50/p95 table, remaining bottlenecks, and all ten raw reports.
+Vector add: CPU is single-thread arithmetic; KORA and raw Vulkan columns are host submit-to-completion
+medians; GPU columns are device timestamps. The vector-add default column reads back a 16 MiB output
+buffer regardless of the dispatched element count. Earlier optimization studies
+([#196 dispatch overhead](docs/benchmarking.md#dispatch-overhead-case-study),
+[#214 completion latency](docs/benchmarking.md#issue-214-eager-submission-coalescing-and-completion-latency))
+and the optional [external CUDA report contract](docs/benchmarking.md#optional-external-cuda-reference)
+are documented in the benchmark guide.
 
 ## Documentation
 

@@ -5,8 +5,8 @@
 <rect class="card" x="18" y="18" width="1004" height="624" rx="14"/>
 <text x="112" y="55" font-size="27" font-weight="700">CPU arithmetic</text>
 <text class="muted" x="112" y="82" font-size="15">host execution · Apple M4 / MoltenVK</text>
-<rect class="pill" x="724" y="37" width="204" height="30" rx="15"/>
-<text x="740" y="57" font-size="11" font-weight="700" letter-spacing="1.1">CPU HOST EXECUTION · P50 / P95</text>
+<rect class="pill" x="684" y="37" width="312" height="30" rx="15"/>
+<text x="840" y="57" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.1">CPU HOST EXECUTION · P50 / P95</text>
 <rect class="plot-bg" x="112" y="112" width="884" height="368" rx="8"/>
 <line class="grid" x1="112" y1="480.0" x2="996" y2="480.0"/>
 <text class="muted tick" x="98" y="485.0" text-anchor="end" font-size="13">0.001</text>
@@ -25,16 +25,16 @@
 <text class="muted tick" x="259.3" y="506" text-anchor="middle" font-size="13">4,096</text>
 <text class="muted tick" x="554.0" y="506" text-anchor="middle" font-size="13">1,048,576</text>
 <text class="muted tick" x="848.7" y="506" text-anchor="middle" font-size="13">4,194,240</text>
-<path class="series-line" stroke="#6b7280" d="M 259.3 450.7 L 554.0 227.0 L 848.7 170.5"/>
+<path class="series-line" stroke="#6b7280" d="M 259.3 450.7 L 554.0 226.9 L 848.7 171.7"/>
 <line class="whisker" stroke="#6b7280" x1="259.3" y1="449.9" x2="259.3" y2="450.7"/>
 <line class="whisker" stroke="#6b7280" x1="253.3" y1="449.9" x2="265.3" y2="449.9"/>
-<circle class="median" fill="#6b7280" cx="259.3" cy="450.7" r="7"><title>CPU arithmetic: median 2084 ns, p95 2125 ns at 4,096 elements</title></circle>
-<line class="whisker" stroke="#6b7280" x1="554.0" y1="225.3" x2="554.0" y2="227.0"/>
-<line class="whisker" stroke="#6b7280" x1="548.0" y1="225.3" x2="560.0" y2="225.3"/>
-<circle class="median" fill="#6b7280" cx="554.0" cy="227.0" r="7"><title>CPU arithmetic: median 562500 ns, p95 586167 ns at 1,048,576 elements</title></circle>
-<line class="whisker" stroke="#6b7280" x1="848.7" y1="143.2" x2="848.7" y2="170.5"/>
-<line class="whisker" stroke="#6b7280" x1="842.7" y1="143.2" x2="854.7" y2="143.2"/>
-<circle class="median" fill="#6b7280" cx="848.7" cy="170.5" r="7"><title>CPU arithmetic: median 2.31188e+06 ns, p95 4.58267e+06 ns at 4,194,240 elements</title></circle>
+<circle class="median" fill="#6b7280" cx="259.3" cy="450.7" r="7"><title>CPU arithmetic: median 2083 ns, p95 2125 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#6b7280" x1="554.0" y1="226.2" x2="554.0" y2="226.9"/>
+<line class="whisker" stroke="#6b7280" x1="548.0" y1="226.2" x2="560.0" y2="226.2"/>
+<circle class="median" fill="#6b7280" cx="554.0" cy="226.9" r="7"><title>CPU arithmetic: median 563166 ns, p95 573667 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#6b7280" x1="848.7" y1="170.2" x2="848.7" y2="171.7"/>
+<line class="whisker" stroke="#6b7280" x1="842.7" y1="170.2" x2="854.7" y2="170.2"/>
+<circle class="median" fill="#6b7280" cx="848.7" cy="171.7" r="7"><title>CPU arithmetic: median 2.24346e+06 ns, p95 2.32838e+06 ns at 4,194,240 elements</title></circle>
 <line stroke="#6b7280" stroke-width="3" x1="112.0" y1="581" x2="132.0" y2="581"/>
 <circle fill="#6b7280" stroke="#fff" stroke-width="1.5" cx="122.0" cy="581" r="5"/>
 <text x="142.0" y="586" font-size="13" font-weight="600">CPU arithmetic</text>
