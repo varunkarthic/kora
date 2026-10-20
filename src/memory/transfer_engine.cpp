@@ -273,6 +273,9 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
                                "Transfer completion callback threw an exception");
             }
         }
+        // The host copy is done (or abandoned): the readback slice may now be reclaimed.
+        if (work->staging && work->ring && work->ring->direction() == StagingDirection::Readback)
+            (void)work->ring->consumed(*work->staging);
         promise->complete(std::move(status));
     };
 

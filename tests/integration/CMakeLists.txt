@@ -18,6 +18,7 @@ if(KORA_GLSLANG_VALIDATOR)
   set(KORA_VECTOR_ADD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/vector_add.comp.spv)
   set(KORA_SAXPY_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/saxpy.comp.spv)
   set(KORA_PARTITION_ADD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/partition_add.comp.spv)
+  set(KORA_SPLIT_SAXPY_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/split_saxpy.comp.spv)
   add_custom_command(
     OUTPUT ${KORA_VECTOR_ADD_FIXTURE}
     COMMAND ${KORA_GLSLANG_VALIDATOR} -V --target-env vulkan1.0 -o ${KORA_VECTOR_ADD_FIXTURE}
@@ -36,8 +37,14 @@ if(KORA_GLSLANG_VALIDATOR)
             ${CMAKE_CURRENT_SOURCE_DIR}/partition_add.comp
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/partition_add.comp
     VERBATIM)
+  add_custom_command(
+    OUTPUT ${KORA_SPLIT_SAXPY_FIXTURE}
+    COMMAND ${KORA_GLSLANG_VALIDATOR} -V --target-env vulkan1.0 -o ${KORA_SPLIT_SAXPY_FIXTURE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/split_saxpy.comp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/split_saxpy.comp
+    VERBATIM)
   add_custom_target(kora_dispatch_fixtures DEPENDS ${KORA_VECTOR_ADD_FIXTURE} ${KORA_SAXPY_FIXTURE}
-    ${KORA_PARTITION_ADD_FIXTURE})
+    ${KORA_PARTITION_ADD_FIXTURE} ${KORA_SPLIT_SAXPY_FIXTURE})
   add_dependencies(kora_integration_tests kora_spirv_fixture)
   add_dependencies(kora_integration_tests kora_dispatch_fixtures)
   target_compile_definitions(kora_integration_tests PRIVATE
@@ -45,7 +52,8 @@ if(KORA_GLSLANG_VALIDATOR)
     KORA_VECTOR_ADD_FIXTURE_PATH="${KORA_VECTOR_ADD_FIXTURE}"
     KORA_SAXPY_FIXTURE_PATH="${KORA_SAXPY_FIXTURE}")
   target_compile_definitions(kora_integration_tests PRIVATE
-    KORA_PARTITION_ADD_FIXTURE_PATH="${KORA_PARTITION_ADD_FIXTURE}")
+    KORA_PARTITION_ADD_FIXTURE_PATH="${KORA_PARTITION_ADD_FIXTURE}"
+    KORA_SPLIT_SAXPY_FIXTURE_PATH="${KORA_SPLIT_SAXPY_FIXTURE}")
 endif()
 
 find_program(KORA_SPIRV_ASSEMBLER NAMES spirv-as)

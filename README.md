@@ -213,7 +213,7 @@ Start with [Overview](docs/overview.md), then choose a path:
 | Build, install, and run tests | [Getting started](docs/getting-started.md) · [Building](docs/building.md) · [Testing](docs/testing.md) |
 | Understand the boundaries and ownership model | [Architecture](docs/architecture.md) · [Invariants](docs/internals/invariants.md) |
 | Select devices and manage buffers/transfers | [Device selection](docs/device-selection.md) · [Memory model](docs/memory-model.md) |
-| Offload work to other devices, hot-swappably | [Remote workers and hot-swap](docs/cluster.md) |
+| Use every local GPU and remote workers, hot-swappably | [Multi-device, remote workers, and hot-swap](docs/cluster.md) |
 | Load kernels and dispatch work | [Kernel format](docs/kernel-format.md) · [Runtime API](docs/api/runtime.md) |
 | Profile or compare performance | [Profiling](docs/profiling.md) · [Benchmarking](docs/benchmarking.md) · [vs Metal/OpenCL/OpenGL](docs/benchmark-competitors.md) |
 | Diagnose failures or device loss | [Debugging](docs/debugging.md) · [Recovery](docs/recovery.md) |

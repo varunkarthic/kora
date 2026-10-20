@@ -143,6 +143,13 @@ TEST(StagingRing, RandomRangesWaitForOldestTimelineAndNeverOverlapInFlight) {
     EXPECT_NE(readback_slice.value().mapped_data, nullptr);
     ASSERT_TRUE(readback_result.value()->retire(readback_slice.value(), next_timeline));
     EXPECT_TRUE(readback_result.value()->invalidate(readback_slice.value()));
+    // A completed readback slice survives reclamation until its bytes are copied to the host, so a
+    // concurrent reservation can never reuse memory a completion callback is still reading.
+    ASSERT_TRUE(readback_result.value()->reclaim_completed(next_timeline + 100));
+    EXPECT_TRUE(readback_result.value()->invalidate(readback_slice.value()));
+    ASSERT_TRUE(readback_result.value()->consumed(readback_slice.value()));
+    ASSERT_TRUE(readback_result.value()->reclaim_completed(next_timeline + 100));
+    EXPECT_FALSE(readback_result.value()->invalidate(readback_slice.value()));
 }
 
 }  // namespace

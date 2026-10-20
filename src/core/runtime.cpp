@@ -30,6 +30,7 @@
 #include "core/event_state.hpp"
 #include "core/json.hpp"
 #include "core/performance_db.hpp"
+#include "core/runtime_replica_access.hpp"
 #include "core/runtime_test_access.hpp"
 #include "core/scheduler_placement.hpp"
 #include "kernel/autotuner.hpp"
@@ -2419,7 +2420,11 @@ Status Runtime::recover() {
     });
     if (!device_lost)
         return Error(ErrorCode::InvalidArgument, "runtime recovery requires an observed device loss");
+    return rebuild_devices();
+}
 
+Status Runtime::rebuild_devices() {
+    if (!impl_) return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
     auto created = Runtime::create(options_);
     if (!created) return Status(std::move(created).error());
     auto replacement = std::move(created).value();
@@ -3048,3 +3053,35 @@ Result<Event> Runtime::run_cpu_fallback(std::string_view key, std::span<const Bu
 }
 
 }  // namespace kora
+
+namespace kora::detail {
+
+Result<Event> RuntimeReplicaAccess::read_replica(const Runtime& runtime, const BufferHandle& buffer,
+                                                 const DeviceId& device, std::uint64_t offset,
+                                                 std::span<std::byte> destination) {
+    if (!runtime.impl_ || !buffer)
+        return Error(ErrorCode::InvalidArgument, "runtime or buffer handle is invalid");
+    const auto selected = std::find_if(runtime.impl_->devices.begin(), runtime.impl_->devices.end(),
+                                       [&](const auto& entry) { return entry->id == device; });
+    if (selected == runtime.impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    if (!checked::in_range(offset, destination.size(), buffer.size_bytes()))
+        return Error(ErrorCode::InvalidArgument, "replica read range exceeds the buffer");
+    if (destination.empty()) return Event::when_all(std::span<const Event>{});
+    const auto context = (*selected)->dispatch;
+    auto replica = ensure_transfer_buffer(context, buffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (!replica) return std::move(replica).error();
+    QueueWait dependency;
+    if (context->transfer_queue != context->queue) {
+        dependency.semaphore = context->queue->completion_semaphore();
+        std::lock_guard lock(context->submit_mutex);
+        const auto last_use = context->device_last_use.find(buffer.id());
+        dependency.value = last_use == context->device_last_use.end() ? 0 : last_use->second;
+        dependency.stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    auto downloaded = context->transfers->download(replica.value(), offset, destination, dependency);
+    if (downloaded) context->download_count.fetch_add(1, std::memory_order_relaxed);
+    return downloaded;
+}
+
+}  // namespace kora::detail

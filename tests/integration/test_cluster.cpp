@@ -233,3 +233,165 @@ TEST(Cluster, RejectsWorkersWithTheWrongTokenAndRunsLocally) {
     EXPECT_FALSE(any_connected(fixture->cluster));
 }
 #endif
+
+#ifdef KORA_SPLIT_SAXPY_FIXTURE_PATH
+namespace {
+kora::KernelMetadata split_saxpy_metadata() {
+    auto metadata = saxpy_metadata();
+    metadata.kernel_id = "integration.cluster.split_saxpy";
+    metadata.push_constant_size = 12;
+    metadata.push_constants.push_back({"base", "u32", 8, 4});
+    return metadata;
+}
+
+struct SplitParams {
+    float scale;
+    std::uint32_t count;
+    std::uint32_t base;
+};
+
+kora::ClusterOptions split_options() {
+    kora::ClusterOptions options;
+    options.local.device_policy = kora::DevicePolicy::AllEligible;
+    options.policy = kora::OffloadPolicy::LocalOnly;
+    options.split_min_elements = 1024;
+    options.split_overhead = std::chrono::microseconds(0);
+    options.device_rescan_interval = std::chrono::milliseconds(0);
+    return options;
+}
+}  // namespace
+
+TEST(Cluster, RoutesAcrossEveryLocalDevice) {
+    auto cluster = kora::Cluster::create(split_options());
+    if (!cluster) KORA_REQUIRE_VULKAN(false);
+    auto kernel = cluster.value().load_kernel(KORA_SAXPY_FIXTURE_PATH, "main", saxpy_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    auto x = cluster.value().create_buffer<float>(kCount);
+    auto y = cluster.value().create_buffer<float>(kCount);
+    ASSERT_TRUE(x && y);
+    ASSERT_TRUE(x.value().write(std::vector<float>(kCount, 1.0F)) &&
+                y.value().write(std::vector<float>(kCount, 0.0F)));
+    const auto devices = cluster.value().local_devices();
+    const int jobs = static_cast<int>(devices.size()) * 4;
+    run_chain(cluster.value(), kernel.value(), x.value(), y.value(), jobs);
+    expect_value(y.value(), static_cast<float>(jobs));
+    std::uint64_t total = 0;
+    std::size_t used = 0;
+    for (const auto& device : cluster.value().local_devices()) {
+        total += device.dispatches;
+        used += device.dispatches > 0 ? 1U : 0U;
+    }
+    EXPECT_EQ(total, static_cast<std::uint64_t>(jobs));
+    EXPECT_EQ(used, devices.size()) << "Auto measures every local device before choosing";
+}
+
+TEST(Cluster, SplitDispatchMatchesCpuReferenceAcrossDevices) {
+    auto cluster = kora::Cluster::create(split_options());
+    if (!cluster) KORA_REQUIRE_VULKAN(false);
+    if (cluster.value().local_devices().size() < 2) GTEST_SKIP() << "needs at least two local devices";
+    auto kernel = cluster.value().load_kernel(KORA_SPLIT_SAXPY_FIXTURE_PATH, "main", split_saxpy_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    constexpr std::uint32_t count = 200'003;  // Not a multiple of the 64-wide workgroup.
+    std::vector<float> x_values(count), y_values(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        x_values[i] = static_cast<float>(i % 97);
+        y_values[i] = static_cast<float>(i % 13);
+    }
+    auto x = cluster.value().create_buffer<float>(count);
+    auto y = cluster.value().create_buffer<float>(count);
+    ASSERT_TRUE(x && y && x.value().write(x_values) && y.value().write(y_values));
+    for (int round = 0; round < 6; ++round) {
+        auto event = cluster.value()
+                         .dispatch(kernel.value())
+                         .global(count)
+                         .read(x.value())
+                         .read_write(y.value())
+                         .push(SplitParams{2.0F, count, 0})
+                         .split(sizeof(float))
+                         .submit();
+        ASSERT_TRUE(event) << event.error().describe();
+        ASSERT_TRUE(event.value().wait());
+        for (std::uint32_t i = 0; i < count; ++i) y_values[i] += 2.0F * x_values[i];
+    }
+    auto result = y.value().read();
+    ASSERT_TRUE(result);
+    for (std::uint32_t i = 0; i < count; ++i) ASSERT_EQ(result.value()[i], y_values[i]) << "index " << i;
+    const auto stats = cluster.value().stats();
+    EXPECT_GT(stats.split_dispatches, 0U);
+    EXPECT_GE(stats.slices, 2U * stats.split_dispatches);
+}
+
+TEST(Cluster, SplitSurvivesWorkerChaos) {
+    auto worker = start_worker(0);
+    if (!worker) KORA_REQUIRE_VULKAN(false);
+    const auto port = worker->port();
+    auto options = fast_options(port, kora::OffloadPolicy::PreferRemote);
+    options.local.device_policy = kora::DevicePolicy::AllEligible;
+    options.split_min_elements = 1024;
+    options.split_overhead = std::chrono::microseconds(0);
+    options.device_rescan_interval = std::chrono::milliseconds(0);
+    auto cluster = kora::Cluster::create(options);
+    ASSERT_TRUE(cluster) << cluster.error().describe();
+    auto kernel = cluster.value().load_kernel(KORA_SPLIT_SAXPY_FIXTURE_PATH, "main", split_saxpy_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    constexpr std::uint32_t count = 65'537;
+    auto x = cluster.value().create_buffer<float>(count);
+    auto y = cluster.value().create_buffer<float>(count);
+    ASSERT_TRUE(x && y && x.value().write(std::vector<float>(count, 1.0F)) &&
+                y.value().write(std::vector<float>(count, 0.0F)));
+    std::atomic<bool> done{false};
+    std::thread chaos([&] {
+        std::mt19937 random(99);
+        std::uniform_int_distribution<int> delay(5, 40);
+        while (!done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay(random)));
+            if (worker)
+                worker.reset();
+            else
+                worker = start_worker(port);
+        }
+    });
+    constexpr int rounds = 120;
+    std::vector<kora::Event> events;
+    for (int round = 0; round < rounds; ++round) {
+        auto event = cluster.value()
+                         .dispatch(kernel.value())
+                         .global(count)
+                         .read(x.value())
+                         .read_write(y.value())
+                         .push(SplitParams{1.0F, count, 0})
+                         .split(sizeof(float))
+                         .submit();
+        ASSERT_TRUE(event) << event.error().describe();
+        events.push_back(std::move(event).value());
+        if (round % 4 == 3) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    for (auto& event : events) ASSERT_TRUE(event.wait());
+    done.store(true);
+    chaos.join();
+    auto result = y.value().read();
+    ASSERT_TRUE(result);
+    for (std::uint32_t i = 0; i < count; ++i) ASSERT_EQ(result.value()[i], static_cast<float>(rounds)) << i;
+    EXPECT_GT(cluster.value().stats().split_dispatches, 0U);
+}
+
+TEST(Cluster, SplitRequiresABaseField) {
+    auto cluster = kora::Cluster::create(split_options());
+    if (!cluster) KORA_REQUIRE_VULKAN(false);
+    auto kernel = cluster.value().load_kernel(KORA_SAXPY_FIXTURE_PATH, "main", saxpy_metadata());
+    ASSERT_TRUE(kernel);
+    auto x = cluster.value().create_buffer<float>(kCount);
+    auto y = cluster.value().create_buffer<float>(kCount);
+    ASSERT_TRUE(x && y);
+    auto event = cluster.value()
+                     .dispatch(kernel.value())
+                     .global(kCount)
+                     .read(x.value())
+                     .read_write(y.value())
+                     .push(SaxpyParams{1.0F, kCount})
+                     .split(sizeof(float))
+                     .submit();
+    ASSERT_FALSE(event);
+    EXPECT_EQ(event.error().code, kora::ErrorCode::InvalidArgument);
+}
+#endif

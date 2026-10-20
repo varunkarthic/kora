@@ -32,6 +32,7 @@ struct VerificationTargetSet;
 struct AdaptiveDispatchState;
 struct RuntimeTestAccess;
 struct BufferManagerAccess;
+struct RuntimeReplicaAccess;
 }  // namespace detail
 
 class Kernel final {
@@ -240,6 +241,10 @@ public:
     /// Previously loaded kernels are invalidated and must be loaded again. Buffers marked DataLoss
     /// require a complete host rewrite before they can be read or uploaded.
     Status recover();
+    /// Recreates every logical device from the original options, re-enumerating physical devices so
+    /// a GPU that appeared or disappeared is picked up. Buffers and their host copies are retained;
+    /// existing Kernels are invalidated. Call only when no work is in flight on this Runtime.
+    Status rebuild_devices();
     Result<BufferHandle> create_buffer(std::uint64_t size_bytes, BufferUsage usage = BufferUsage::Storage);
     template <class T>
     Result<Buffer<T>> create_buffer(std::uint64_t count, BufferUsage usage = BufferUsage::Storage) {
@@ -284,6 +289,7 @@ public:
 private:
     friend struct detail::RuntimeTestAccess;
     friend struct detail::BufferManagerAccess;
+    friend struct detail::RuntimeReplicaAccess;
     struct Impl;
     explicit Runtime(std::unique_ptr<Impl> impl, RuntimeOptions options);
     void calibrate_compute_probes() noexcept;

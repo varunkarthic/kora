@@ -31,7 +31,8 @@ enum class OffloadPolicy {
 };
 
 struct ClusterOptions {
-    /// Options for the local Runtime, which also owns every buffer's authoritative host copy.
+    /// Options for the local Runtime, which also owns every buffer's authoritative host copy. When
+    /// `local.device_policy` (and KORA_DEVICE) is unset, every eligible local device is used.
     RuntimeOptions local;
     /// Worker endpoints ("host:port"). KORA_WORKERS (comma-separated) adds more. Absent workers are
     /// retried in the background, so they may be started before or after the Cluster.
@@ -45,6 +46,23 @@ struct ClusterOptions {
     std::chrono::milliseconds request_timeout{30'000};
     std::chrono::milliseconds heartbeat_interval{1'000};
     std::uint64_t max_message_bytes = 1ULL << 30U;
+    /// How often to check whether local GPUs appeared or disappeared; zero disables the check. A
+    /// change rebuilds the local Runtime at the next idle point, keeping every buffer.
+    std::chrono::milliseconds device_rescan_interval{5'000};
+    /// Split dispatches smaller than this many elements always run on one target.
+    std::uint64_t split_min_elements = 65'536;
+    /// Fixed cost assumed per extra slice when deciding whether splitting pays.
+    std::chrono::microseconds split_overhead{150};
+};
+
+/// One local device the Cluster can run work on.
+struct LocalDeviceStatus {
+    DeviceId id;
+    std::string name;
+    /// Whole dispatches and split slices this device has completed.
+    std::uint64_t dispatches = 0;
+    std::uint64_t slices = 0;
+    std::uint32_t inflight = 0;
 };
 
 struct WorkerStatus {
@@ -65,6 +83,11 @@ struct ClusterStats {
     std::uint64_t failovers = 0;
     /// Local device losses recovered by recreating the local Runtime.
     std::uint64_t local_recoveries = 0;
+    /// Dispatches that ran as several slices on different targets, and the slices they used.
+    std::uint64_t split_dispatches = 0;
+    std::uint64_t slices = 0;
+    /// Times the local device set changed and the local Runtime was rebuilt.
+    std::uint64_t device_rescans = 0;
 };
 
 namespace detail {
@@ -109,6 +132,13 @@ public:
     ClusterDispatch& push(const T& value) {
         return push(std::as_bytes(std::span<const T>(&value, 1)));
     }
+    /// Allows the Cluster to split this dispatch along x across several devices. The kernel must
+    /// declare a `u32` push-constant field named `base` and handle element `base +
+    /// gl_GlobalInvocationID.x`, and every written buffer must hold `output_element_bytes` per
+    /// element. Each device computes one range; the merged result is committed once, so a split
+    /// dispatch is still all-or-nothing. Small dispatches, or ones where splitting is not expected to
+    /// pay, run on one target.
+    ClusterDispatch& split(std::uint32_t output_element_bytes);
     /// Enqueues the dispatch. The Event completes after outputs are in the host copies.
     Result<Event> submit();
 
@@ -123,6 +153,7 @@ private:
     std::vector<BufferHandle> buffers_;
     std::vector<KernelAccess> accesses_;
     std::vector<std::byte> push_;
+    std::uint32_t split_element_bytes_ = 0;
 };
 
 /// One host Runtime plus any number of hot-swappable remote KORA workers. Buffers always live
@@ -152,6 +183,7 @@ public:
     /// Waits for every submitted dispatch to complete.
     Status wait_idle();
     std::vector<WorkerStatus> workers() const;
+    std::vector<LocalDeviceStatus> local_devices() const;
     ClusterStats stats() const;
 
 private:
