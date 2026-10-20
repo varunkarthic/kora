@@ -5,8 +5,11 @@
 #include <locale>
 #include <set>
 #include <sstream>
+#include <type_traits>
+#include <variant>
 
 #include "core/json.hpp"
+#include "kernel/metadata_json.hpp"
 #include "kora/kernel_metadata.hpp"
 
 namespace kora {
@@ -384,3 +387,129 @@ Result<KernelMetadata> parse_kernel_metadata(std::string_view document) {
 }
 
 }  // namespace kora
+
+namespace kora::detail {
+namespace {
+void append_json_string(std::string& out, std::string_view value) {
+    out.push_back('"');
+    for (const char c : value) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    constexpr char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out.push_back(hex[(static_cast<unsigned char>(c) >> 4U) & 0xFU]);
+                    out.push_back(hex[static_cast<unsigned char>(c) & 0xFU]);
+                } else {
+                    out.push_back(c);
+                }
+        }
+    }
+    out.push_back('"');
+}
+
+std::string_view kind_name(KernelBindingKind kind) {
+    switch (kind) {
+        case KernelBindingKind::StorageBuffer:
+            return "storage_buffer";
+        case KernelBindingKind::UniformBuffer:
+            return "uniform_buffer";
+        case KernelBindingKind::StorageImage:
+            return "storage_image";
+        case KernelBindingKind::SampledImage:
+            return "sampled_image";
+    }
+    return "storage_buffer";
+}
+
+std::string_view access_name(KernelAccess access) {
+    switch (access) {
+        case KernelAccess::Read:
+            return "read";
+        case KernelAccess::Write:
+            return "write";
+        case KernelAccess::ReadWrite:
+            return "read_write";
+    }
+    return "read_write";
+}
+}  // namespace
+
+std::string serialize_kernel_metadata(const KernelMetadata& m) {
+    std::string out = "{\"schema_version\":" + std::to_string(m.schema_version) + ",\"kernel_id\":";
+    append_json_string(out, m.kernel_id);
+    out += ",\"bindings\":[";
+    for (std::size_t i = 0; i < m.bindings.size(); ++i) {
+        const auto& b = m.bindings[i];
+        if (i) out.push_back(',');
+        out +=
+            "{\"set\":" + std::to_string(b.set) + ",\"binding\":" + std::to_string(b.binding) + ",\"name\":";
+        append_json_string(out, b.name);
+        out += ",\"kind\":\"" + std::string(kind_name(b.kind)) + "\",\"access\":\"" +
+               std::string(access_name(b.access)) + "\"}";
+    }
+    out += "],\"push_constant_size\":" + std::to_string(m.push_constant_size) + ",\"push_constants\":[";
+    for (std::size_t i = 0; i < m.push_constants.size(); ++i) {
+        const auto& f = m.push_constants[i];
+        if (i) out.push_back(',');
+        out += "{\"name\":";
+        append_json_string(out, f.name);
+        out += ",\"type\":";
+        append_json_string(out, f.type);
+        out += ",\"offset\":" + std::to_string(f.offset) + ",\"size\":" + std::to_string(f.size) + "}";
+    }
+    out += "],\"specialization_constants\":[";
+    for (std::size_t i = 0; i < m.specialization_constants.size(); ++i) {
+        const auto& c = m.specialization_constants[i];
+        if (i) out.push_back(',');
+        out += "{\"id\":" + std::to_string(c.id) + ",\"name\":";
+        append_json_string(out, c.name);
+        out += ",\"type\":";
+        append_json_string(out, c.type);
+        out += ",\"default\":";
+        std::visit(
+            [&out](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, bool>) {
+                    out += value ? "true" : "false";
+                } else if constexpr (std::is_same_v<T, double>) {
+                    char buffer[64];
+                    const auto written = std::to_chars(buffer, buffer + sizeof(buffer), value);
+                    std::string text(buffer, written.ptr);
+                    if (text.find_first_of(".eE") == std::string::npos) text += ".0";
+                    out += text;
+                } else {
+                    out += std::to_string(value);
+                }
+            },
+            c.default_value);
+        out += "}";
+    }
+    out += "],\"local_size\":[" + std::to_string(m.local_size[0]) + "," + std::to_string(m.local_size[1]) +
+           "," + std::to_string(m.local_size[2]) + "],\"cpu_fallback_key\":";
+    append_json_string(out, m.cpu_fallback_key);
+    out += ",\"semantics\":[";
+    for (std::size_t i = 0; i < m.semantics.size(); ++i) {
+        if (i) out.push_back(',');
+        append_json_string(out, m.semantics[i]);
+    }
+    out += "]}";
+    return out;
+}
+
+}  // namespace kora::detail
