@@ -11,7 +11,7 @@ visible to the caller.
 [![Documentation](https://img.shields.io/badge/docs-Read%20the%20Docs-2f6f9f)](https://kora.readthedocs.io/en/latest/)
 
 > **Maturity:** KORA is in active development. Releases are evaluation builds, not a production
-> suitability guarantee. The v0.2.x line is tracked by the [`v0.2` milestone](https://github.com/varunkarthic/kora/milestone/20);
+> suitability guarantee. The v0.3.x line is tracked by the [`v0.3` milestone](https://github.com/varunkarthic/kora/milestone/21);
 > GitHub release automation publishes patch versions and keeps the line Beta until its validation
 > issues are closed.
 
@@ -230,7 +230,7 @@ The full, searchable handbook is published on [Read the Docs](https://kora.readt
 ## Releases and compatibility
 
 [`VERSION`](VERSION) contains `MAJOR.MINOR`; successful main-branch CI triggers release automation,
-which increments the patch from existing tags (`0.2.0`, `0.2.1`, …). A release is Beta while any
+which increments the patch from existing tags (`0.3.0`, `0.3.1`, …). A release is Beta while any
 issue in its matching `vMAJOR.MINOR` milestone is open, and Stable only after every issue in that
 release line is closed. Stable describes completion of repository validation gates, not a guarantee
 for every application or GPU. See [release policy](docs/releases.md) and [CHANGELOG](CHANGELOG.md).

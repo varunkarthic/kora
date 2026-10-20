@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Start the 0.3 release line. Releases are `v0.3.x` and remain Beta until the v0.3 release-validation
+  issues close.
+
 ## [0.2.28] - 2026-10-20
 
 ### Added
