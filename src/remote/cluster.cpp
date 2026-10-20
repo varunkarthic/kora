@@ -8,9 +8,11 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <set>
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
@@ -140,6 +142,7 @@ struct WorkerLink {
     // Session state, used only by the link thread and reset on every connection.
     std::unordered_set<std::uint64_t> loaded_kernels;
     std::unordered_map<std::uint64_t, std::uint64_t> worker_versions;
+    std::unordered_map<std::uint64_t, std::uint64_t> worker_sizes;  // Bytes per key ever sent.
     std::uint64_t next_request = 1;
     std::uint64_t max_message = 0;
 };
@@ -155,7 +158,7 @@ struct ClusterImpl : std::enable_shared_from_this<ClusterImpl> {
     ClusterOptions options;
     bool all_local_devices = false;
     Runtime runtime;
-    std::shared_mutex runtime_mutex;  // Shared for local work; exclusive while rebuilding.
+    mutable std::shared_mutex runtime_mutex;  // Shared for local work; exclusive while rebuilding.
     std::atomic<std::uint64_t> local_generation{1};
 
     struct LocalTarget {
@@ -210,6 +213,30 @@ struct ClusterImpl : std::enable_shared_from_this<ClusterImpl> {
     std::uint64_t explore_counter = 0;
     std::unordered_map<std::string, std::uint32_t> split_declines;  // Per split model key.
 
+    const Clock::time_point created = Clock::now();
+    mutable std::mutex events_mutex;
+    std::deque<ClusterEvent> events;
+    // Targets each kernel used in the current and previous one-second windows; dispatcher only.
+    struct RoutingWindow {
+        std::string kernel_id;
+        std::set<std::string> current, previous;
+    };
+    std::unordered_map<std::uint64_t, RoutingWindow> routing;
+    std::unordered_map<std::string, std::string> routing_labels;
+    Clock::time_point routing_window_start = Clock::now();
+    std::thread status_thread;
+    std::atomic<bool> status_stop{false};
+    std::uint16_t status_port = 0;
+
+    void note(std::string message);
+    void note_route(const Job& job, const std::string& key, const std::function<std::string()>& label);
+    std::string local_label(const DeviceId& device);
+    std::vector<WorkerStatus> worker_status() const;
+    std::vector<LocalDeviceStatus> local_status() const;
+    ClusterStats stats_snapshot() const;
+    std::string status_json() const;
+    void status_loop(remote::Socket listener);
+
     void dispatcher_loop();
     void monitor_loop();
     void enqueue(std::shared_ptr<Job> job, bool front);
@@ -242,6 +269,25 @@ namespace {
 std::string model_key(const std::string& target, const Job& job) {
     const auto bucket = job.bytes == 0 ? 0 : static_cast<int>(std::log2(static_cast<double>(job.bytes)));
     return target + "|" + std::to_string(job.kernel->key) + "|" + std::to_string(bucket);
+}
+
+void json_string(std::string& out, std::string_view text) {
+    static constexpr char digits[] = "0123456789abcdef";
+    out.push_back('"');
+    for (const char raw : text) {
+        const auto c = static_cast<unsigned char>(raw);
+        if (c == '"' || c == '\\') {
+            out.push_back('\\');
+            out.push_back(raw);
+        } else if (c < 0x20) {
+            out += "\\u00";
+            out.push_back(digits[c >> 4U]);
+            out.push_back(digits[c & 0xFU]);
+        } else {
+            out.push_back(raw);
+        }
+    }
+    out.push_back('"');
 }
 
 std::string hex(const std::uint8_t* bytes, std::size_t count) {
@@ -313,6 +359,50 @@ void ClusterImpl::count_device(const std::string& key, bool slice, int inflight_
     if (inflight_delta < 0) ++(slice ? counters.slices : counters.dispatches);
 }
 
+void ClusterImpl::note(std::string message) {
+    const auto at = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - created).count());
+    std::lock_guard lock(events_mutex);
+    if (!events.empty() && events.back().message == message) {
+        events.back().at_ms = at;
+        ++events.back().repeats;
+        return;
+    }
+    events.push_back({at, std::move(message)});
+    if (events.size() > 64) events.pop_front();
+}
+
+std::string ClusterImpl::local_label(const DeviceId& device) {
+    return "local " + std::to_string(device.index);
+}
+
+// Reports when the set of targets a kernel runs on changes, once per second at most, so steady
+// alternation between equivalent targets does not flood the event log.
+void ClusterImpl::note_route(const Job& job, const std::string& key,
+                             const std::function<std::string()>& label) {
+    if (!routing_labels.contains(key)) routing_labels.emplace(key, label());
+    auto& window = routing[job.kernel->key];
+    window.kernel_id = job.kernel->metadata.kernel_id;
+    window.current.insert(key);
+    const auto now = Clock::now();
+    if (now - routing_window_start < std::chrono::seconds(1)) return;
+    routing_window_start = now;
+    for (auto& [kernel, item] : routing) {
+        if (item.current.empty()) continue;  // Idle kernels keep their last known routing.
+        if (item.current != item.previous) {
+            std::string message = item.kernel_id + " now runs on ";
+            bool first = true;
+            for (const auto& target : item.current) {
+                message += (first ? "" : ", ") + routing_labels[target];
+                first = false;
+            }
+            note(std::move(message));
+        }
+        item.previous = std::move(item.current);
+        item.current.clear();
+    }
+}
+
 void ClusterImpl::enqueue(std::shared_ptr<Job> job, bool front) {
     {
         std::lock_guard lock(queue_mutex);
@@ -327,8 +417,11 @@ void ClusterImpl::enqueue(std::shared_ptr<Job> job, bool front) {
 void ClusterImpl::fail_over(const std::shared_ptr<Job>& job, WorkerLink* link) {
     failovers.fetch_add(1, std::memory_order_relaxed);
     if (link) {
-        std::lock_guard lock(link->mutex);
-        ++link->status.failovers;
+        {
+            std::lock_guard lock(link->mutex);
+            ++link->status.failovers;
+        }
+        note("worker " + link->endpoint + " failed a dispatch; re-running it locally");
     }
     job->force_local = true;
     job->assigned_device.reset();
@@ -510,6 +603,17 @@ bool ClusterImpl::try_split(const std::shared_ptr<Job>& job) {
         assigned += share;
     }
     if (plan.size() < 2) return false;
+    std::string split_key = "split";
+    for (const auto& [target_index, share] : plan) split_key += "|" + targets[target_index].key;
+    note_route(*job, split_key, [&] {
+        std::string label = "split(";
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            const auto& target = targets[plan[i].first];
+            label += (i == 0 ? "" : " + ") +
+                     (target.link ? "worker " + target.link->endpoint : local_label(*target.device));
+        }
+        return label + ")";
+    });
 
     ensure_host_current(*job);
     auto state = std::make_shared<SplitState>();
@@ -651,6 +755,10 @@ void ClusterImpl::dispatcher_loop() {
         Target target = choose_target(*job);
         if (job->force_local && job->assigned_device)
             target = {nullptr, job->assigned_device, device_key(*job->assigned_device)};
+        note_route(*job, target.key, [&] {
+            if (target.link) return "worker " + target.link->endpoint;
+            return target.device ? local_label(*target.device) : std::string("no target");
+        });
         start_on(job, target);
     }
 }
@@ -663,6 +771,10 @@ void ClusterImpl::rebuild_local(bool after_loss, std::uint64_t observed_generati
     local_generation.fetch_add(1);
     refresh_local_targets();
     (after_loss ? local_recoveries : device_rescans).fetch_add(1, std::memory_order_relaxed);
+    const auto count = std::to_string(local_targets.size());
+    lock.unlock();
+    note(after_loss ? "local device lost; recreated " + count + " local devices"
+                    : "local GPUs changed; now using " + count + " local devices");
 }
 
 void ClusterImpl::monitor_loop() {
@@ -949,6 +1061,8 @@ RemoteOutcome ClusterImpl::run_remote(WorkerLink& link, remote::Socket& socket, 
     for (std::size_t i = 0; i < job.buffers.size(); ++i)
         if (job.accesses[i] != KernelAccess::Write)
             link.worker_versions[buffer_key(job.buffers[i].id())] = versions[i];
+    for (std::size_t i = 0; i < job.buffers.size(); ++i)
+        link.worker_sizes[buffer_key(job.buffers[i].id())] = job.buffers[i].size_bytes();
     if (collected) {
         // A slice returns only its own range; the worker's copy now differs from the host's.
         for (const auto output : job.split->outputs) {
@@ -990,6 +1104,15 @@ void ClusterImpl::link_loop(const std::shared_ptr<WorkerLink>& link) {
             fail_over(job, link.get());
         }
     };
+    std::string last_refusal;
+    const auto publish_cache = [&] {
+        std::uint64_t bytes = 0;
+        for (const auto& [key, version] : link->worker_versions)
+            if (const auto size = link->worker_sizes.find(key); size != link->worker_sizes.end())
+                bytes += size->second;
+        std::lock_guard lock(link->mutex);
+        link->status.cached_bytes = bytes;
+    };
     while (!link->stop.load()) {
         auto connected = remote::Socket::connect(link->address, options.connect_timeout);
         if (!connected) {
@@ -1001,19 +1124,29 @@ void ClusterImpl::link_loop(const std::shared_ptr<WorkerLink>& link) {
             std::lock_guard lock(link->mutex);
             link->socket = socket;
         }
-        if (!handshake(*link, *socket)) {
+        if (auto shaken = handshake(*link, *socket); !shaken) {
+            if (shaken.error().message != last_refusal) {
+                last_refusal = shaken.error().message;
+                note("worker " + link->endpoint + " refused: " + last_refusal);
+            }
             socket->close();
             wait_or_stop(options.reconnect_interval);
             continue;
         }
         link->loaded_kernels.clear();
         link->worker_versions.clear();
+        link->worker_sizes.clear();
+        last_refusal.clear();
+        std::string device;
         {
             std::lock_guard lock(link->mutex);
             ++link->status.connects;
+            link->status.cached_bytes = 0;
             link->releases.clear();  // A new session starts with an empty worker cache.
+            device = link->status.device;
         }
         link->connected.store(true, std::memory_order_release);
+        note("worker " + link->endpoint + " connected (" + device + ")");
         auto last_activity = Clock::now();
         while (!link->stop.load()) {
             std::shared_ptr<Job> job;
@@ -1057,6 +1190,7 @@ void ClusterImpl::link_loop(const std::shared_ptr<WorkerLink>& link) {
                 std::vector<std::vector<std::byte>> collected;
                 const auto outcome = run_remote(*link, *socket, *job, job->split ? &collected : nullptr);
                 link->inflight.fetch_sub(1);
+                publish_cache();
                 if (outcome == RemoteOutcome::Done) {
                     {
                         std::lock_guard lock(link->mutex);
@@ -1092,8 +1226,10 @@ void ClusterImpl::link_loop(const std::shared_ptr<WorkerLink>& link) {
         {
             std::lock_guard lock(link->mutex);
             ++link->status.disconnects;
+            link->status.cached_bytes = 0;
             link->socket.reset();
         }
+        if (!link->stop.load()) note("worker " + link->endpoint + " disconnected");
         drain_to_local();
         if (!link->stop.load()) wait_or_stop(options.reconnect_interval);
     }
@@ -1117,12 +1253,154 @@ Status ClusterImpl::start_link(const std::string& endpoint) {
     return ok_status();
 }
 
+std::vector<WorkerStatus> ClusterImpl::worker_status() const {
+    std::vector<WorkerStatus> result;
+    std::lock_guard lock(workers_mutex);
+    for (const auto& link : workers) {
+        std::lock_guard link_lock(link->mutex);
+        auto status = link->status;
+        status.connected = link->connected.load();
+        status.inflight = link->inflight.load();
+        result.push_back(std::move(status));
+    }
+    return result;
+}
+
+std::vector<LocalDeviceStatus> ClusterImpl::local_status() const {
+    std::vector<LocalDeviceStatus> result;
+    std::shared_lock lock(runtime_mutex);
+    for (const auto& target : local_targets) {
+        LocalDeviceStatus status{target.id, target.name};
+        if (const auto memory = runtime.memory_stats(target.id)) {
+            status.allocated_bytes = memory.value().allocated_bytes;
+            for (const auto& heap : memory.value().heaps)
+                if (heap.budget_queried) status.budget_bytes += heap.budget_bytes;
+        }
+        std::lock_guard model_lock(model_mutex);
+        if (const auto found = device_counters.find(target.key); found != device_counters.end()) {
+            status.dispatches = found->second.dispatches;
+            status.slices = found->second.slices;
+            status.inflight = found->second.inflight;
+        }
+        result.push_back(std::move(status));
+    }
+    return result;
+}
+
+ClusterStats ClusterImpl::stats_snapshot() const {
+    ClusterStats stats;
+    stats.local_dispatches = local_dispatches.load();
+    stats.remote_dispatches = remote_dispatches.load();
+    stats.failovers = failovers.load();
+    stats.local_recoveries = local_recoveries.load();
+    stats.split_dispatches = split_dispatches.load();
+    stats.slices = slices.load();
+    stats.device_rescans = device_rescans.load();
+    return stats;
+}
+
+// One status snapshot as a single-line JSON object; see docs/kora-top.md for the fields.
+std::string ClusterImpl::status_json() const {
+    std::string out = "{\"version\":1,\"uptime_ms\":";
+    out +=
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - created).count());
+    out += ",\"policy\":";
+    json_string(out, options.policy == OffloadPolicy::Auto        ? "auto"
+                     : options.policy == OffloadPolicy::LocalOnly ? "local-only"
+                                                                  : "prefer-remote");
+    const auto field = [&](std::string_view name, std::uint64_t value) {
+        out += ",\"";
+        out += name;
+        out += "\":";
+        out += std::to_string(value);
+    };
+    out += ",\"devices\":[";
+    bool first = true;
+    for (const auto& device : local_status()) {
+        out += first ? "{" : ",{";
+        first = false;
+        out += "\"index\":" + std::to_string(device.id.index) + ",\"name\":";
+        json_string(out, device.name);
+        field("dispatches", device.dispatches);
+        field("slices", device.slices);
+        field("inflight", device.inflight);
+        field("allocated_bytes", device.allocated_bytes);
+        field("budget_bytes", device.budget_bytes);
+        out += "}";
+    }
+    out += "],\"workers\":[";
+    first = true;
+    for (const auto& worker : worker_status()) {
+        out += first ? "{" : ",{";
+        first = false;
+        out += "\"endpoint\":";
+        json_string(out, worker.endpoint);
+        out += worker.connected ? ",\"connected\":true,\"name\":" : ",\"connected\":false,\"name\":";
+        json_string(out, worker.name);
+        out += ",\"device\":";
+        json_string(out, worker.device);
+        field("inflight", worker.inflight);
+        field("dispatches", worker.dispatches);
+        field("failovers", worker.failovers);
+        field("connects", worker.connects);
+        field("disconnects", worker.disconnects);
+        field("cached_bytes", worker.cached_bytes);
+        out += "}";
+    }
+    const auto stats = stats_snapshot();
+    out += "],\"stats\":{\"local_dispatches\":" + std::to_string(stats.local_dispatches);
+    field("remote_dispatches", stats.remote_dispatches);
+    field("failovers", stats.failovers);
+    field("local_recoveries", stats.local_recoveries);
+    field("split_dispatches", stats.split_dispatches);
+    field("slices", stats.slices);
+    field("device_rescans", stats.device_rescans);
+    out += "},\"events\":[";
+    {
+        std::lock_guard lock(events_mutex);
+        first = true;
+        for (const auto& event : events) {
+            out += first ? "{\"at_ms\":" : ",{\"at_ms\":";
+            first = false;
+            out += std::to_string(event.at_ms) + ",\"message\":";
+            json_string(out, event.message);
+            field("repeats", event.repeats);
+            out += "}";
+        }
+    }
+    out += "]}";
+    return out;
+}
+
+void ClusterImpl::status_loop(remote::Socket listener) {
+    constexpr std::size_t max_clients = 8;
+    std::vector<remote::Socket> clients;
+    auto next = Clock::now();
+    while (!status_stop.load()) {
+        if (auto accepted = listener.accept(std::chrono::milliseconds(50));
+            accepted && accepted.value().valid() && accepted.value().peer_is_loopback() &&
+            clients.size() < max_clients)
+            clients.push_back(std::move(accepted).value());
+        if (Clock::now() < next) continue;
+        next = Clock::now() + options.status_interval;
+        if (clients.empty()) continue;
+        const auto line = status_json() + "\n";
+        const auto bytes = std::as_bytes(std::span(line.data(), line.size()));
+        // A viewer that stops reading is dropped instead of stalling this thread.
+        std::erase_if(clients, [&](remote::Socket& client) {
+            return !client.send_all(bytes, std::chrono::milliseconds(200));
+        });
+    }
+}
+
 void ClusterImpl::shutdown() {
     {
         std::lock_guard lock(queue_mutex);
         if (shut_down) return;
         shut_down = true;
     }
+    status_stop.store(true);
+    if (status_thread.joinable()) status_thread.join();
     std::vector<std::shared_ptr<WorkerLink>> links;
     {
         std::lock_guard lock(workers_mutex);
@@ -1159,6 +1437,8 @@ void ClusterImpl::shutdown() {
 Result<Cluster> Cluster::create(ClusterOptions options) {
     if (options.token.empty())
         if (const char* token = std::getenv("KORA_WORKER_TOKEN")) options.token = token;
+    if (options.status_listen.empty())
+        if (const char* status = std::getenv("KORA_STATUS_LISTEN")) options.status_listen = status;
     if (const char* extra = std::getenv("KORA_WORKERS")) {
         std::stringstream stream(extra);
         std::string endpoint;
@@ -1186,6 +1466,28 @@ Result<Cluster> Cluster::create(ClusterOptions options) {
                                                           }
                                                           self->queue_cv.notify_one();
                                                       });
+    if (!options.status_listen.empty()) {
+        auto address = remote::parse_endpoint(options.status_listen);
+        if (!address) {
+            impl->shutdown();
+            return std::move(address).error();
+        }
+        const auto& host = address.value().host;
+        if (host != "127.0.0.1" && host != "::1" && host != "localhost") {
+            impl->shutdown();
+            return Error(ErrorCode::InvalidArgument,
+                         "status_listen must be a loopback address (127.0.0.1, ::1, or localhost)");
+        }
+        auto listener = remote::Socket::listen(address.value());
+        if (!listener) {
+            impl->shutdown();
+            return std::move(listener).error();
+        }
+        impl->status_port = listener.value().local_port();
+        impl->status_thread = std::thread([raw = impl.get(), socket = std::move(listener).value()]() mutable {
+            raw->status_loop(std::move(socket));
+        });
+    }
     impl->dispatcher = std::thread([raw = impl.get()] { raw->dispatcher_loop(); });
     if (all_local_devices && options.device_rescan_interval.count() > 0)
         impl->monitor = std::thread([raw = impl.get()] { raw->monitor_loop(); });
@@ -1224,11 +1526,19 @@ Result<ClusterKernel> Cluster::load_kernel(const std::filesystem::path& spirv, s
     const auto size = end <= 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(end);
     if (size == 0 || size > 16U * 1024U * 1024U || size % 4 != 0)
         return Error(ErrorCode::InvalidKernel, "SPIR-V module is empty, misaligned, or exceeds 16 MiB");
-    auto state = std::make_shared<detail::ClusterKernelState>();
-    state->words.resize(static_cast<std::size_t>(size / 4));
+    std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
     input.seekg(0);
-    input.read(reinterpret_cast<char*>(state->words.data()), static_cast<std::streamsize>(size));
+    input.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(size));
     if (!input) return Error(ErrorCode::IoError, "failed to read complete SPIR-V module");
+    return load_kernel(std::span<const std::uint32_t>(words), std::move(entry_point), std::move(metadata));
+}
+
+Result<ClusterKernel> Cluster::load_kernel(std::span<const std::uint32_t> spirv, std::string entry_point,
+                                           KernelMetadata metadata) {
+    if (spirv.empty() || spirv.size() > 4U * 1024U * 1024U)
+        return Error(ErrorCode::InvalidKernel, "SPIR-V module is empty or exceeds 16 MiB");
+    auto state = std::make_shared<detail::ClusterKernelState>();
+    state->words.assign(spirv.begin(), spirv.end());
     state->entry_point = std::move(entry_point);
     state->metadata = std::move(metadata);
     state->metadata_json = detail::serialize_kernel_metadata(state->metadata);
@@ -1288,44 +1598,20 @@ Status Cluster::wait_idle() {
 }
 
 std::vector<WorkerStatus> Cluster::workers() const {
-    std::vector<WorkerStatus> result;
-    std::lock_guard lock(impl_->workers_mutex);
-    for (const auto& link : impl_->workers) {
-        std::lock_guard link_lock(link->mutex);
-        auto status = link->status;
-        status.connected = link->connected.load();
-        result.push_back(std::move(status));
-    }
-    return result;
+    return impl_->worker_status();
 }
-
 std::vector<LocalDeviceStatus> Cluster::local_devices() const {
-    std::vector<LocalDeviceStatus> result;
-    std::shared_lock lock(impl_->runtime_mutex);
-    std::lock_guard model_lock(impl_->model_mutex);
-    for (const auto& target : impl_->local_targets) {
-        LocalDeviceStatus status{target.id, target.name};
-        if (const auto found = impl_->device_counters.find(target.key);
-            found != impl_->device_counters.end()) {
-            status.dispatches = found->second.dispatches;
-            status.slices = found->second.slices;
-            status.inflight = found->second.inflight;
-        }
-        result.push_back(std::move(status));
-    }
-    return result;
+    return impl_->local_status();
 }
-
 ClusterStats Cluster::stats() const {
-    ClusterStats stats;
-    stats.local_dispatches = impl_->local_dispatches.load();
-    stats.remote_dispatches = impl_->remote_dispatches.load();
-    stats.failovers = impl_->failovers.load();
-    stats.local_recoveries = impl_->local_recoveries.load();
-    stats.split_dispatches = impl_->split_dispatches.load();
-    stats.slices = impl_->slices.load();
-    stats.device_rescans = impl_->device_rescans.load();
-    return stats;
+    return impl_->stats_snapshot();
+}
+std::vector<ClusterEvent> Cluster::events() const {
+    std::lock_guard lock(impl_->events_mutex);
+    return {impl_->events.begin(), impl_->events.end()};
+}
+std::uint16_t Cluster::status_port() const noexcept {
+    return impl_->status_port;
 }
 
 ClusterDispatch& ClusterDispatch::global(std::uint64_t x, std::uint64_t y, std::uint64_t z) {

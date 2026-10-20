@@ -12,6 +12,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add `kora-top`, a live terminal view of a `kora::Cluster`. It shows each local device and remote
+  worker, which of them received work in the last second, device memory against the driver budget,
+  worker cache, and connect, disconnect, failover, rescan, and routing events. `kora-top --demo`
+  runs a self-contained Cluster whose loopback workers are unplugged and replugged while every
+  result is verified.
+- Add `ClusterOptions::status_listen` (or `KORA_STATUS_LISTEN`), an opt-in, loopback-only stream of
+  JSON status snapshots, together with `Cluster::events()` and `Cluster::status_port()`.
+  `LocalDeviceStatus` gains allocated and budget bytes, and `WorkerStatus` gains in-flight and
+  cached bytes.
+- Add `Cluster::load_kernel()` for in-memory SPIR-V words.
+
 ## [0.2.27] - 2026-10-20
 
 ### Added

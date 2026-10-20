@@ -137,6 +137,12 @@ split nearly every time and took 1.19 ms, 0.70× the single-device speed. On thi
 right result is not to split, and the planner now reaches it on its own. Machines with
 independent GPUs are where splitting can pay off; this repository has not measured one.
 
+## Watching it run
+
+[`kora-top`](tools/kora-top.md) shows local devices and workers, where work is going, device
+memory, and hot-swap events live. Set `KORA_STATUS_LISTEN=127.0.0.1:7979` for your application and
+run `kora-top`, or run `kora-top --demo`.
+
 ## Placement
 
 | `OffloadPolicy` | Behavior |
