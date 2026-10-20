@@ -218,6 +218,7 @@ Start with [Overview](docs/overview.md), then choose a path:
 | Understand the boundaries and ownership model | [Architecture](docs/architecture.md) · [Invariants](docs/internals/invariants.md) |
 | Select devices and manage buffers/transfers | [Device selection](docs/device-selection.md) · [Memory model](docs/memory-model.md) |
 | Use every local GPU and remote workers, hot-swappably | [Multi-device, remote workers, and hot-swap](docs/cluster.md) |
+| Watch devices, routing, memory, and failovers live | [kora-top](docs/tools/kora-top.md) |
 | Load kernels and dispatch work | [Kernel format](docs/kernel-format.md) · [Runtime API](docs/api/runtime.md) |
 | Profile or compare performance | [Profiling](docs/profiling.md) · [Benchmarking](docs/benchmarking.md) · [vs Metal/OpenCL/OpenGL](docs/benchmark-competitors.md) |
 | Diagnose failures or device loss | [Debugging](docs/debugging.md) · [Recovery](docs/recovery.md) |

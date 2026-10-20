@@ -8,7 +8,7 @@ copyright = "2026, Varun Karthic"
 release = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 version = release
 
-extensions = ["myst_parser", "sphinxcontrib.mermaid"]
+extensions = ["myst_parser", "sphinx_design", "sphinxcontrib.mermaid"]
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
 source_suffix = {".md": "markdown"}
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
