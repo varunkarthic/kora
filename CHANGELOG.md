@@ -29,6 +29,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   group the sidebar into Getting started, Guides, Performance, API reference, Internals, and
   Project.
 
+### Fixed
+- Fix the Windows build of `kora-top`. Make `kora-top --demo` exit with CTest's skip code instead
+  of failing when no Vulkan device is available.
+
 ## [0.2.27] - 2026-10-20
 
 ### Added
