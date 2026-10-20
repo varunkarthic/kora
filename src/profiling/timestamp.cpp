@@ -1,8 +1,10 @@
 #include "profiling/timestamp.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 namespace kora::detail {
 
@@ -125,16 +127,27 @@ void TimestampRing::submitted(std::uint64_t submission_id, std::uint64_t queue_v
     }
 }
 
-Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t completed_queue_value) {
+Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t completed_queue_value,
+                                                               std::chrono::nanoseconds ready_wait) {
     std::vector<GpuTimestampSample> samples;
     std::lock_guard lock(mutex_);
     while (!slots_.empty()) {
         auto& slot = slots_.front();
         if (!slot.submitted || slot.queue_value > completed_queue_value) break;
         std::uint64_t values[2]{};
-        const auto result =
-            api_.get_query_pool_results(device_, query_pool_, slot.query_index, 2, sizeof(values), values,
-                                        sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+        const auto read = [&] {
+            return api_.get_query_pool_results(device_, query_pool_, slot.query_index, 2, sizeof(values),
+                                               values, sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+        };
+        auto result = read();
+        // The slot's queue work completed, so its queries were executed; poll only within the
+        // caller's budget for a driver that publishes results after the queue signal.
+        // ponytail: polls while holding mutex_, delaying concurrent completions by at most ready_wait.
+        const auto deadline = std::chrono::steady_clock::now() + ready_wait;
+        while (result == VK_NOT_READY && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds(20));
+            result = read();
+        }
         if (result == VK_NOT_READY) break;
         if (result != VK_SUCCESS)
             return Error(ErrorCode::TransferFailed, "Reading completed GPU timestamps failed")

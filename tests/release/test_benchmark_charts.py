@@ -208,5 +208,37 @@ class BenchmarkChartTests(unittest.TestCase):
             self.assertIn("Vector elements · problem size", chart)
 
 
+    def test_before_after_summary_uses_median_of_run_medians_and_rejects_mixed_revisions(self):
+        spec = importlib.util.spec_from_file_location("render_ab", ROOT / "tools/kora-bench/render_ab.py")
+        ab = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(ab)
+        names = [name for row in ab.cases() for name in row[2:]]
+
+        def write(directory, stem, revision, scale):
+            data = report([result(name, "host_submit_completion", 1000 * scale, 1500 * scale) for name in names])
+            data["environment"]["source_revision"] = revision
+            path = Path(directory) / f"{stem}.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            return path
+
+        with tempfile.TemporaryDirectory() as directory:
+            before = [write(directory, f"before-{index}", "a" * 40, scale) for index, scale in enumerate((2, 4, 3))]
+            after = [write(directory, f"after-{index}", "b" * 40, 1) for index in range(3)]
+            table = ab.render(before, after, Path(directory) / "charts", "Test GPU")
+            self.assertIn("(3 runs)", table)
+            self.assertIn("| SAXPY | 4K | 3.000 µs | 1.000 µs | -67% (3/3) |", table)
+            self.assertIn("| Vector add | 4M |", table)
+            for kind in ("default", "deferred"):
+                chart = (Path(directory) / "charts" / f"uma-direct-{kind}.svg").read_text()
+                ElementTree.fromstring(chart)
+                self.assertIn("Tiled matmul", chart)
+            mixed = [*after[:2], write(directory, "after-other", "c" * 40, 1)]
+            with self.assertRaisesRegex(ValueError, "same source revision"):
+                ab.render(before, mixed, Path(directory) / "charts", "Test GPU")
+            with self.assertRaisesRegex(ValueError, "paired one-to-one"):
+                ab.render(before, after[:2], Path(directory) / "charts", "Test GPU")
+
+
 if __name__ == "__main__":
     unittest.main()

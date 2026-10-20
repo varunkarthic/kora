@@ -12,6 +12,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- On unified-memory devices, write dirty runtime-buffer inputs and read default-readback outputs
+  through the buffer's mapping instead of staging each transfer and waiting for it, whenever no
+  queued GPU work can access that buffer. On Apple M4/MoltenVK, default-readback dispatches were
+  15–60% faster across 19 matched cases and deferred SAXPY 37–46% faster; deferred vector add with
+  16 MiB buffers was 10–26% slower because direct mapping requires host-visible memory.
+- Classify devices whose memory heaps are all device-local as `Uma` even when they also expose
+  host-invisible memory types, and allocate runtime buffers with the `Auto` memory policy.
+- Read the host shadow through a pinned map when uploading instead of copying it into a temporary
+  vector.
+
+### Added
+- Add `render_ab.py` to summarize interleaved before/after benchmark runs as paired-ratio tables and
+  SVG charts.
+
+### Fixed
+- Report KORA device timestamps that some drivers publish shortly after the queue signal instead of
+  intermittently dropping them; `Runtime::profiling_stats()` now waits up to 2 ms for them.
+
 ## [0.2.21] - 2026-10-20
 
 ### Added

@@ -29,6 +29,8 @@ Status validate_buffer_range(const TransferBuffer& buffer, VkDeviceSize offset, 
     return ok_status();
 }
 
+}  // namespace
+
 Status mapped_memory_operation(const vk::Api& api, VkDevice device, const TransferBuffer& buffer,
                                VkDeviceSize offset, VkDeviceSize size, VkDeviceSize atom_size, bool flush) {
     if (buffer.host_coherent || size == 0) return ok_status();
@@ -65,6 +67,8 @@ Status mapped_memory_operation(const vk::Api& api, VkDevice device, const Transf
             result);
     return ok_status();
 }
+
+namespace {
 
 void record_hazards(const vk::Api& api, VkCommandBuffer command_buffer,
                     const std::vector<vk::BarrierPlan>& plans) {
@@ -163,7 +167,8 @@ Result<std::unique_ptr<TransferEngine>> TransferEngine::create(const vk::Device&
 Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> record,
                                       std::function<Status()> complete, std::optional<StagingSlice> staging,
                                       StagingRing* ring, QueueWait dependency,
-                                      std::function<void(std::uint64_t)> on_submitted) {
+                                      std::function<void(std::uint64_t)> on_submitted,
+                                      std::vector<std::shared_ptr<QueueTimelineUse>> uses) {
     auto work = std::make_shared<Impl::Work>();
     work->staging = staging;
     work->ring = ring;
@@ -254,8 +259,9 @@ Result<Event> TransferEngine::enqueue(std::function<Status(VkCommandBuffer)> rec
         }
         work->submission_processed.store(true, std::memory_order_release);
     };
-    submission.on_complete = [work, promise, complete = std::move(complete)](uint64_t,
-                                                                             Status status) mutable {
+    submission.on_complete = [work, promise, complete = std::move(complete),
+                              pending = std::make_shared<PendingUses>(std::move(uses))](
+                                 uint64_t, Status status) mutable {
         if (!work->submission_processed.exchange(true, std::memory_order_acq_rel)) {
             if (work->staging && work->ring) (void)work->ring->cancel(*work->staging);
         }
@@ -373,7 +379,8 @@ Result<Event> TransferEngine::upload(TransferBuffer destination, VkDeviceSize de
             ? std::function<void(std::uint64_t)>([use = destination.queue_use](std::uint64_t value) {
                   use->transfer_value.store(value, std::memory_order_release);
               })
-            : std::function<void(std::uint64_t)>{});
+            : std::function<void(std::uint64_t)>{},
+        {destination.queue_use});
 }
 
 Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize source_offset,
@@ -455,7 +462,7 @@ Result<Event> TransferEngine::download(TransferBuffer source, VkDeviceSize sourc
         std::memcpy(output.data(), input, output.size());
         return ok_status();
     };
-    return enqueue(std::move(record), std::move(complete), staging, ring, dependency);
+    return enqueue(std::move(record), std::move(complete), staging, ring, dependency, {}, {source.queue_use});
 }
 
 Result<Event> TransferEngine::copy(TransferBuffer source, VkDeviceSize source_offset,
@@ -499,7 +506,8 @@ Result<Event> TransferEngine::copy(TransferBuffer source, VkDeviceSize source_of
         record_hazards(api, command, destination_result.access(vk::AccessKind::ComputeWrite));
         return ok_status();
     };
-    return enqueue(std::move(record), {}, std::nullopt, nullptr);
+    return enqueue(std::move(record), {}, std::nullopt, nullptr, {}, {},
+                   {source.queue_use, destination.queue_use});
 }
 
 Result<Event> TransferEngine::fill(TransferBuffer destination, VkDeviceSize offset, VkDeviceSize size,
@@ -518,7 +526,7 @@ Result<Event> TransferEngine::fill(TransferBuffer destination, VkDeviceSize offs
         record_hazards(api, command, hazards.access(vk::AccessKind::ComputeWrite));
         return ok_status();
     };
-    return enqueue(std::move(record), {}, std::nullopt, nullptr);
+    return enqueue(std::move(record), {}, std::nullopt, nullptr, {}, {}, {destination.queue_use});
 }
 
 }  // namespace kora::detail

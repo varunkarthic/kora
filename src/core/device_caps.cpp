@@ -266,12 +266,20 @@ MemoryClassification DeviceCaps::classify_memory_properties(
         has_local_host_visible |= local && visible;
         has_local_host_invisible |= local && !visible;
     }
+    // A discrete GPU, even with a host-visible BAR window, also exposes a separate system-memory
+    // heap. When every heap is device-local, host-visible and host-invisible types share one
+    // physical pool, so the device is unified regardless of how many types it advertises.
+    const auto heap_count = std::min<std::uint32_t>(memory_properties.memoryHeapCount, VK_MAX_MEMORY_HEAPS);
+    bool has_host_only_heap = false;
+    for (std::uint32_t index = 0; index < heap_count; ++index)
+        has_host_only_heap |=
+            !has_flag(memory_properties.memoryHeaps[index].flags, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
 
-    if (has_local_host_visible && has_local_host_invisible) {
+    if (has_local_host_visible && (!has_local_host_invisible || !has_host_only_heap)) {
+        classification.topology = MemoryTopology::Uma;
+    } else if (has_local_host_visible) {
         classification.topology = MemoryTopology::DiscreteWithBar;
         classification.needs_benchmark = true;
-    } else if (has_local_host_visible) {
-        classification.topology = MemoryTopology::Uma;
     } else if (has_local_host_invisible) {
         classification.topology = MemoryTopology::Discrete;
     }

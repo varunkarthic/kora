@@ -1274,3 +1274,117 @@ TEST(Runtime, RunsCpuFallbackBetweenGpuDispatches) {
     EXPECT_EQ(stats.value().downloads, 2U);  // CPU visibility plus explicit final readback.
 #endif
 }
+
+namespace {
+std::vector<kora::DeviceId> runtime_devices_or_skip() {
+    auto base = kora::Runtime::create();
+    if (!base) return {};
+    return base.value().devices();
+}
+}  // namespace
+
+TEST(Runtime, RewritesInputsBetweenDispatchesWithDefaultAndDeferredReadback) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    const auto devices = runtime_devices_or_skip();
+    if (devices.empty()) KORA_REQUIRE_VULKAN(false);
+    constexpr std::uint32_t count = 4099;  // Not a multiple of the workgroup or atom size.
+    for (const auto& device : devices) {
+        SCOPED_TRACE(testing::Message() << "device " << device.index);
+        kora::RuntimeOptions options;
+        options.device_policy = kora::DevicePolicy::ByIndex;
+        options.device_index = device.index;
+        auto runtime = kora::Runtime::create(options);
+        ASSERT_TRUE(runtime) << runtime.error().describe();
+        auto kernel =
+            runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+        ASSERT_TRUE(kernel) << kernel.error().describe();
+        auto a = runtime.value().create_buffer<std::uint32_t>(count);
+        auto b = runtime.value().create_buffer<std::uint32_t>(count);
+        auto output = runtime.value().create_buffer<std::uint32_t>(count);
+        ASSERT_TRUE(a && b && output);
+        std::vector<std::uint32_t> values_a(count), values_b(count);
+        for (std::uint32_t iteration = 0; iteration < 12; ++iteration) {
+            for (std::uint32_t index = 0; index < count; ++index) {
+                values_a[index] = index * 7U + iteration;
+                values_b[index] = iteration * 1000U;
+            }
+            ASSERT_TRUE(a.value().write(values_a));
+            ASSERT_TRUE(b.value().write(values_b));
+            auto builder = runtime.value()
+                               .dispatch(kernel.value())
+                               .global(count)
+                               .read(a.value())
+                               .read(b.value())
+                               .write(output.value())
+                               .push(count);
+            const bool deferred = iteration % 2 == 1;
+            if (deferred) builder.defer_readback();
+            auto event = builder.submit();
+            ASSERT_TRUE(event) << event.error().describe();
+            ASSERT_TRUE(event.value().wait());
+            if (deferred) {
+                auto readback = runtime.value().readback(output.value());
+                ASSERT_TRUE(readback) << readback.error().describe();
+                ASSERT_TRUE(readback.value().wait());
+            }
+            const auto actual = output.value().read();
+            ASSERT_TRUE(actual) << actual.error().describe();
+            for (std::uint32_t index = 0; index < count; ++index)
+                ASSERT_EQ(actual.value()[index], values_a[index] + values_b[index])
+                    << "iteration " << iteration << ", index " << index;
+        }
+    }
+#endif
+}
+
+TEST(Runtime, InFlightDispatchKeepsInputsSubmittedBeforeALaterHostWrite) {
+#ifndef KORA_VECTOR_ADD_FIXTURE_PATH
+    GTEST_SKIP() << "Install glslangValidator to compile the vector-add fixture";
+#else
+    const auto devices = runtime_devices_or_skip();
+    if (devices.empty()) KORA_REQUIRE_VULKAN(false);
+    constexpr std::uint32_t count = 1U << 20U;
+    for (const auto& device : devices) {
+        SCOPED_TRACE(testing::Message() << "device " << device.index);
+        kora::RuntimeOptions options;
+        options.device_policy = kora::DevicePolicy::ByIndex;
+        options.device_index = device.index;
+        auto runtime = kora::Runtime::create(options);
+        ASSERT_TRUE(runtime) << runtime.error().describe();
+        auto kernel =
+            runtime.value().load_kernel(KORA_VECTOR_ADD_FIXTURE_PATH, "main", vector_add_metadata());
+        ASSERT_TRUE(kernel) << kernel.error().describe();
+        auto a = runtime.value().create_buffer<std::uint32_t>(count);
+        auto b = runtime.value().create_buffer<std::uint32_t>(count);
+        auto first_output = runtime.value().create_buffer<std::uint32_t>(count);
+        auto second_output = runtime.value().create_buffer<std::uint32_t>(count);
+        ASSERT_TRUE(a && b && first_output && second_output);
+        const std::vector<std::uint32_t> first_a(count, 1U), second_a(count, 100U), values_b(count, 10U);
+        ASSERT_TRUE(a.value().write(first_a));
+        ASSERT_TRUE(b.value().write(values_b));
+        const auto submit = [&](const kora::Buffer<std::uint32_t>& output) {
+            return runtime.value()
+                .dispatch(kernel.value())
+                .global(count)
+                .read(a.value())
+                .read(b.value())
+                .write(output)
+                .push(count)
+                .submit();
+        };
+        // The second write happens while the first dispatch may still be queued or running; it must
+        // be ordered behind that dispatch instead of overwriting the bytes it reads.
+        auto first = submit(first_output.value());
+        ASSERT_TRUE(first) << first.error().describe();
+        ASSERT_TRUE(a.value().write(second_a));
+        auto second = submit(second_output.value());
+        ASSERT_TRUE(second) << second.error().describe();
+        ASSERT_TRUE(first.value().wait());
+        ASSERT_TRUE(second.value().wait());
+        EXPECT_EQ(first_output.value().read().value(), std::vector<std::uint32_t>(count, 11U));
+        EXPECT_EQ(second_output.value().read().value(), std::vector<std::uint32_t>(count, 110U));
+    }
+#endif
+}

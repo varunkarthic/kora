@@ -134,6 +134,10 @@ struct DispatchContext {
     vk::QueueContext* transfer_queue = nullptr;
     vk::QueueFamilyPolicy queue_family_policy;
     const vk::Device* device = nullptr;
+    // Unified memory: host-visible runtime buffers are written and read through their mapping
+    // whenever no queued GPU operation can access them, instead of through staged transfers.
+    bool direct_host_access = false;
+    VkDeviceSize non_coherent_atom_size = 1;
     std::mutex submit_mutex;
     detail::EvictionPolicy eviction_policy;
     std::uint64_t access_tick = 0;
@@ -492,9 +496,9 @@ struct Runtime::Impl {
             detail::TransferEngine::Options transfer_options;
             transfer_options.queue_family = queue_family_policy.transfer_family;
             transfer_options.cross_queue_concurrent = queue_family_policy.uses_concurrent_sharing();
-            // The runtime may select a device-local, non-host-visible pool even on UMA devices.
-            // Use staging for this API until buffer placement and measured direct-map eligibility
-            // are selected per allocation.
+            // Keep staging rings on every topology. Unified-memory contexts bypass them per buffer
+            // (see DispatchContext::direct_host_access) and fall back to them while a buffer still
+            // has queued GPU work or has no host mapping.
             transfer_options.topology = MemoryTopology::Discrete;
             transfer_options.non_coherent_atom_size =
                 std::max<VkDeviceSize>(memory.properties.limits.nonCoherentAtomSize, 1);
@@ -522,6 +526,8 @@ struct Runtime::Impl {
             dispatch->queue = queue.get();
             dispatch->transfer_queue = transfer_queue;
             dispatch->queue_family_policy = queue_family_policy;
+            dispatch->direct_host_access = info.memory_topology() == MemoryTopology::Uma;
+            dispatch->non_coherent_atom_size = transfer_options.non_coherent_atom_size;
             const auto compute_family = queue_family_policy.compute_family;
             if (compute_family < info.queue_families().size()) {
                 const auto valid_bits = info.queue_families()[compute_family].timestamp_valid_bits;
@@ -830,7 +836,27 @@ struct Runtime::Impl {
 namespace {
 Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<detail::DispatchContext>& context,
                                                       const BufferHandle& handle, VkBufferUsageFlags usage);
+
+// Copies a completed device result from a mapped allocation into the host shadow. The caller
+// guarantees the producing work completed with a shader-write to host-read barrier and that no
+// other queued work can access the buffer.
+Status read_mapped_output(const std::shared_ptr<detail::DispatchContext>& context,
+                          const detail::TransferBuffer& output, const BufferHandle& handle,
+                          std::uint64_t expected_host_version) {
+    auto invalidated =
+        detail::mapped_memory_operation(context->device->api(), context->device->handle(), output, 0,
+                                        output.size, context->non_coherent_atom_size, false);
+    if (!invalidated) return invalidated;
+    const auto bytes = std::span<const std::byte>(output.mapped_data, static_cast<std::size_t>(output.size));
+    auto copied = handle.write_bytes_if_version(bytes, expected_host_version);
+    if (!copied) return std::move(copied).error();
+    context->download_count.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard lock(context->submit_mutex);
+    if (copied.value().written) context->resident_host_versions[handle.id()] = copied.value().host_version;
+    context->device_newer_buffers.erase(handle.id());
+    return ok_status();
 }
+}  // namespace
 
 Result<Event> DispatchBuilder::submit() {
     const auto host_submit_started = std::chrono::steady_clock::now();
@@ -1030,27 +1056,51 @@ Result<Event> DispatchBuilder::submit() {
         }
         if (accesses_[i] == KernelAccess::Write || device_copy_current) continue;
 
-        Result<std::vector<std::byte>> contents =
-            Error(ErrorCode::InternalInvariantViolation, "host snapshot was not captured");
-        for (int attempt = 0; attempt < 3; ++attempt) {
+        // A mapped buffer with no queued or executing GPU use can take the host bytes directly;
+        // vkQueueSubmit makes host writes made before it visible to the device. Anything else
+        // keeps the staged upload, which is ordered behind earlier work on the queue.
+        const auto& target = vk_buffers[i];
+        const bool direct = context_->direct_host_access && target.host_visible &&
+                            target.mapped_data != nullptr && target.queue_use &&
+                            target.queue_use->pending.load(std::memory_order_acquire) == 0;
+        const auto transfer_started = std::chrono::steady_clock::now();
+        std::optional<Event> uploaded;
+        Status copied = Error(ErrorCode::StaleHandle, "host buffer changed while preparing an upload");
+        for (int attempt = 0; attempt < 3 && !copied; ++attempt) {
             version = buffers_[i].host_version();
             if (!version) return std::move(version).error();
-            contents = buffers_[i].read_bytes();
-            if (!contents) return std::move(contents).error();
+            {
+                auto shadow = buffers_[i].map(MapAccess::Read);
+                if (!shadow) return std::move(shadow).error();
+                const auto bytes = std::span<const std::byte>(shadow.value().data(), shadow.value().size());
+                if (direct) {
+                    std::memcpy(target.mapped_data, bytes.data(), bytes.size());
+                } else {
+                    auto staged = context_->transfers->upload(target, 0, bytes);
+                    if (!staged) return std::move(staged).error();
+                    uploaded = std::move(staged).value();
+                }
+            }
             const auto after = buffers_[i].host_version();
             if (!after) return std::move(after).error();
+            if (uploaded) {
+                // The staging copy already captured the bytes; wait before deciding to retry.
+                auto upload_status = uploaded->wait();
+                if (!upload_status) return std::move(upload_status).error();
+                uploaded.reset();
+            }
             if (after.value() == version.value()) {
                 bound_host_versions[i] = version.value();
-                break;
+                copied = ok_status();
             }
-            contents = Error(ErrorCode::StaleHandle, "host buffer changed while preparing an upload");
         }
-        if (!contents) return std::move(contents).error();
-        const auto transfer_started = std::chrono::steady_clock::now();
-        auto uploaded = context_->transfers->upload(vk_buffers[i], 0, contents.value());
-        if (!uploaded) return std::move(uploaded).error();
-        auto upload_status = uploaded.value().wait();
-        if (!upload_status) return std::move(upload_status).error();
+        if (!copied) return std::move(copied).error();
+        if (direct) {
+            auto flushed =
+                detail::mapped_memory_operation(context_->device->api(), context_->device->handle(), target,
+                                                0, target.size, context_->non_coherent_atom_size, true);
+            if (!flushed) return std::move(flushed).error();
+        }
         const auto transfer_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now() - transfer_started)
                                           .count();
@@ -1155,8 +1205,15 @@ Result<Event> DispatchBuilder::submit() {
         submission.wait_stages.push_back(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         submission.wait_values.push_back(transfer_wait_value);
     }
+    // Only a dispatch whose outputs are read back pays for the host-read barrier; it can stall
+    // the queue on some drivers, so deferred dispatches leave outputs to an explicit readback.
+    const bool host_read_barrier = context_->direct_host_access && !defer_readback_;
+    for (std::size_t index = 0; index < accesses_.size(); ++index)
+        if (accesses_[index] != KernelAccess::Read && (*bound_buffers)[index].queue_use)
+            (*bound_buffers)[index].queue_use->host_readable.store(host_read_barrier,
+                                                                   std::memory_order_release);
     submission.record_commands = [ctx, pipeline_ref, bound_buffers, push_constants, groups_copy, work,
-                                  record_status, allocated_descriptors](
+                                  record_status, allocated_descriptors, host_read_barrier](
                                      std::uint64_t submission_id, std::vector<VkCommandBuffer>& commands) {
         std::lock_guard lock(ctx->submit_mutex);
         const auto command_acquire_started = ctx->phase_profile_enabled
@@ -1228,6 +1285,13 @@ Result<Event> DispatchBuilder::submit() {
             api.cmd_push_constants(command.value(), pipeline_ref->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    static_cast<std::uint32_t>(push_constants.size()), push_constants.data());
         api.cmd_dispatch(command.value(), groups_copy[0], groups_copy[1], groups_copy[2]);
+        if (host_read_barrier) {
+            // Make shader writes available to host reads of the mapping once the queue completes.
+            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+                                    VK_ACCESS_HOST_READ_BIT};
+            api.cmd_pipeline_barrier(command.value(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        }
         if (ctx->timestamps && work->timestamp_recorded)
             ctx->timestamps->record_end(command.value(), submission_id);
         auto ended = ctx->command_pool->end_recording(command.value());
@@ -1288,9 +1352,13 @@ Result<Event> DispatchBuilder::submit() {
             work->observation.device_completion_wait_nanoseconds = device_wait;
         };
     }
+    std::vector<std::shared_ptr<detail::QueueTimelineUse>> buffer_uses;
+    buffer_uses.reserve(bound_buffers->size());
+    for (const auto& buffer : *bound_buffers) buffer_uses.push_back(buffer.queue_use);
+    auto pending_uses = std::make_shared<detail::PendingUses>(std::move(buffer_uses));
     submission.on_complete = [promise, ctx, work, pipeline_ref, allocated_descriptors, bound_buffers,
                               bound_handles = buffers_, accesses = accesses_, written_buffers,
-                              bound_host_versions,
+                              bound_host_versions, pending_uses,
                               defer_readback = defer_readback_](std::uint64_t compute_value, Status status) {
         const auto completion_callback_started = ctx->phase_profile_enabled
                                                      ? std::chrono::steady_clock::now()
@@ -1374,6 +1442,19 @@ Result<Event> DispatchBuilder::submit() {
             std::vector<std::size_t> output_indices;
             for (std::size_t index = 0; index < accesses.size(); ++index) {
                 if (accesses[index] == KernelAccess::Read) continue;
+                const auto& output = (*bound_buffers)[index];
+                // This submission still counts as a pending use, so other queued work is the only
+                // thing that can make a direct copy unsafe.
+                if (ctx->direct_host_access && output.host_visible && output.mapped_data != nullptr &&
+                    output.queue_use && output.queue_use->pending.load(std::memory_order_acquire) == 1) {
+                    auto copied =
+                        read_mapped_output(ctx, output, bound_handles[index], bound_host_versions[index]);
+                    if (!copied) {
+                        status = std::move(copied);
+                        break;
+                    }
+                    continue;
+                }
                 auto& contents = (*readback_contents)[index];
                 contents.resize(static_cast<std::size_t>((*bound_buffers)[index].size));
                 detail::QueueWait dependency;
@@ -1536,7 +1617,7 @@ Result<detail::TransferBuffer> ensure_transfer_buffer(const std::shared_ptr<deta
                                                          "physical-device memory properties are unavailable"))
                            : detail::MemoryManager::select_memory_type(
                                  context->info->memory_types(), context->info->memory_type_preferences(),
-                                 detail::MemoryPolicy::DevicePreferred, requirements.memoryTypeBits);
+                                 detail::MemoryPolicy::Auto, requirements.memoryTypeBits);
     if (!memory_type) {
         context->device->api().destroy_buffer(context->device->handle(), buffer, nullptr);
         return std::move(memory_type).error();
@@ -2392,7 +2473,8 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
     if (dispatch->timestamps) {
         const auto completed = dispatch->queue->completed_value();
         if (!completed) return std::move(completed).error();
-        auto collected = dispatch->timestamps->collect(completed.value());
+        // Diagnostics may wait briefly for results a driver publishes after the queue signal.
+        auto collected = dispatch->timestamps->collect(completed.value(), std::chrono::milliseconds(2));
         if (!collected) return std::move(collected).error();
         detail::observe_autotune_samples(dispatch, collected.value(), impl_->performance_database,
                                          impl_->performance_database_path);
@@ -2703,6 +2785,15 @@ Result<Event> Runtime::readback(const BufferHandle& buffer, const DeviceId& devi
     }
     auto device_buffer = ensure_transfer_buffer(context, buffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     if (!device_buffer) return std::move(device_buffer).error();
+    const auto& mapped = device_buffer.value();
+    if (context->direct_host_access && mapped.host_visible && mapped.mapped_data != nullptr &&
+        mapped.queue_use && mapped.queue_use->pending.load(std::memory_order_acquire) == 0 &&
+        mapped.queue_use->host_readable.load(std::memory_order_acquire)) {
+        // The producing dispatch completed with a host-read barrier, so copy without a transfer.
+        auto copied = read_mapped_output(context, mapped, buffer, host_version.value());
+        if (!copied) return std::move(copied).error();
+        return Event::when_all(std::span<const Event>{});
+    }
     auto info = buffer.info();
     if (!info) return std::move(info).error();
     auto contents =
