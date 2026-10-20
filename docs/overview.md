@@ -15,10 +15,14 @@ implemented services include:
 - profiling, traces, recovery, and diagnostic tools;
 - a C++ API and an optional Python binding for its documented subset.
 
-Automatic graph execution and scheduler-driven device placement are not implied by those interfaces:
-task graphs currently build dependency plans for caller callbacks, and kernels are bound to a device
-when created. Consult [Architecture](architecture.md) and [Multiple devices](multi-gpu.md) for those
-boundaries. This documentation distinguishes available runtime behavior from optional capabilities
+- `kora::Cluster`, which places each dispatch on the fastest measured local GPU or remote worker,
+  can split large elementwise dispatches across devices, and keeps working when a device or worker
+  is unplugged. `kora-top` shows its activity live.
+
+Automatic graph execution is not implied by those interfaces: task graphs build dependency plans
+for caller callbacks, and a `Runtime` kernel is bound to a device when it is created (use `Cluster`
+for automatic placement). Consult [Architecture](architecture.md), [Multiple devices](multi-gpu.md),
+and [Multi-device, remote workers, and hot-swap](cluster.md) for those boundaries. This documentation distinguishes available runtime behavior from optional capabilities
 and unimplemented integration work.
 
 ## Portability model

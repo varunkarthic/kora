@@ -1,40 +1,70 @@
-# KORA documentation
+# KORA
 
-<div align="center">
+**A vendor-neutral C++20 runtime for Vulkan compute, from one GPU to several devices you can plug
+in and out.**
 
-**A C++20 runtime for explicit CPU and Vulkan compute.**
+KORA turns explicit Vulkan compute into buffers, kernels, and events. It keeps a host copy of every
+buffer authoritative, so a dispatch can run on any local GPU or a remote `kora-worker`. A device can
+disappear mid-stream without losing or corrupting results.
 
-Build, integrate, measure, and diagnose KORA with behavior-focused guides and API references.
+[Get started](getting-started.md) · [Platform support](platform-support.md) ·
+[API reference](api/runtime.md) · [Releases](releases.md) ·
+[GitHub](https://github.com/varunkarthic/kora)
 
-[Get started](getting-started.md) · [Platform support](platform-support.md) · [API reference](api/runtime.md) · [Releases](releases.md)
+::::{grid} 1 2 3 3
+:gutter: 3
 
-</div>
+:::{grid-item-card} Get started
+:link: getting-started
+:link-type: doc
 
-```{mermaid}
-flowchart LR
-    A[Choose a goal] --> B{What do you need?}
-    B -->|Try KORA| C[Install or build]
-    B -->|Integrate| D[Select device and load kernel]
-    B -->|Understand| E[Architecture and invariants]
-    B -->|Measure| F[Profile and benchmark]
-    C --> G[Run tests and inspect devices]
-    D --> H[Manage buffers and dispatch]
-    E --> I[Trace, debug, recover]
-    F --> J[Compare timing domains]
-```
+Build without a GPU, run the tests, and list your devices with `kora-info`.
+:::
 
-## Start with your task
+:::{grid-item-card} Multi-device and hot-swap
+:link: cluster
+:link-type: doc
 
-| Your goal | Recommended path | What you will get |
-| --- | --- | --- |
-| Build KORA and run a first check | [Getting started](getting-started.md) → [Building](building.md) → [Testing](testing.md) | A local build, test results, and a capability report from `kora-info` |
-| Add KORA to a CMake application | [Getting started](getting-started.md) → [Runtime API](api/runtime.md) | `find_package(kora CONFIG)` integration and explicit dispatch contracts |
-| Choose CPU or a Vulkan device | [Platform support](platform-support.md) → [Device selection](device-selection.md) → [CPU executor](cpu-executor.md) | Capability-aware choices and platform limitations |
-| Load a kernel and move data | [Kernel format](kernel-format.md) → [Memory model](memory-model.md) → [Runtime API](api/runtime.md) | SPIR-V package requirements, buffer ownership, and execution flow |
-| Understand system behavior | [Architecture](architecture.md) → [Invariants](internals/invariants.md) | Component boundaries, synchronization, and lifetime rules |
-| Explain a performance result | [Profiling](profiling.md) → [Benchmarking](benchmarking.md) | Reproducible commands and clearly separated timing domains |
-| Diagnose a failure or device loss | [Debugging](debugging.md) → [Recovery](recovery.md) | Structured errors, diagnostic evidence, and recovery boundaries |
-| Check release maturity or install an archive | [Releases and packages](releases.md) | Beta/Stable meaning, platform assets, setup, and verification |
+Route dispatches across every local GPU and remote workers, split large ones, and survive unplugs.
+:::
+
+:::{grid-item-card} Watch it live
+:link: tools/kora-top
+:link-type: doc
+
+`kora-top` shows detected devices, where work is going, memory, and failovers as they happen.
+:::
+
+:::{grid-item-card} Memory model
+:link: memory-model
+:link-type: doc
+
+Host shadows, device replicas, staging, deferred readback, and when bytes actually move.
+:::
+
+:::{grid-item-card} Benchmarks
+:link: benchmarking
+:link-type: doc
+
+Interleaved, reproducible measurements against raw Vulkan, Metal, OpenCL, and OpenGL.
+:::
+
+:::{grid-item-card} API reference
+:link: api/runtime
+:link-type: doc
+
+Runtime, buffers, events, kernels, errors, and the throwing `checked` layer.
+:::
+::::
+
+## Measured, not claimed
+
+Host-observed latency of the same compute kernels on one Apple M4 through KORA, raw Vulkan, Metal,
+OpenCL, and OpenGL. The chart is generated from the retained JSON reports by
+`tools/kora-bench/render_competitors.py`. See [the comparison](benchmark-competitors.md) for the
+method, the per-size tables, and where KORA is slower.
+
+![KORA, raw Vulkan, Metal, OpenCL, and OpenGL host latency on Apple M4](../benchmarks/charts/competitors-host.svg)
 
 ## Quick start
 
@@ -61,32 +91,70 @@ KORA is pre-1.0. The documented API surface may evolve between minor versions. P
 production projects and review its release notes before upgrading.
 :::
 
-## Browse the handbook
+## How to read performance results
+
+Benchmark observations are specific to a named device, driver, OS, compiler, build, and workload.
+CPU arithmetic, host submit/completion, and device timestamp measurements are separate domains;
+they are not interchangeable measures of “GPU speed.” Software Vulkan is useful for correctness
+coverage but is not a hardware-GPU result. The [benchmark guide](benchmarking.md) documents the
+methodology and limitations; retained charts and tables are generated from machine-readable reports.
+
+---
+
+This handbook is published on [Read the Docs](https://kora.readthedocs.io/en/latest/) and maintained
+alongside the [KORA source repository](https://github.com/varunkarthic/kora).
 
 ```{toctree}
+:hidden:
 :maxdepth: 1
-:caption: Build and try
+:caption: Getting started
 
 overview
 platform-support
 getting-started
 building
 testing
+configuration
 ```
 
 ```{toctree}
+:hidden:
 :maxdepth: 1
-:caption: Integrate and use
+:caption: Guides
 
-configuration
 device-selection
 memory-model
 task-graph
 cpu-executor
 multi-gpu
 cluster
+tools/kora-top
+tools/kora-info
 kernel-format
 python-api
+debugging
+recovery
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Performance
+
+benchmarking
+benchmark-competitors
+benchmark-compute-results
+profiling
+calibration
+autotuning
+scheduler
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: API reference
+
 api/runtime
 api/options
 api/buffer
@@ -100,27 +168,13 @@ api/checked
 ```
 
 ```{toctree}
+:hidden:
 :maxdepth: 1
-:caption: Design, diagnostics, and performance
+:caption: Internals
 
 architecture
 internals/invariants
 synchronization
-profiling
-calibration
-autotuning
-scheduler
-benchmarking
-benchmark-compute-results
-benchmark-competitors
-debugging
-recovery
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Internals and operations
-
 internals/core
 internals/checked-arithmetic
 internals/vulkan-backend
@@ -142,23 +196,15 @@ internals/spirv
 internals/pipelines
 internals/aliasing
 internals/performance-db
-ci-cd
-releases
-security
-maintenance
-tools/kora-info
-tools/kora-top
 ```
 
-## How to read performance results
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Project
 
-Benchmark observations are specific to a named device, driver, OS, compiler, build, and workload.
-CPU arithmetic, host submit/completion, and device timestamp measurements are separate domains;
-they are not interchangeable measures of “GPU speed.” Software Vulkan is useful for correctness
-coverage but is not a hardware-GPU result. The [benchmark guide](benchmarking.md) documents the
-methodology and limitations; retained charts and tables are generated from machine-readable reports.
-
----
-
-This handbook is published on [Read the Docs](https://kora.readthedocs.io/en/latest/) and maintained
-alongside the [KORA source repository](https://github.com/varunkarthic/kora).
+releases
+ci-cd
+security
+maintenance
+```
