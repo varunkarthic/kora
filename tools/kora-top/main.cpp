@@ -22,6 +22,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN  // Keeps out rpcndr.h, which defines `small` as a macro.
+#endif
 #include <io.h>
 #include <windows.h>
 #else
@@ -138,7 +141,8 @@ std::string bar(double fraction, int width, const Style& style, const char* colo
     fraction = std::clamp(fraction, 0.0, 1.0);
     const int filled = static_cast<int>(fraction * width + 0.5);
     std::string full, empty;
-    for (int i = 0; i < width; ++i) (i < filled ? full : empty) += i < filled ? "\u2588" : "\u2591";
+    for (int i = 0; i < width; ++i)
+        (i < filled ? full : empty) += i < filled ? "\xE2\x96\x88" : "\xE2\x96\x91";
     if (!style.on) return full + empty;
     return style(color, full) + style("2", empty);
 }
@@ -314,15 +318,26 @@ int attach(
 
 // --- Demo ---------------------------------------------------------------------------------------
 
-std::unique_ptr<kora::WorkerServer> start_worker(std::uint16_t port) {
+// Starts a loopback worker, retrying briefly while a previous instance releases the port.
+kora::Result<std::unique_ptr<kora::WorkerServer>> start_worker(std::uint16_t port) {
     kora::WorkerOptions options;
     options.listen = "127.0.0.1:" + std::to_string(port);
     options.runtime.log_level = kora::log::Level::Off;
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        if (auto server = kora::WorkerServer::start(options)) return std::move(server).value();
+    for (int attempt = 0;; ++attempt) {
+        auto server = kora::WorkerServer::start(options);
+        if (server || attempt == 99 || server.error().code == kora::ErrorCode::NoVulkanImplementation ||
+            server.error().code == kora::ErrorCode::NoEligibleDevice)
+            return server;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    return nullptr;
+}
+
+int exit_code_for(const kora::Error& error) {
+    // 77 tells CTest the demo was skipped because this machine has no usable Vulkan device.
+    return error.code == kora::ErrorCode::NoVulkanImplementation ||
+                   error.code == kora::ErrorCode::NoEligibleDevice
+               ? 77
+               : 1;
 }
 
 struct DemoParams {
@@ -334,10 +349,15 @@ struct DemoParams {
 int run_demo(Args args) {
     // Two loopback workers stand in for attached devices; the control thread unplugs and replugs
     // them while a workload runs, and every result is checked against the expected value.
-    std::unique_ptr<kora::WorkerServer> workers[2] = {start_worker(0), start_worker(0)};
-    if (!workers[0] || !workers[1]) {
-        std::cerr << "kora-top --demo: could not start loopback workers\n";
-        return 1;
+    std::unique_ptr<kora::WorkerServer> workers[2];
+    for (auto& worker : workers) {
+        auto started = start_worker(0);
+        if (!started) {
+            std::cerr << "kora-top --demo: could not start a loopback worker: " << started.error().describe()
+                      << '\n';
+            return exit_code_for(started.error());
+        }
+        worker = std::move(started).value();
     }
     const std::uint16_t ports[2] = {workers[0]->port(), workers[1]->port()};
     workers[1].reset();  // Worker B starts unplugged.
@@ -353,10 +373,7 @@ int run_demo(Args args) {
     auto cluster = kora::Cluster::create(options);
     if (!cluster) {
         std::cerr << "kora-top --demo: " << cluster.error().describe() << '\n';
-        const auto code = cluster.error().code;
-        return code == kora::ErrorCode::NoVulkanImplementation || code == kora::ErrorCode::NoEligibleDevice
-                   ? 77
-                   : 1;
+        return exit_code_for(cluster.error());
     }
     kora::KernelMetadata metadata;
     metadata.kernel_id = "demo.saxpy";
@@ -378,16 +395,16 @@ int run_demo(Args args) {
     std::mutex schedule_mutex;
     std::string next_change;
     std::thread workload([&] {
-        constexpr std::uint32_t small = 4'096, large = 1U << 20U;
-        auto x_small = cluster.value().create_buffer<float>(small);
-        auto y_small = cluster.value().create_buffer<float>(small);
-        auto x_large = cluster.value().create_buffer<float>(large);
-        auto y_large = cluster.value().create_buffer<float>(large);
+        constexpr std::uint32_t small_count = 4'096, large_count = 1U << 20U;
+        auto x_small = cluster.value().create_buffer<float>(small_count);
+        auto y_small = cluster.value().create_buffer<float>(small_count);
+        auto x_large = cluster.value().create_buffer<float>(large_count);
+        auto y_large = cluster.value().create_buffer<float>(large_count);
         if (!x_small || !y_small || !x_large || !y_large ||
-            !x_small.value().write(std::vector<float>(small, 1.0F)) ||
-            !y_small.value().write(std::vector<float>(small, 0.0F)) ||
-            !x_large.value().write(std::vector<float>(large, 1.0F)) ||
-            !y_large.value().write(std::vector<float>(large, 0.0F))) {
+            !x_small.value().write(std::vector<float>(small_count, 1.0F)) ||
+            !y_small.value().write(std::vector<float>(small_count, 0.0F)) ||
+            !x_large.value().write(std::vector<float>(large_count, 1.0F)) ||
+            !y_large.value().write(std::vector<float>(large_count, 0.0F))) {
             mismatches.fetch_add(1);
             return;
         }
@@ -401,17 +418,17 @@ int run_demo(Args args) {
         for (std::uint64_t round = 0; !stop.load(); ++round) {
             auto first = cluster.value()
                              .dispatch(kernel.value())
-                             .global(small)
+                             .global(small_count)
                              .read(x_small.value())
                              .read_write(y_small.value())
-                             .push(DemoParams{2.0F, small, 0})
+                             .push(DemoParams{2.0F, small_count, 0})
                              .submit();
             auto second = cluster.value()
                               .dispatch(kernel.value())
-                              .global(large)
+                              .global(large_count)
                               .read(x_large.value())
                               .read_write(y_large.value())
-                              .push(DemoParams{2.0F, large, 0})
+                              .push(DemoParams{2.0F, large_count, 0})
                               .split(sizeof(float))
                               .submit();
             if (!first || !second || !first.value().wait() || !second.value().wait()) {
@@ -449,10 +466,12 @@ int run_demo(Args args) {
                 while (!stop.load() && Clock::now() < when)
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 if (stop.load()) return;
-                if (step.plug)
-                    workers[step.worker] = start_worker(ports[step.worker]);
-                else
+                if (step.plug) {
+                    if (auto started = start_worker(ports[step.worker]))
+                        workers[step.worker] = std::move(started).value();
+                } else {
                     workers[step.worker].reset();
+                }
             }
         }
     });
