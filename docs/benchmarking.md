@@ -96,11 +96,11 @@ per-sample values and environment metadata, is
 [available](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json).
 That report is the pre-#227 baseline. The side-by-side tables in
 [the generated comparison page](benchmark-compute-results.md) and the chart below are rendered from
-the post-#227 report at 8ca0de7 by [`render_comparison.py`](../tools/kora-bench/render_comparison.py)
+the latest report (source 0a71f8c, after #227, #231, #235, and #232) by [`render_comparison.py`](../tools/kora-bench/render_comparison.py)
 and [`render_charts.py`](../tools/kora-bench/render_charts.py). Regenerate them after a new run with:
 
 ```sh
-R=benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json
+R=benchmarks/results/macos-arm64-apple-m4-moltenvk-snapshot-1000x50-0a71f8c.json
 python3 tools/kora-bench/render_comparison.py "$R" \
   --sizes 4096 65536 1048576 4194240 > docs/benchmark-compute-results.md
 python3 tools/kora-bench/render_charts.py "$R"
@@ -529,7 +529,7 @@ remain inspectable.
 ### Visual comparison and methodology
 
 The following plots and the table below are generated from the retained 1,000-sample, 50-warm-up
-report taken after #227 (source 8ca0de7); they are not hand-transcribed. The 100-sample table in the
+report at source 0a71f8c (after #227, #231, #235, and #232); they are not hand-transcribed. The 100-sample table in the
 previous section is the original reference run and is kept for history. The vertical latency axis is logarithmic, with units chosen for the range shown in
 each panel. Lines and dots show the median (p50); whiskers extend to the nearest-rank p95. The raw
 samples remain in the linked JSON report. A missing KORA timestamp is a gap because that timer result
@@ -551,7 +551,7 @@ Regenerate the visualizations from the checked-in report with:
 
 ```sh
 python3 tools/kora-bench/render_charts.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-snapshot-1000x50-0a71f8c.json \
   --output-dir benchmarks/charts
 ```
 
@@ -564,15 +564,15 @@ sample count before comparing implementations.
 
 | Elements | CPU median | CPU p95 | KORA default median | KORA default p95 | KORA deferred median | KORA deferred p95 | Raw host median | Raw host p95 | KORA GPU median | KORA GPU p95 | Raw GPU median | Raw GPU p95 |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4096 | 2.083 µs | 2.125 µs | 1.264 ms | 1.619 ms | 268.416 µs | 303.750 µs | 260.459 µs | 301.958 µs | 12.834 µs | 15.667 µs | 12.417 µs | 13.291 µs |
-| 1048576 | 563.166 µs | 573.667 µs | 2.046 ms | 2.333 ms | 1.129 ms | 1.282 ms | 1.247 ms | 1.385 ms | 416.417 µs | 632.042 µs | 582.916 µs | 645.708 µs |
-| 4194240 | 2.243 ms | 2.328 ms | 2.670 ms | 3.341 ms | 1.790 ms | 2.092 ms | 1.847 ms | 2.109 ms | 1.240 ms | 1.414 ms | 1.239 ms | 1.406 ms |
+| 4096 | 2.084 µs | 2.166 µs | 749.334 µs | 1.223 ms | 344.500 µs | 398.292 µs | 457.417 µs | 547.209 µs | 22.708 µs | 26.333 µs | 22.791 µs | 29.250 µs |
+| 1048576 | 566.291 µs | 730.584 µs | 1.035 ms | 1.838 ms | 1.140 ms | 1.275 ms | 454.958 µs | 757.208 µs | 570.209 µs | 620.708 µs | 127.583 µs | 130.917 µs |
+| 4194240 | 2.303 ms | 4.771 ms | 1.666 ms | 2.196 ms | 1.803 ms | 2.011 ms | 958.958 µs | 2.041 ms | 1.055 ms | 1.358 ms | 583.958 µs | 1.279 ms |
 
 Regenerate the comparison rows from the retained raw report with:
 
 ```sh
 python3 tools/kora-bench/render_comparison.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json \
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-snapshot-1000x50-0a71f8c.json \
   --sizes 4096 1048576 4194240
 ```
 
@@ -718,9 +718,9 @@ python3 tools/kora-bench/render_ab.py --before before-*.json --after after-*.jso
 ```
 
 All 30 retained reports are in
-[`benchmarks/results/issue227-uma-direct/`](https://github.com/varunkarthic/kora/tree/main/benchmarks/results/issue227-uma-direct). The
-regenerated snapshot charts and [comparison tables](benchmark-compute-results.md) come from a separate
-1,000-sample/50-warm-up report at 8ca0de7,
+[`benchmarks/results/issue227-uma-direct/`](https://github.com/varunkarthic/kora/tree/main/benchmarks/results/issue227-uma-direct). At the time
+of #227 the snapshot charts and [comparison tables](benchmark-compute-results.md) came from a separate
+1,000-sample/50-warm-up report at 8ca0de7 (they have since been regenerated from later reports),
 [retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-8ca0de7.json).
 
 (issue-235-timestamps-on-demand)=

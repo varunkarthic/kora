@@ -99,3 +99,16 @@ if(KORA_BENCH_GLSLANG_VALIDATOR)
   install(FILES ${KORA_BENCH_STENCIL} DESTINATION ${CMAKE_INSTALL_DATADIR}/kora/benchmarks)
 endif()
 install(TARGETS kora-bench RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Optional comparison against other macOS compute paths. It never links the kora library, so the
+# vendor-specific frameworks stay out of KORA itself.
+if(APPLE AND KORA_BUILD_COMPETITOR_BENCH)
+  enable_language(OBJCXX)
+  add_executable(competitor-bench competitor-bench/main.mm)
+  set_target_properties(competitor-bench PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+  target_compile_options(competitor-bench PRIVATE -fobjc-arc)
+  target_compile_definitions(competitor-bench PRIVATE
+    "COMPETITOR_BENCH_SOURCE_REVISION=\"${KORA_BENCH_SOURCE_REVISION}\"")
+  target_link_libraries(competitor-bench PRIVATE "-framework Foundation" "-framework Metal" "-framework OpenCL"
+    "-framework OpenGL" "-framework Accelerate")
+endif()
