@@ -84,6 +84,7 @@ memory-model
 task-graph
 cpu-executor
 multi-gpu
+cluster
 kernel-format
 python-api
 api/runtime

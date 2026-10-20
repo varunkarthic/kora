@@ -153,19 +153,30 @@ Socket::~Socket() {
     close();
 }
 Socket::Socket(Socket&& other) noexcept
-    : handle_(std::exchange(other.handle_, kInvalid)), peer_loopback_(other.peer_loopback_) {}
+    : handle_(other.handle_.exchange(kInvalid)), peer_loopback_(other.peer_loopback_) {}
 Socket& Socket::operator=(Socket&& other) noexcept {
     if (this != &other) {
         close();
-        handle_ = std::exchange(other.handle_, kInvalid);
+        handle_.store(other.handle_.exchange(kInvalid));
         peer_loopback_ = other.peer_loopback_;
     }
     return *this;
 }
 
+void Socket::interrupt() noexcept {
+    const auto handle = handle_.load(std::memory_order_acquire);
+    if (handle == kInvalid) return;
+#ifdef _WIN32
+    ::shutdown(static_cast<NativeHandle>(handle), SD_BOTH);
+#else
+    ::shutdown(static_cast<NativeHandle>(handle), SHUT_RDWR);
+#endif
+}
+
 void Socket::close() noexcept {
-    if (handle_ == kInvalid) return;
-    const auto handle = static_cast<NativeHandle>(std::exchange(handle_, kInvalid));
+    const auto stored = handle_.exchange(kInvalid);
+    if (stored == kInvalid) return;
+    const auto handle = static_cast<NativeHandle>(stored);
 #ifdef _WIN32
     ::shutdown(handle, SD_BOTH);
 #else
@@ -236,14 +247,14 @@ Result<Socket> Socket::listen(const Endpoint& endpoint) {
 
 Result<Socket> Socket::accept(std::chrono::milliseconds timeout) {
     if (!valid()) return Error(ErrorCode::InvalidArgument, "listening socket is closed");
-    auto ready =
-        wait_for(static_cast<NativeHandle>(handle_), POLLIN, std::chrono::steady_clock::now() + timeout);
+    auto ready = wait_for(static_cast<NativeHandle>(handle_.load()), POLLIN,
+                          std::chrono::steady_clock::now() + timeout);
     if (!ready) return std::move(ready).error();
     if (!ready.value()) return Socket{};
     sockaddr_storage address{};
     socklen_t length = sizeof(address);
     const auto handle =
-        ::accept(static_cast<NativeHandle>(handle_), reinterpret_cast<sockaddr*>(&address), &length);
+        ::accept(static_cast<NativeHandle>(handle_.load()), reinterpret_cast<sockaddr*>(&address), &length);
     if (handle == static_cast<NativeHandle>(kInvalid)) {
         if (would_block(last_error())) return Socket{};
         return io_error("accept failed");
@@ -259,14 +270,14 @@ Status Socket::send_all(std::span<const std::byte> bytes, std::chrono::milliseco
         if (!valid()) return Error(ErrorCode::IoError, "connection closed");
         const auto chunk = std::min<std::size_t>(bytes.size() - sent, 1U << 30U);
         const auto result =
-            ::send(static_cast<NativeHandle>(handle_), reinterpret_cast<const char*>(bytes.data() + sent),
-                   static_cast<int>(chunk), kSendFlags);
+            ::send(static_cast<NativeHandle>(handle_.load()),
+                   reinterpret_cast<const char*>(bytes.data() + sent), static_cast<int>(chunk), kSendFlags);
         if (result > 0) {
             sent += static_cast<std::size_t>(result);
             continue;
         }
         if (result < 0 && would_block(last_error())) {
-            auto ready = wait_for(static_cast<NativeHandle>(handle_), POLLOUT, deadline);
+            auto ready = wait_for(static_cast<NativeHandle>(handle_.load()), POLLOUT, deadline);
             if (!ready) return std::move(ready).error();
             if (!ready.value()) return Error(ErrorCode::Timeout, "send timed out");
             continue;
@@ -286,15 +297,15 @@ Status Socket::receive_all(std::span<std::byte> bytes, std::chrono::milliseconds
         if (!valid()) return Error(ErrorCode::IoError, "connection closed");
         const auto chunk = std::min<std::size_t>(bytes.size() - received, 1U << 30U);
         const auto result =
-            ::recv(static_cast<NativeHandle>(handle_), reinterpret_cast<char*>(bytes.data() + received),
-                   static_cast<int>(chunk), 0);
+            ::recv(static_cast<NativeHandle>(handle_.load()),
+                   reinterpret_cast<char*>(bytes.data() + received), static_cast<int>(chunk), 0);
         if (result > 0) {
             received += static_cast<std::size_t>(result);
             continue;
         }
         if (result == 0) return Error(ErrorCode::IoError, "connection closed by peer");
         if (would_block(last_error())) {
-            auto ready = wait_for(static_cast<NativeHandle>(handle_), POLLIN, deadline);
+            auto ready = wait_for(static_cast<NativeHandle>(handle_.load()), POLLIN, deadline);
             if (!ready) return std::move(ready).error();
             if (!ready.value()) return Error(ErrorCode::Timeout, "receive timed out");
             continue;
@@ -309,14 +320,16 @@ Status Socket::receive_all(std::span<std::byte> bytes, std::chrono::milliseconds
 
 Result<bool> Socket::readable(std::chrono::milliseconds timeout) {
     if (!valid()) return Error(ErrorCode::IoError, "connection closed");
-    return wait_for(static_cast<NativeHandle>(handle_), POLLIN, std::chrono::steady_clock::now() + timeout);
+    return wait_for(static_cast<NativeHandle>(handle_.load()), POLLIN,
+                    std::chrono::steady_clock::now() + timeout);
 }
 
 std::uint16_t Socket::local_port() const noexcept {
     if (!valid()) return 0;
     sockaddr_storage address{};
     socklen_t length = sizeof(address);
-    if (getsockname(static_cast<NativeHandle>(handle_), reinterpret_cast<sockaddr*>(&address), &length) != 0)
+    if (getsockname(static_cast<NativeHandle>(handle_.load()), reinterpret_cast<sockaddr*>(&address),
+                    &length) != 0)
         return 0;
     if (address.ss_family == AF_INET) return ntohs(reinterpret_cast<sockaddr_in*>(&address)->sin_port);
     if (address.ss_family == AF_INET6) return ntohs(reinterpret_cast<sockaddr_in6*>(&address)->sin6_port);

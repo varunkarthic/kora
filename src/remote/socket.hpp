@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -37,10 +38,13 @@ public:
     Status receive_all(std::span<std::byte> bytes, std::chrono::milliseconds timeout);
     /// True when data (or an orderly close) is ready to read within `timeout`.
     Result<bool> readable(std::chrono::milliseconds timeout);
-    /// Wakes any thread blocked on this socket and closes it.
+    /// Closes the socket. Only the thread that owns and uses the socket may call this.
     void close() noexcept;
+    /// Wakes a thread blocked on this socket (its I/O then fails) without closing it, so the owning
+    /// thread can still close it safely. Safe to call from any thread.
+    void interrupt() noexcept;
 
-    bool valid() const noexcept { return handle_ != kInvalid; }
+    bool valid() const noexcept { return handle_.load(std::memory_order_acquire) != kInvalid; }
     bool peer_is_loopback() const noexcept { return peer_loopback_; }
     std::uint16_t local_port() const noexcept;
 
@@ -54,7 +58,7 @@ private:
 #endif
     explicit Socket(Handle handle, bool peer_loopback = false) noexcept
         : handle_(handle), peer_loopback_(peer_loopback) {}
-    Handle handle_ = kInvalid;
+    std::atomic<Handle> handle_{kInvalid};
     bool peer_loopback_ = false;
 };
 

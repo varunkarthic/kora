@@ -679,7 +679,7 @@ void ClusterImpl::shutdown() {
         {
             std::lock_guard lock(link->mutex);
             link->stop.store(true);
-            if (link->socket) link->socket->close();
+            if (link->socket) link->socket->interrupt();
         }
         link->cv.notify_all();
     }
@@ -808,7 +808,7 @@ Status Cluster::detach(const std::string& endpoint) {
     {
         std::lock_guard lock(link->mutex);
         link->stop.store(true);
-        if (link->socket) link->socket->close();
+        if (link->socket) link->socket->interrupt();
     }
     link->cv.notify_all();
     if (link->thread.joinable()) link->thread.join();

@@ -130,7 +130,7 @@ void WorkerServer::stop() noexcept {
     std::thread session;
     {
         std::lock_guard lock(impl_->session_mutex);
-        if (impl_->session_socket) impl_->session_socket->close();
+        if (impl_->session_socket) impl_->session_socket->interrupt();
         session = std::move(impl_->session_thread);
     }
     if (session.joinable()) session.join();
@@ -176,7 +176,7 @@ void WorkerServer::Impl::accept_loop() {
         std::thread previous;
         {
             std::lock_guard lock(session_mutex);
-            if (session_socket) session_socket->close();  // Replace a vanished or idle client.
+            if (session_socket) session_socket->interrupt();  // Replace a vanished or idle client.
             previous = std::move(session_thread);
         }
         if (previous.joinable()) previous.join();

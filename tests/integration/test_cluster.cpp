@@ -199,16 +199,22 @@ TEST(Cluster, RandomDisconnectsNeverCorruptOrLoseWork) {
                 worker = start_worker(port);
         }
     });
-    // Pace submissions so the worker is unplugged and replugged many times during the stream.
-    constexpr int kJobs = 300;
-    run_chain(fixture->cluster, fixture->kernel, fixture->x, fixture->y, kJobs, [](int job) {
-        if (job % 5 == 4) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    });
+    // Keep submitting paced batches until the worker has been unplugged and replugged several times
+    // (slower under sanitizers), with at least 300 dependent dispatches overall.
+    int jobs = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while ((jobs < 300 || fixture->cluster.workers().at(0).connects < 3) &&
+           std::chrono::steady_clock::now() < deadline) {
+        run_chain(fixture->cluster, fixture->kernel, fixture->x, fixture->y, 25, [](int job) {
+            if (job % 5 == 4) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        });
+        jobs += 25;
+    }
     done.store(true);
     chaos.join();
-    expect_value(fixture->y, static_cast<float>(kJobs));
+    expect_value(fixture->y, static_cast<float>(jobs));
     const auto stats = fixture->cluster.stats();
-    EXPECT_EQ(stats.local_dispatches + stats.remote_dispatches, static_cast<std::uint64_t>(kJobs));
+    EXPECT_EQ(stats.local_dispatches + stats.remote_dispatches, static_cast<std::uint64_t>(jobs));
     EXPECT_GT(stats.remote_dispatches, 0U);
     EXPECT_GE(fixture->cluster.workers().at(0).connects, 3U);
 }
