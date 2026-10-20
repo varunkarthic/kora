@@ -53,6 +53,12 @@ struct ClusterOptions {
     std::uint64_t split_min_elements = 65'536;
     /// Fixed cost assumed per extra slice when deciding whether splitting pays.
     std::chrono::microseconds split_overhead{150};
+    /// Loopback "host:port" on which to stream status snapshots for `kora-top`, one JSON object per
+    /// line every `status_interval`. Empty disables it; port 0 picks a free port (`status_port()`).
+    /// KORA_STATUS_LISTEN sets it when empty. Only loopback addresses are accepted, because
+    /// snapshots name devices and endpoints.
+    std::string status_listen;
+    std::chrono::milliseconds status_interval{250};
 };
 
 /// One local device the Cluster can run work on.
@@ -63,6 +69,10 @@ struct LocalDeviceStatus {
     std::uint64_t dispatches = 0;
     std::uint64_t slices = 0;
     std::uint32_t inflight = 0;
+    /// Device memory KORA has allocated on this device, and the budget the driver reports (zero
+    /// when the driver cannot report one).
+    std::uint64_t allocated_bytes = 0;
+    std::uint64_t budget_bytes = 0;
 };
 
 struct WorkerStatus {
@@ -74,6 +84,20 @@ struct WorkerStatus {
     std::uint64_t failovers = 0;
     std::uint64_t connects = 0;
     std::uint64_t disconnects = 0;
+    /// Jobs queued or running on this worker.
+    std::uint32_t inflight = 0;
+    /// Bytes of buffers the worker holds at the host's current version, so they are not resent.
+    std::uint64_t cached_bytes = 0;
+};
+
+/// Something that changed where work runs: a worker connecting or leaving, a failover, a device
+/// rescan, or a kernel moving to a different target.
+struct ClusterEvent {
+    /// Milliseconds since the Cluster was created, of the latest occurrence.
+    std::uint64_t at_ms = 0;
+    std::string message;
+    /// Consecutive identical events are merged into one entry.
+    std::uint32_t repeats = 1;
 };
 
 struct ClusterStats {
@@ -174,6 +198,9 @@ public:
     }
     Result<ClusterKernel> load_kernel(const std::filesystem::path& spirv, std::string entry_point,
                                       KernelMetadata metadata);
+    /// Loads a kernel from in-memory SPIR-V words.
+    Result<ClusterKernel> load_kernel(std::span<const std::uint32_t> spirv, std::string entry_point,
+                                      KernelMetadata metadata);
     ClusterDispatch dispatch(const ClusterKernel& kernel);
 
     /// Adds a worker endpoint at runtime; it is connected in the background.
@@ -185,6 +212,10 @@ public:
     std::vector<WorkerStatus> workers() const;
     std::vector<LocalDeviceStatus> local_devices() const;
     ClusterStats stats() const;
+    /// The most recent events, oldest first (at most 64).
+    std::vector<ClusterEvent> events() const;
+    /// Port of the `status_listen` endpoint, or 0 when it is disabled.
+    std::uint16_t status_port() const noexcept;
 
 private:
     explicit Cluster(std::shared_ptr<detail::ClusterImpl> impl);

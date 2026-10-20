@@ -112,3 +112,9 @@ if(APPLE AND KORA_BUILD_COMPETITOR_BENCH)
   target_link_libraries(competitor-bench PRIVATE "-framework Foundation" "-framework Metal" "-framework OpenCL"
     "-framework OpenGL" "-framework Accelerate")
 endif()
+
+add_executable(kora-top kora-top/main.cpp)
+target_include_directories(kora-top PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(kora-top PRIVATE kora::kora)
+kora_configure_target(kora-top)
+install(TARGETS kora-top RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

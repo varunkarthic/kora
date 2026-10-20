@@ -8,7 +8,7 @@ import struct
 from pathlib import Path
 
 
-def render(data: bytes) -> str:
+def render(data: bytes, namespace: str = "kora::detail::calibration", name: str = "kProbeShaderSpv") -> str:
     if len(data) < 20 or len(data) % 4:
         raise ValueError("SPIR-V must contain a complete header and 32-bit words")
     words = [word[0] for word in struct.iter_unpack("<I", data)]
@@ -21,13 +21,13 @@ def render(data: bytes) -> str:
         "#include <array>",
         "#include <cstdint>",
         "",
-        "namespace kora::detail::calibration {",
-        f"inline constexpr std::array<std::uint32_t, {len(words)}> kProbeShaderSpv{{{{",
+        f"namespace {namespace} {{",
+        f"inline constexpr std::array<std::uint32_t, {len(words)}> {name}{{{{",
     ]
     for offset in range(0, len(words), 8):
         chunk = ", ".join(f"0x{word:08x}U" for word in words[offset : offset + 8])
         lines.append(f"    {chunk},")
-    lines.extend(["}};", "}  // namespace kora::detail::calibration", ""])
+    lines.extend(["}};", f"}}  // namespace {namespace}", ""])
     return "\n".join(lines)
 
 
@@ -35,8 +35,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--namespace", default="kora::detail::calibration")
+    parser.add_argument("--name", default="kProbeShaderSpv")
     args = parser.parse_args()
-    args.output.write_text(render(args.input.read_bytes()), encoding="utf-8")
+    args.output.write_text(render(args.input.read_bytes(), args.namespace, args.name), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -6,8 +6,10 @@
 #include <thread>
 #include <vector>
 
+#include "core/json.hpp"
 #include "kora/cluster.hpp"
 #include "kora/worker.hpp"
+#include "remote/socket.hpp"
 #include "support/vulkan_test.hpp"
 
 namespace {
@@ -373,6 +375,88 @@ TEST(Cluster, SplitSurvivesWorkerChaos) {
     ASSERT_TRUE(result);
     for (std::uint32_t i = 0; i < count; ++i) ASSERT_EQ(result.value()[i], static_cast<float>(rounds)) << i;
     EXPECT_GT(cluster.value().stats().split_dispatches, 0U);
+}
+
+namespace {
+// Reads one newline-terminated status snapshot and parses it.
+kora::detail::json::Value read_snapshot(kora::detail::remote::Socket& socket) {
+    std::string line;
+    char c = 0;
+    while (socket.receive_all(std::as_writable_bytes(std::span(&c, 1)), std::chrono::seconds(5)) && c != '\n')
+        line.push_back(c);
+    auto parsed = kora::detail::json::parse(line);
+    EXPECT_TRUE(parsed) << line;
+    return parsed ? std::move(parsed).value() : kora::detail::json::Value{};
+}
+
+const kora::detail::json::Value::Array& array(const kora::detail::json::Value& value, const char* key) {
+    static const kora::detail::json::Value::Array empty;
+    const auto* found = value.find(key);
+    const auto* items = found ? std::get_if<kora::detail::json::Value::Array>(&found->storage) : nullptr;
+    return items ? *items : empty;
+}
+
+std::string events_text(const kora::detail::json::Value& snapshot) {
+    std::string text;
+    for (const auto& event : array(snapshot, "events"))
+        if (const auto* message = event.find("message"))
+            if (const auto* value = std::get_if<std::string>(&message->storage)) text += *value + "\n";
+    return text;
+}
+}  // namespace
+
+TEST(Cluster, StatusStreamReportsDevicesWorkersMemoryAndEvents) {
+    auto worker = start_worker(0);
+    if (!worker) KORA_REQUIRE_VULKAN(false);
+    const auto port = worker->port();
+    auto options = fast_options(port, kora::OffloadPolicy::PreferRemote);
+    options.status_listen = "127.0.0.1:0";
+    options.status_interval = std::chrono::milliseconds(20);
+    auto cluster = kora::Cluster::create(options);
+    ASSERT_TRUE(cluster) << cluster.error().describe();
+    ASSERT_NE(cluster.value().status_port(), 0);
+    ASSERT_TRUE(wait_until([&] { return any_connected(cluster.value()); }));
+    auto kernel = cluster.value().load_kernel(KORA_SAXPY_FIXTURE_PATH, "main", saxpy_metadata());
+    ASSERT_TRUE(kernel) << kernel.error().describe();
+    auto x = cluster.value().create_buffer<float>(kCount);
+    auto y = cluster.value().create_buffer<float>(kCount);
+    ASSERT_TRUE(x && y && x.value().write(std::vector<float>(kCount, 1.0F)) &&
+                y.value().write(std::vector<float>(kCount, 0.0F)));
+    auto event = cluster.value()
+                     .dispatch(kernel.value())
+                     .global(kCount)
+                     .read(x.value())
+                     .read_write(y.value())
+                     .push(SaxpyParams{2.0F, kCount})
+                     .submit();
+    ASSERT_TRUE(event && event.value().wait());
+
+    auto socket = kora::detail::remote::Socket::connect({"127.0.0.1", cluster.value().status_port()},
+                                                        std::chrono::seconds(1));
+    ASSERT_TRUE(socket) << socket.error().describe();
+    const auto snapshot = read_snapshot(socket.value());
+    EXPECT_FALSE(array(snapshot, "devices").empty());
+    ASSERT_EQ(array(snapshot, "workers").size(), 1U);
+    const auto& reported = array(snapshot, "workers").front();
+    ASSERT_NE(reported.find("connected"), nullptr);
+    EXPECT_EQ(std::get<bool>(reported.find("connected")->storage), true);
+    EXPECT_GE(cluster.value().workers().front().cached_bytes, 2U * kCount * sizeof(float));
+    EXPECT_NE(events_text(snapshot).find("connected"), std::string::npos);
+
+    worker.reset();  // Unplug: the stream must report the disconnect.
+    ASSERT_TRUE(wait_until([&] { return !any_connected(cluster.value()); }));
+    ASSERT_TRUE(wait_until([&] {
+        return events_text(read_snapshot(socket.value())).find("disconnected") != std::string::npos;
+    }));
+}
+
+TEST(Cluster, StatusListenAcceptsOnlyLoopback) {
+    kora::ClusterOptions options;
+    options.status_listen = "0.0.0.0:0";
+    auto cluster = kora::Cluster::create(options);
+    if (!cluster && cluster.error().code != kora::ErrorCode::InvalidArgument) KORA_REQUIRE_VULKAN(false);
+    ASSERT_FALSE(cluster);
+    EXPECT_EQ(cluster.error().code, kora::ErrorCode::InvalidArgument);
 }
 
 TEST(Cluster, SplitRequiresABaseField) {

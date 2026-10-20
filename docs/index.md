@@ -147,6 +147,7 @@ releases
 security
 maintenance
 tools/kora-info
+tools/kora-top
 ```
 
 ## How to read performance results

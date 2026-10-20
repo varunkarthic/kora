@@ -71,6 +71,13 @@ if(KORA_SPIRV_ASSEMBLER)
     KORA_AUTOTUNE_FIXTURE_PATH="${KORA_AUTOTUNE_FIXTURE}")
 endif()
 
+if(TARGET kora-top)
+  # Runs the self-contained demo (loopback workers unplugged and replugged mid-run); it exits
+  # non-zero if any verified result differs, and 77 when no Vulkan device is available.
+  add_test(NAME KoraTop.DemoSmoke COMMAND $<TARGET_FILE:kora-top> --demo --frames 8 --no-color)
+  set_tests_properties(KoraTop.DemoSmoke PROPERTIES LABELS integration TIMEOUT 60 SKIP_RETURN_CODE 77)
+endif()
+
 if(TARGET kora-info)
   find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
   add_test(NAME KoraInfo.ListsDevices COMMAND $<TARGET_FILE:kora-info>)

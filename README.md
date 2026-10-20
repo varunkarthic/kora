@@ -184,6 +184,10 @@ Small dispatches cost one extra round trip; large ones pay for moving their outp
 offloading helps when the other device is much faster or the local one is busy. A real USB-C or LAN
 link adds its own latency. See [remote workers and hot-swap](docs/cluster.md).
 
+To watch a Cluster live, including which devices are detected, where work is going, memory on
+each device, and every unplug and failover, run `kora-top --demo`, or start your application with
+`KORA_STATUS_LISTEN=127.0.0.1:7979` and run `kora-top` ([kora-top](docs/tools/kora-top.md)).
+
 ### Current snapshot
 
 One 1,000-sample, 50-warm-up run at source 0a71f8c
