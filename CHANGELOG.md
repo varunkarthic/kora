@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-10-20
+
 ### Changed
 - Record per-dispatch GPU timestamps only as often as telemetry needs them: none at
   `TelemetryLevel::Off`, one dispatch in 16 at the default `Basic`, and every dispatch at `Profile` and
@@ -556,7 +558,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.23...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v0.2.24...HEAD
+[0.2.24]: https://github.com/varunkarthic/kora/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/varunkarthic/kora/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/varunkarthic/kora/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/varunkarthic/kora/compare/v0.2.20...v0.2.21
