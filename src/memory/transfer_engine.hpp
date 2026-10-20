@@ -23,6 +23,9 @@ struct QueueTimelineUse {
     /// GPU operations that are queued or executing and may access the buffer. Host code may
     /// write or read the mapped allocation directly only while this is zero.
     std::atomic<std::uint32_t> pending{0};
+    /// The last dispatch that wrote the buffer ended with a shader-write to host-read barrier, so
+    /// its mapped contents may be read once `pending` reaches zero.
+    std::atomic<bool> host_readable{false};
 };
 
 /// Holds QueueTimelineUse::pending raised for each listed buffer until destroyed. Capture it in a

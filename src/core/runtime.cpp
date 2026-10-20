@@ -1205,8 +1205,15 @@ Result<Event> DispatchBuilder::submit() {
         submission.wait_stages.push_back(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         submission.wait_values.push_back(transfer_wait_value);
     }
+    // Only a dispatch whose outputs are read back pays for the host-read barrier; it can stall
+    // the queue on some drivers, so deferred dispatches leave outputs to an explicit readback.
+    const bool host_read_barrier = context_->direct_host_access && !defer_readback_;
+    for (std::size_t index = 0; index < accesses_.size(); ++index)
+        if (accesses_[index] != KernelAccess::Read && (*bound_buffers)[index].queue_use)
+            (*bound_buffers)[index].queue_use->host_readable.store(host_read_barrier,
+                                                                   std::memory_order_release);
     submission.record_commands = [ctx, pipeline_ref, bound_buffers, push_constants, groups_copy, work,
-                                  record_status, allocated_descriptors](
+                                  record_status, allocated_descriptors, host_read_barrier](
                                      std::uint64_t submission_id, std::vector<VkCommandBuffer>& commands) {
         std::lock_guard lock(ctx->submit_mutex);
         const auto command_acquire_started = ctx->phase_profile_enabled
@@ -1278,7 +1285,7 @@ Result<Event> DispatchBuilder::submit() {
             api.cmd_push_constants(command.value(), pipeline_ref->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    static_cast<std::uint32_t>(push_constants.size()), push_constants.data());
         api.cmd_dispatch(command.value(), groups_copy[0], groups_copy[1], groups_copy[2]);
-        if (ctx->direct_host_access) {
+        if (host_read_barrier) {
             // Make shader writes available to host reads of the mapping once the queue completes.
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
                                     VK_ACCESS_HOST_READ_BIT};
@@ -2466,7 +2473,8 @@ Result<RuntimeProfilingStats> Runtime::profiling_stats(const DeviceId& id) const
     if (dispatch->timestamps) {
         const auto completed = dispatch->queue->completed_value();
         if (!completed) return std::move(completed).error();
-        auto collected = dispatch->timestamps->collect(completed.value());
+        // Diagnostics may wait briefly for results a driver publishes after the queue signal.
+        auto collected = dispatch->timestamps->collect(completed.value(), std::chrono::milliseconds(2));
         if (!collected) return std::move(collected).error();
         detail::observe_autotune_samples(dispatch, collected.value(), impl_->performance_database,
                                          impl_->performance_database_path);
@@ -2779,8 +2787,9 @@ Result<Event> Runtime::readback(const BufferHandle& buffer, const DeviceId& devi
     if (!device_buffer) return std::move(device_buffer).error();
     const auto& mapped = device_buffer.value();
     if (context->direct_host_access && mapped.host_visible && mapped.mapped_data != nullptr &&
-        mapped.queue_use && mapped.queue_use->pending.load(std::memory_order_acquire) == 0) {
-        // Every producing dispatch has completed with a host-read barrier, so copy without a transfer.
+        mapped.queue_use && mapped.queue_use->pending.load(std::memory_order_acquire) == 0 &&
+        mapped.queue_use->host_readable.load(std::memory_order_acquire)) {
+        // The producing dispatch completed with a host-read barrier, so copy without a transfer.
         auto copied = read_mapped_output(context, mapped, buffer, host_version.value());
         if (!copied) return std::move(copied).error();
         return Event::when_all(std::span<const Event>{});

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -40,7 +41,10 @@ public:
     void cancel(std::uint64_t submission_id) noexcept;
     void submitted(std::uint64_t submission_id, std::uint64_t queue_value);
     /// Reads only completed slots, without WAIT_BIT. Samples still pending remain in the ring.
-    Result<std::vector<GpuTimestampSample>> collect(std::uint64_t completed_queue_value);
+    /// Some drivers publish results shortly after the queue signal; `ready_wait` bounds how long
+    /// to poll for a completed slot. Hot completion paths pass zero and never block.
+    Result<std::vector<GpuTimestampSample>> collect(std::uint64_t completed_queue_value,
+                                                    std::chrono::nanoseconds ready_wait = {});
     /// Enable bounded historical retention for opt-in Trace export.
     void enable_trace_history(bool enabled) noexcept;
     std::uint64_t dropped_samples() const noexcept;
