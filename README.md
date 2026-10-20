@@ -142,14 +142,17 @@ is available from this non-CUDA device. Full workload definitions and caveats ar
 [Benchmarking](docs/benchmarking.md).
 
 The same device also runs matched raw-Vulkan compute fixtures for SAXPY, reduction, scan, tiled
-matrix multiplication, and stencil. In a separate 1,000-sample/50-warm-up Release run, KORA deferred
-host medians were 0.77–2.82× raw Vulkan; tiled matmul was 23% faster and SAXPY remained 2.82× slower.
-KORA device-time medians were 4–25% slower than raw Vulkan across these five workloads. Default
-KORA-to-deferred host medians improved 36–57% because deferred mode leaves outputs device-resident.
-These policies are not identical memory-residency contracts, and one M4/MoltenVK run is not
-cross-platform or CUDA evidence. See the [matched compute methodology](docs/benchmarking.md#matched-raw-vulkan-compute-workloads),
+matrix multiplication, and stencil at three sizes each (4K/64K/1M elements; 16²/64²/128² matrices).
+In a 1,000-sample/50-warm-up Release sweep, KORA deferred host medians were 0.82–6.38× raw Vulkan,
+faster in three of 15 cases; the gap is largest where a large input is rewritten every sample
+(1M SAXPY). Default KORA-to-deferred host medians improved 17–58% because deferred mode leaves
+outputs device-resident. These policies are not identical memory-residency contracts, and one
+M4/MoltenVK run is not cross-platform or CUDA evidence. See the
+[matched compute methodology](docs/benchmarking.md#matched-raw-vulkan-compute-workloads),
 [generated comparison tables](docs/benchmark-compute-results.md),
-and [raw sample report](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json).
+and [raw sample report](benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json).
+
+![KORA and raw Vulkan matched compute host-latency chart](benchmarks/charts/compute-host-latency.svg)
 
 The retained table is currently one macOS/MoltenVK machine sample. Linux, Windows, and macOS are
 build/test targets, but CI smoke coverage is not a cross-OS performance study; no Linux/Windows

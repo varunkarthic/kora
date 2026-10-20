@@ -43,6 +43,11 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 
+// Matched KORA/raw Vulkan compute tiers: dispatch-bound, intermediate, and throughput-bound sizes.
+// Every value is a multiple of the 64-lane workgroup and 8×8 matmul tile used by the fixtures.
+constexpr std::array<std::uint32_t, 3> kComputeSizes{4096, 65536, 1048576};
+constexpr std::array<std::uint32_t, 3> kMatrixDimensions{16, 64, 128};
+
 struct Options {
     std::size_t iterations = 100;
     std::size_t warmup = 10;
@@ -540,6 +545,38 @@ void add_cpu_compute_benchmarks(std::vector<Result>& results, const Options& opt
             options);
         parallel_stencil_result.thread_count = worker_count;
         results.push_back(std::move(parallel_stencil_result));
+
+        // Inclusive scan within independent 64-element tiles, matching the GPU scan fixture.
+        constexpr std::size_t scan_width = 64;
+        std::vector<std::uint32_t> scanned(count);
+        const auto scan_tiles = [&](std::size_t first_tile, std::size_t last_tile) {
+            for (auto tile = first_tile; tile < last_tile; ++tile) {
+                std::uint32_t sum = 0;
+                for (auto index = tile * scan_width; index < (tile + 1) * scan_width; ++index)
+                    scanned[index] = sum += int_left[index];
+            }
+        };
+        const auto tile_count = count / scan_width;
+        std::vector<std::uint32_t> scan_reference(count);
+        for (std::size_t index = 0; index < count; ++index)
+            scan_reference[index] =
+                (index % scan_width == 0 ? 0U : scan_reference[index - 1]) + int_left[index];
+        const auto scan_expected = [&](std::size_t index, std::uint32_t value) {
+            return value == scan_reference[index];
+        };
+        results.push_back(run_cpu_compute(
+            "cpu_tiled_scan_" + std::to_string(count), scanned, [&] { scan_tiles(0, tile_count); },
+            scan_expected, options));
+        auto parallel_scan_result = run_cpu_compute(
+            "cpu_tiled_scan_parallel_" + std::to_string(count), scanned,
+            [&] {
+                parallel_for(*executor, tile_count, [&](std::size_t, std::size_t begin, std::size_t end) {
+                    scan_tiles(begin, end);
+                });
+            },
+            scan_expected, options);
+        parallel_scan_result.thread_count = worker_count;
+        results.push_back(std::move(parallel_scan_result));
     }
 
     for (const auto dimension : {16U, 64U, 128U}) {
@@ -1410,10 +1447,7 @@ bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const O
             path = vector_add_fixture.parent_path().parent_path() / "share" / "kora" / "benchmarks" / name;
         return path;
     };
-    constexpr std::uint32_t count = 4096;
     constexpr std::uint32_t local_size = 64;
-    constexpr VkDeviceSize float_bytes = count * sizeof(float);
-    constexpr VkDeviceSize uint_bytes = count * sizeof(std::uint32_t);
     const auto make_buffer = [&](VkDeviceSize bytes) {
         auto buffer = make_host_transfer_buffer(device, info, bytes);
         if (!buffer) throw std::runtime_error("raw Vulkan compute buffer allocation failed");
@@ -1441,103 +1475,117 @@ bool add_raw_non_vector_compute_benchmarks(std::vector<Result>& results, const O
         if (!validate()) throw std::runtime_error("raw Vulkan output validation failed: " + workload);
         return true;
     };
-
     struct SaxpyParams {
         float scale;
         std::uint32_t count;
     };
     static_assert(sizeof(SaxpyParams) == 8);
-    const SaxpyParams saxpy_params{2.0F, count};
-    auto saxpy_x = make_buffer(float_bytes);
-    auto saxpy_y = make_buffer(float_bytes);
-    auto* saxpy_x_values = reinterpret_cast<float*>(saxpy_x->mapped);
-    auto* saxpy_y_values = reinterpret_cast<float*>(saxpy_y->mapped);
-    std::fill_n(saxpy_x_values, count, 2.0F);
-    const std::vector<float> saxpy_initial(count, 1.0F);
-    std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
-    synchronize_mapped_buffer(device, *saxpy_x, true);
-    synchronize_mapped_buffer(device, *saxpy_y, true);
-    RawComputeRunner saxpy_runner(physical, device, fixture_path(KORA_BENCH_SAXPY_FIXTURE_NAME),
-                                  {saxpy_x.get(), saxpy_y.get()}, sizeof(saxpy_params));
-    finish_samples(
-        "saxpy_4096_upload", saxpy_runner, count / local_size, 1, &saxpy_params, sizeof(saxpy_params),
-        [&] {
-            std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
-            synchronize_mapped_buffer(device, *saxpy_y, true);
-        },
-        [&] {
-            synchronize_mapped_buffer(device, *saxpy_y, false);
-            return std::all_of(saxpy_y_values, saxpy_y_values + count,
-                               [](float value) { return value == 5.0F; });
-        });
+    for (const auto count : kComputeSizes) {
+        const VkDeviceSize float_bytes = VkDeviceSize{count} * sizeof(float);
+        const VkDeviceSize uint_bytes = VkDeviceSize{count} * sizeof(std::uint32_t);
+        const auto suffix = std::to_string(count);
 
-    const std::uint32_t count_push = count;
-    auto reduction_input = make_buffer(float_bytes);
-    auto reduction_output = make_buffer((count / local_size) * sizeof(float));
-    std::fill_n(reinterpret_cast<float*>(reduction_input->mapped), count, 1.0F);
-    synchronize_mapped_buffer(device, *reduction_input, true);
-    RawComputeRunner reduction_runner(physical, device, fixture_path(KORA_BENCH_REDUCTION_FIXTURE_NAME),
-                                      {reduction_input.get(), reduction_output.get()}, sizeof(count_push));
-    finish_samples(
-        "reduction_4096", reduction_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
-        [&] {
-            synchronize_mapped_buffer(device, *reduction_output, false);
-            const auto* values = reinterpret_cast<const float*>(reduction_output->mapped);
-            return std::all_of(values, values + count / local_size,
-                               [](float value) { return value == 64.0F; });
-        });
+        const SaxpyParams saxpy_params{2.0F, count};
+        auto saxpy_x = make_buffer(float_bytes);
+        auto saxpy_y = make_buffer(float_bytes);
+        auto* saxpy_x_values = reinterpret_cast<float*>(saxpy_x->mapped);
+        auto* saxpy_y_values = reinterpret_cast<float*>(saxpy_y->mapped);
+        std::fill_n(saxpy_x_values, count, 2.0F);
+        const std::vector<float> saxpy_initial(count, 1.0F);
+        std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
+        synchronize_mapped_buffer(device, *saxpy_x, true);
+        synchronize_mapped_buffer(device, *saxpy_y, true);
+        RawComputeRunner saxpy_runner(physical, device, fixture_path(KORA_BENCH_SAXPY_FIXTURE_NAME),
+                                      {saxpy_x.get(), saxpy_y.get()}, sizeof(saxpy_params));
+        finish_samples(
+            "saxpy_" + suffix + "_upload", saxpy_runner, count / local_size, 1, &saxpy_params,
+            sizeof(saxpy_params),
+            [&] {
+                std::copy(saxpy_initial.begin(), saxpy_initial.end(), saxpy_y_values);
+                synchronize_mapped_buffer(device, *saxpy_y, true);
+            },
+            [&] {
+                synchronize_mapped_buffer(device, *saxpy_y, false);
+                return std::all_of(saxpy_y_values, saxpy_y_values + count,
+                                   [](float value) { return value == 5.0F; });
+            });
 
-    auto scan_input = make_buffer(uint_bytes);
-    auto scan_output = make_buffer(uint_bytes);
-    std::fill_n(reinterpret_cast<std::uint32_t*>(scan_input->mapped), count, 1U);
-    synchronize_mapped_buffer(device, *scan_input, true);
-    RawComputeRunner scan_runner(physical, device, fixture_path(KORA_BENCH_SCAN_FIXTURE_NAME),
-                                 {scan_input.get(), scan_output.get()}, sizeof(count_push));
-    finish_samples(
-        "tiled_scan_4096", scan_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
-        [&] {
-            synchronize_mapped_buffer(device, *scan_output, false);
-            const auto* values = reinterpret_cast<const std::uint32_t*>(scan_output->mapped);
-            return std::all_of(values, values + count,
-                               [index = std::uint32_t{0}](std::uint32_t value) mutable {
-                                   return value == (index++ % local_size) + 1;
-                               });
-        });
+        const std::uint32_t count_push = count;
+        auto reduction_input = make_buffer(float_bytes);
+        auto reduction_output = make_buffer((count / local_size) * sizeof(float));
+        std::fill_n(reinterpret_cast<float*>(reduction_input->mapped), count, 1.0F);
+        synchronize_mapped_buffer(device, *reduction_input, true);
+        RawComputeRunner reduction_runner(physical, device, fixture_path(KORA_BENCH_REDUCTION_FIXTURE_NAME),
+                                          {reduction_input.get(), reduction_output.get()},
+                                          sizeof(count_push));
+        finish_samples(
+            "reduction_" + suffix, reduction_runner, count / local_size, 1, &count_push, sizeof(count_push),
+            [] {},
+            [&] {
+                synchronize_mapped_buffer(device, *reduction_output, false);
+                const auto* values = reinterpret_cast<const float*>(reduction_output->mapped);
+                return std::all_of(values, values + count / local_size,
+                                   [](float value) { return value == 64.0F; });
+            });
 
-    constexpr std::uint32_t dimension = 64;
-    constexpr std::uint32_t matrix_count = dimension * dimension;
-    constexpr VkDeviceSize matrix_bytes = matrix_count * sizeof(float);
-    auto matrix_a = make_buffer(matrix_bytes);
-    auto matrix_b = make_buffer(matrix_bytes);
-    auto matrix_c = make_buffer(matrix_bytes);
-    std::fill_n(reinterpret_cast<float*>(matrix_a->mapped), matrix_count, 1.0F);
-    std::fill_n(reinterpret_cast<float*>(matrix_b->mapped), matrix_count, 1.0F);
-    synchronize_mapped_buffer(device, *matrix_a, true);
-    synchronize_mapped_buffer(device, *matrix_b, true);
-    RawComputeRunner matmul_runner(physical, device, fixture_path(KORA_BENCH_MATMUL_FIXTURE_NAME),
-                                   {matrix_a.get(), matrix_b.get(), matrix_c.get()}, sizeof(dimension));
-    finish_samples(
-        "tiled_matmul_64", matmul_runner, dimension / 8, dimension / 8, &dimension, sizeof(dimension), [] {},
-        [&] {
-            synchronize_mapped_buffer(device, *matrix_c, false);
-            const auto* values = reinterpret_cast<const float*>(matrix_c->mapped);
-            return std::all_of(values, values + matrix_count, [](float value) { return value == 64.0F; });
-        });
+        auto scan_input = make_buffer(uint_bytes);
+        auto scan_output = make_buffer(uint_bytes);
+        std::fill_n(reinterpret_cast<std::uint32_t*>(scan_input->mapped), count, 1U);
+        synchronize_mapped_buffer(device, *scan_input, true);
+        RawComputeRunner scan_runner(physical, device, fixture_path(KORA_BENCH_SCAN_FIXTURE_NAME),
+                                     {scan_input.get(), scan_output.get()}, sizeof(count_push));
+        finish_samples(
+            "tiled_scan_" + suffix, scan_runner, count / local_size, 1, &count_push, sizeof(count_push),
+            [] {},
+            [&] {
+                synchronize_mapped_buffer(device, *scan_output, false);
+                const auto* values = reinterpret_cast<const std::uint32_t*>(scan_output->mapped);
+                return std::all_of(values, values + count,
+                                   [index = std::uint32_t{0}](std::uint32_t value) mutable {
+                                       return value == (index++ % local_size) + 1;
+                                   });
+            });
 
-    auto stencil_input = make_buffer(float_bytes);
-    auto stencil_output = make_buffer(float_bytes);
-    std::fill_n(reinterpret_cast<float*>(stencil_input->mapped), count, 1.0F);
-    synchronize_mapped_buffer(device, *stencil_input, true);
-    RawComputeRunner stencil_runner(physical, device, fixture_path(KORA_BENCH_STENCIL_FIXTURE_NAME),
-                                    {stencil_input.get(), stencil_output.get()}, sizeof(count_push));
-    finish_samples(
-        "stencil_4096", stencil_runner, count / local_size, 1, &count_push, sizeof(count_push), [] {},
-        [&] {
-            synchronize_mapped_buffer(device, *stencil_output, false);
-            const auto* values = reinterpret_cast<const float*>(stencil_output->mapped);
-            return values[0] == 2.0F && values[count - 1] == 2.0F &&
-                   std::all_of(values + 1, values + count - 1, [](float value) { return value == 3.0F; });
-        });
+        auto stencil_input = make_buffer(float_bytes);
+        auto stencil_output = make_buffer(float_bytes);
+        std::fill_n(reinterpret_cast<float*>(stencil_input->mapped), count, 1.0F);
+        synchronize_mapped_buffer(device, *stencil_input, true);
+        RawComputeRunner stencil_runner(physical, device, fixture_path(KORA_BENCH_STENCIL_FIXTURE_NAME),
+                                        {stencil_input.get(), stencil_output.get()}, sizeof(count_push));
+        finish_samples(
+            "stencil_" + suffix, stencil_runner, count / local_size, 1, &count_push, sizeof(count_push),
+            [] {},
+            [&] {
+                synchronize_mapped_buffer(device, *stencil_output, false);
+                const auto* values = reinterpret_cast<const float*>(stencil_output->mapped);
+                return values[0] == 2.0F && values[count - 1] == 2.0F &&
+                       std::all_of(values + 1, values + count - 1, [](float value) { return value == 3.0F; });
+            });
+    }
+
+    for (const auto dimension : kMatrixDimensions) {
+        const auto matrix_count = dimension * dimension;
+        const VkDeviceSize matrix_bytes = VkDeviceSize{matrix_count} * sizeof(float);
+        auto matrix_a = make_buffer(matrix_bytes);
+        auto matrix_b = make_buffer(matrix_bytes);
+        auto matrix_c = make_buffer(matrix_bytes);
+        std::fill_n(reinterpret_cast<float*>(matrix_a->mapped), matrix_count, 1.0F);
+        std::fill_n(reinterpret_cast<float*>(matrix_b->mapped), matrix_count, 1.0F);
+        synchronize_mapped_buffer(device, *matrix_a, true);
+        synchronize_mapped_buffer(device, *matrix_b, true);
+        RawComputeRunner matmul_runner(physical, device, fixture_path(KORA_BENCH_MATMUL_FIXTURE_NAME),
+                                       {matrix_a.get(), matrix_b.get(), matrix_c.get()}, sizeof(dimension));
+        finish_samples(
+            "tiled_matmul_" + std::to_string(dimension), matmul_runner, dimension / 8, dimension / 8,
+            &dimension, sizeof(dimension), [] {},
+            [&] {
+                synchronize_mapped_buffer(device, *matrix_c, false);
+                const auto* values = reinterpret_cast<const float*>(matrix_c->mapped);
+                const auto expected = static_cast<float>(dimension);
+                return std::all_of(values, values + matrix_count,
+                                   [expected](float value) { return value == expected; });
+            });
+    }
     return true;
 }
 #endif
@@ -1790,42 +1838,45 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << saxpy.error().describe() << '\n';
         return false;
     }
-    std::vector<float> saxpy_x(element_count, 2.0F), saxpy_y(element_count, 1.0F);
-    auto x = runtime.create_buffer<float>(element_count);
-    auto y = runtime.create_buffer<float>(element_count);
-    if (!x || !y || !x.value().write(saxpy_x) || !y.value().write(saxpy_y)) return false;
     struct SaxpyParams {
         float scale;
         std::uint32_t count;
     };
     static_assert(sizeof(SaxpyParams) == sizeof(float) + sizeof(std::uint32_t));
-    const SaxpyParams params{2.0F, element_count};
-    const auto run_saxpy = [&](bool defer_readback = false) {
-        if (!y.value().write(saxpy_y)) throw std::runtime_error("SAXPY input reset failed");
-        auto builder = runtime.dispatch(saxpy.value())
-                           .global(element_count)
-                           .read(x.value())
-                           .read_write(y.value())
-                           .push(params);
-        if (defer_readback) builder.defer_readback();
-        auto event = builder.submit();
-        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan SAXPY dispatch failed");
-    };
-    const auto validate_saxpy = [&] {
-        auto readback = runtime.readback(y.value());
-        if (!readback || !readback.value().wait()) return false;
-        auto values = y.value().read();
-        return values && std::all_of(values.value().begin(), values.value().end(),
-                                     [](float value) { return value == 5.0F; });
-    };
-    run_saxpy();
-    if (!validate_saxpy()) return false;
-    results.push_back(
-        run_checked("gpu_saxpy_4096_upload_dispatch_wait", [&] { run_saxpy(); }, validate_saxpy, options));
-    results.push_back(run_checked(
-        "gpu_saxpy_4096_upload_deferred_readback_dispatch_wait", [&] { run_saxpy(true); }, validate_saxpy,
-        options));
-    add_kora_gpu_timestamp("gpu_saxpy_4096_gpu_execution", [&] { run_saxpy(); });
+    for (const auto count : kComputeSizes) {
+        const std::vector<float> saxpy_x(count, 2.0F), saxpy_y(count, 1.0F);
+        auto x = runtime.create_buffer<float>(count);
+        auto y = runtime.create_buffer<float>(count);
+        if (!x || !y || !x.value().write(saxpy_x) || !y.value().write(saxpy_y)) return false;
+        const SaxpyParams params{2.0F, count};
+        const auto run_saxpy = [&](bool defer_readback = false) {
+            if (!y.value().write(saxpy_y)) throw std::runtime_error("SAXPY input reset failed");
+            auto builder = runtime.dispatch(saxpy.value())
+                               .global(count)
+                               .read(x.value())
+                               .read_write(y.value())
+                               .push(params);
+            if (defer_readback) builder.defer_readback();
+            auto event = builder.submit();
+            if (!event || !event.value().wait()) throw std::runtime_error("Vulkan SAXPY dispatch failed");
+        };
+        const auto validate_saxpy = [&] {
+            auto readback = runtime.readback(y.value());
+            if (!readback || !readback.value().wait()) return false;
+            auto values = y.value().read();
+            return values && std::all_of(values.value().begin(), values.value().end(),
+                                         [](float value) { return value == 5.0F; });
+        };
+        run_saxpy();
+        if (!validate_saxpy()) return false;
+        const auto name = "gpu_saxpy_" + std::to_string(count);
+        results.push_back(
+            run_checked(name + "_upload_dispatch_wait", [&] { run_saxpy(); }, validate_saxpy, options));
+        results.push_back(run_checked(
+            name + "_upload_deferred_readback_dispatch_wait", [&] { run_saxpy(true); }, validate_saxpy,
+            options));
+        add_kora_gpu_timestamp(name + "_gpu_execution", [&] { run_saxpy(); });
+    }
 
     kora::KernelMetadata reduction_metadata;
     reduction_metadata.kernel_id = "kora_bench.reduction";
@@ -1845,36 +1896,39 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << reduction.error().describe() << '\n';
         return false;
     }
-    std::vector<float> reduction_input(element_count, 1.0F);
-    auto reduction_source = runtime.create_buffer<float>(element_count);
-    auto reduction_output = runtime.create_buffer<float>(element_count / 64);
-    if (!reduction_source || !reduction_output || !reduction_source.value().write(reduction_input))
-        return false;
-    const auto run_reduction = [&](bool defer_readback = false) {
-        auto builder = runtime.dispatch(reduction.value())
-                           .global(element_count)
-                           .read(reduction_source.value())
-                           .write(reduction_output.value())
-                           .push(element_count);
-        if (defer_readback) builder.defer_readback();
-        auto event = builder.submit();
-        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan reduction dispatch failed");
-    };
-    const auto validate_reduction = [&] {
-        auto readback = runtime.readback(reduction_output.value());
-        if (!readback || !readback.value().wait()) return false;
-        auto values = reduction_output.value().read();
-        return values && std::all_of(values.value().begin(), values.value().end(),
-                                     [](float value) { return value == 64.0F; });
-    };
-    run_reduction();
-    if (!validate_reduction()) return false;
-    results.push_back(run_checked(
-        "gpu_reduction_4096_dispatch_wait", [&] { run_reduction(); }, validate_reduction, options));
-    results.push_back(run_checked(
-        "gpu_reduction_4096_deferred_readback_dispatch_wait", [&] { run_reduction(true); },
-        validate_reduction, options));
-    add_kora_gpu_timestamp("gpu_reduction_4096_gpu_execution", [&] { run_reduction(); });
+    for (const auto count : kComputeSizes) {
+        const std::vector<float> reduction_input(count, 1.0F);
+        auto reduction_source = runtime.create_buffer<float>(count);
+        auto reduction_output = runtime.create_buffer<float>(count / 64);
+        if (!reduction_source || !reduction_output || !reduction_source.value().write(reduction_input))
+            return false;
+        const auto run_reduction = [&](bool defer_readback = false) {
+            auto builder = runtime.dispatch(reduction.value())
+                               .global(count)
+                               .read(reduction_source.value())
+                               .write(reduction_output.value())
+                               .push(count);
+            if (defer_readback) builder.defer_readback();
+            auto event = builder.submit();
+            if (!event || !event.value().wait()) throw std::runtime_error("Vulkan reduction dispatch failed");
+        };
+        const auto validate_reduction = [&] {
+            auto readback = runtime.readback(reduction_output.value());
+            if (!readback || !readback.value().wait()) return false;
+            auto values = reduction_output.value().read();
+            return values && std::all_of(values.value().begin(), values.value().end(),
+                                         [](float value) { return value == 64.0F; });
+        };
+        run_reduction();
+        if (!validate_reduction()) return false;
+        const auto name = "gpu_reduction_" + std::to_string(count);
+        results.push_back(
+            run_checked(name + "_dispatch_wait", [&] { run_reduction(); }, validate_reduction, options));
+        results.push_back(run_checked(
+            name + "_deferred_readback_dispatch_wait", [&] { run_reduction(true); }, validate_reduction,
+            options));
+        add_kora_gpu_timestamp(name + "_gpu_execution", [&] { run_reduction(); });
+    }
 
     kora::KernelMetadata scan_metadata;
     scan_metadata.kernel_id = "kora_bench.scan_tile64";
@@ -1894,37 +1948,38 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << scan.error().describe() << '\n';
         return false;
     }
-    std::vector<std::uint32_t> scan_input(element_count, 1U);
-    auto scan_source = runtime.create_buffer<std::uint32_t>(element_count);
-    auto scan_output = runtime.create_buffer<std::uint32_t>(element_count);
-    if (!scan_source || !scan_output || !scan_source.value().write(scan_input)) return false;
-    const auto run_scan = [&](bool defer_readback = false) {
-        auto builder = runtime.dispatch(scan.value())
-                           .global(element_count)
-                           .read(scan_source.value())
-                           .write(scan_output.value())
-                           .push(element_count);
-        if (defer_readback) builder.defer_readback();
-        auto event = builder.submit();
-        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan scan dispatch failed");
-    };
-    const auto validate_scan = [&] {
-        auto readback = runtime.readback(scan_output.value());
-        if (!readback || !readback.value().wait()) return false;
-        auto values = scan_output.value().read();
-        return values && std::all_of(values.value().begin(), values.value().end(),
-                                     [index = std::uint32_t{0}](std::uint32_t value) mutable {
-                                         return value == (index++ % 64) + 1;
-                                     });
-    };
-    run_scan();
-    if (!validate_scan()) return false;
-    results.push_back(
-        run_checked("gpu_tiled_scan_4096_dispatch_wait", [&] { run_scan(); }, validate_scan, options));
-    results.push_back(run_checked(
-        "gpu_tiled_scan_4096_deferred_readback_dispatch_wait", [&] { run_scan(true); }, validate_scan,
-        options));
-    add_kora_gpu_timestamp("gpu_tiled_scan_4096_gpu_execution", [&] { run_scan(); });
+    for (const auto count : kComputeSizes) {
+        const std::vector<std::uint32_t> scan_input(count, 1U);
+        auto scan_source = runtime.create_buffer<std::uint32_t>(count);
+        auto scan_output = runtime.create_buffer<std::uint32_t>(count);
+        if (!scan_source || !scan_output || !scan_source.value().write(scan_input)) return false;
+        const auto run_scan = [&](bool defer_readback = false) {
+            auto builder = runtime.dispatch(scan.value())
+                               .global(count)
+                               .read(scan_source.value())
+                               .write(scan_output.value())
+                               .push(count);
+            if (defer_readback) builder.defer_readback();
+            auto event = builder.submit();
+            if (!event || !event.value().wait()) throw std::runtime_error("Vulkan scan dispatch failed");
+        };
+        const auto validate_scan = [&] {
+            auto readback = runtime.readback(scan_output.value());
+            if (!readback || !readback.value().wait()) return false;
+            auto values = scan_output.value().read();
+            return values && std::all_of(values.value().begin(), values.value().end(),
+                                         [index = std::uint32_t{0}](std::uint32_t value) mutable {
+                                             return value == (index++ % 64) + 1;
+                                         });
+        };
+        run_scan();
+        if (!validate_scan()) return false;
+        const auto name = "gpu_tiled_scan_" + std::to_string(count);
+        results.push_back(run_checked(name + "_dispatch_wait", [&] { run_scan(); }, validate_scan, options));
+        results.push_back(run_checked(
+            name + "_deferred_readback_dispatch_wait", [&] { run_scan(true); }, validate_scan, options));
+        add_kora_gpu_timestamp(name + "_gpu_execution", [&] { run_scan(); });
+    }
 
     kora::KernelMetadata matmul_metadata;
     matmul_metadata.kernel_id = "kora_bench.tiled_matmul";
@@ -1945,41 +2000,43 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << matmul.error().describe() << '\n';
         return false;
     }
-    constexpr std::uint32_t matrix_dimension = 64;
-    constexpr std::uint32_t matrix_elements = matrix_dimension * matrix_dimension;
-    std::vector<float> matrix_values(matrix_elements, 1.0F);
-    auto matrix_a = runtime.create_buffer<float>(matrix_elements);
-    auto matrix_b = runtime.create_buffer<float>(matrix_elements);
-    auto matrix_c = runtime.create_buffer<float>(matrix_elements);
-    if (!matrix_a || !matrix_b || !matrix_c || !matrix_a.value().write(matrix_values) ||
-        !matrix_b.value().write(matrix_values))
-        return false;
-    const auto run_matmul = [&](bool defer_readback = false) {
-        auto builder = runtime.dispatch(matmul.value())
-                           .global(matrix_dimension, matrix_dimension, 1)
-                           .read(matrix_a.value())
-                           .read(matrix_b.value())
-                           .write(matrix_c.value())
-                           .push(matrix_dimension);
-        if (defer_readback) builder.defer_readback();
-        auto event = builder.submit();
-        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan tiled matmul failed");
-    };
-    const auto validate_matmul = [&] {
-        auto readback = runtime.readback(matrix_c.value());
-        if (!readback || !readback.value().wait()) return false;
-        auto values = matrix_c.value().read();
-        return values && std::all_of(values.value().begin(), values.value().end(),
-                                     [](float value) { return value == 64.0F; });
-    };
-    run_matmul();
-    if (!validate_matmul()) return false;
-    results.push_back(
-        run_checked("gpu_tiled_matmul_64_dispatch_wait", [&] { run_matmul(); }, validate_matmul, options));
-    results.push_back(run_checked(
-        "gpu_tiled_matmul_64_deferred_readback_dispatch_wait", [&] { run_matmul(true); }, validate_matmul,
-        options));
-    add_kora_gpu_timestamp("gpu_tiled_matmul_64_gpu_execution", [&] { run_matmul(); });
+    for (const auto matrix_dimension : kMatrixDimensions) {
+        const auto matrix_elements = matrix_dimension * matrix_dimension;
+        const std::vector<float> matrix_values(matrix_elements, 1.0F);
+        auto matrix_a = runtime.create_buffer<float>(matrix_elements);
+        auto matrix_b = runtime.create_buffer<float>(matrix_elements);
+        auto matrix_c = runtime.create_buffer<float>(matrix_elements);
+        if (!matrix_a || !matrix_b || !matrix_c || !matrix_a.value().write(matrix_values) ||
+            !matrix_b.value().write(matrix_values))
+            return false;
+        const auto run_matmul = [&](bool defer_readback = false) {
+            auto builder = runtime.dispatch(matmul.value())
+                               .global(matrix_dimension, matrix_dimension, 1)
+                               .read(matrix_a.value())
+                               .read(matrix_b.value())
+                               .write(matrix_c.value())
+                               .push(matrix_dimension);
+            if (defer_readback) builder.defer_readback();
+            auto event = builder.submit();
+            if (!event || !event.value().wait()) throw std::runtime_error("Vulkan tiled matmul failed");
+        };
+        const auto validate_matmul = [&] {
+            auto readback = runtime.readback(matrix_c.value());
+            if (!readback || !readback.value().wait()) return false;
+            auto values = matrix_c.value().read();
+            const auto expected = static_cast<float>(matrix_dimension);
+            return values && std::all_of(values.value().begin(), values.value().end(),
+                                         [expected](float value) { return value == expected; });
+        };
+        run_matmul();
+        if (!validate_matmul()) return false;
+        const auto name = "gpu_tiled_matmul_" + std::to_string(matrix_dimension);
+        results.push_back(
+            run_checked(name + "_dispatch_wait", [&] { run_matmul(); }, validate_matmul, options));
+        results.push_back(run_checked(
+            name + "_deferred_readback_dispatch_wait", [&] { run_matmul(true); }, validate_matmul, options));
+        add_kora_gpu_timestamp(name + "_gpu_execution", [&] { run_matmul(); });
+    }
 
     kora::KernelMetadata stencil_metadata;
     stencil_metadata.kernel_id = "kora_bench.stencil";
@@ -1999,36 +2056,39 @@ bool add_gpu_benchmarks(std::vector<Result>& results, const Options& options, co
         std::cerr << "GPU benchmarks unavailable: " << stencil.error().describe() << '\n';
         return false;
     }
-    std::vector<float> stencil_input(element_count, 1.0F);
-    auto stencil_source = runtime.create_buffer<float>(element_count);
-    auto stencil_output = runtime.create_buffer<float>(element_count);
-    if (!stencil_source || !stencil_output || !stencil_source.value().write(stencil_input)) return false;
-    const auto run_stencil = [&](bool defer_readback = false) {
-        auto builder = runtime.dispatch(stencil.value())
-                           .global(element_count)
-                           .read(stencil_source.value())
-                           .write(stencil_output.value())
-                           .push(element_count);
-        if (defer_readback) builder.defer_readback();
-        auto event = builder.submit();
-        if (!event || !event.value().wait()) throw std::runtime_error("Vulkan stencil dispatch failed");
-    };
-    const auto validate_stencil = [&] {
-        auto readback = runtime.readback(stencil_output.value());
-        if (!readback || !readback.value().wait()) return false;
-        auto values = stencil_output.value().read();
-        return values && values.value().front() == 2.0F && values.value().back() == 2.0F &&
-               std::all_of(values.value().begin() + 1, values.value().end() - 1,
-                           [](float value) { return value == 3.0F; });
-    };
-    run_stencil();
-    if (!validate_stencil()) return false;
-    results.push_back(
-        run_checked("gpu_stencil_4096_dispatch_wait", [&] { run_stencil(); }, validate_stencil, options));
-    results.push_back(run_checked(
-        "gpu_stencil_4096_deferred_readback_dispatch_wait", [&] { run_stencil(true); }, validate_stencil,
-        options));
-    add_kora_gpu_timestamp("gpu_stencil_4096_gpu_execution", [&] { run_stencil(); });
+    for (const auto count : kComputeSizes) {
+        const std::vector<float> stencil_input(count, 1.0F);
+        auto stencil_source = runtime.create_buffer<float>(count);
+        auto stencil_output = runtime.create_buffer<float>(count);
+        if (!stencil_source || !stencil_output || !stencil_source.value().write(stencil_input)) return false;
+        const auto run_stencil = [&](bool defer_readback = false) {
+            auto builder = runtime.dispatch(stencil.value())
+                               .global(count)
+                               .read(stencil_source.value())
+                               .write(stencil_output.value())
+                               .push(count);
+            if (defer_readback) builder.defer_readback();
+            auto event = builder.submit();
+            if (!event || !event.value().wait()) throw std::runtime_error("Vulkan stencil dispatch failed");
+        };
+        const auto validate_stencil = [&] {
+            auto readback = runtime.readback(stencil_output.value());
+            if (!readback || !readback.value().wait()) return false;
+            auto values = stencil_output.value().read();
+            return values && values.value().front() == 2.0F && values.value().back() == 2.0F &&
+                   std::all_of(values.value().begin() + 1, values.value().end() - 1,
+                               [](float value) { return value == 3.0F; });
+        };
+        run_stencil();
+        if (!validate_stencil()) return false;
+        const auto name = "gpu_stencil_" + std::to_string(count);
+        results.push_back(
+            run_checked(name + "_dispatch_wait", [&] { run_stencil(); }, validate_stencil, options));
+        results.push_back(run_checked(
+            name + "_deferred_readback_dispatch_wait", [&] { run_stencil(true); }, validate_stencil,
+            options));
+        add_kora_gpu_timestamp(name + "_gpu_execution", [&] { run_stencil(); });
+    }
 
     auto loader = kora::vk::Loader::load();
     if (!loader) return false;

@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Sweep matched KORA/raw Vulkan SAXPY, reduction, scan, and stencil benchmarks over 4K, 64K, and
+  1M elements and tiled matmul over 16², 64², and 128², with matching CPU tiled-scan baselines, a
+  per-size comparison table with deferred-to-raw ratios, and a grouped compute host-latency chart.
+
+### Fixed
+- Keep the benchmark chart timing-domain label inside its badge.
+
 ## [0.2.20] - 2026-10-12
 
 ### Added

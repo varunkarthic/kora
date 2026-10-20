@@ -56,7 +56,9 @@ reservation search cost; it is not a transfer-throughput or dispatch-latency mea
 ### Matched raw Vulkan compute workloads
 
 GPU reports include same-device raw Vulkan comparisons for SAXPY, reduction, tiled scan, tiled
-matrix multiplication, and stencil at 4,096 elements (64×64 for matrix multiplication). KORA and raw
+matrix multiplication, and stencil at three size tiers: 4,096, 65,536, and 1,048,576 elements, and
+16×16, 64×64, and 128×128 matrices. Every tier is a multiple of the fixtures' 64-lane workgroup and
+8×8 matmul tile, so each tier runs the identical shader without partial-tile special cases. KORA and raw
 Vulkan use the same checked-in SPIR-V fixtures, input values, dispatch dimensions, and output
 expectations. Pipelines, descriptors, buffers, and command resources are created before timing and
 reused. Each warm-up and measured output is checked for correctness, but the check is outside the
@@ -77,37 +79,44 @@ interpolated. For another device or OS, rerun the same command and retain the ra
 ```sh
 KORA_DEVICE=2 build/release/tools/kora-bench --gpu --iterations 1000 --warmup 50 \
   > matched-compute.json
-python3 tools/kora-bench/render_comparison.py matched-compute.json --sizes 4096
+python3 tools/kora-bench/render_comparison.py matched-compute.json --sizes 4096 65536 1048576 4194240
+python3 tools/kora-bench/render_charts.py matched-compute.json --output-dir charts
 ```
 
+The comparison table prints every available workload/size row and its deferred-KORA-to-raw host
+median ratio. `render_charts.py` also writes `compute-host-latency.svg`, which groups the 15 matched
+cases by workload with p50 dots and p95 whiskers on a logarithmic axis.
+
 One local Release sample on macOS arm64 / Apple M4, AppleClang 21.0.0, Vulkan 1.3.357 / MoltenVK,
-used 1,000 measured samples and 50 warm-ups. This is a same-device comparison, not a cross-platform
-claim; this machine provides no CUDA result. The complete raw report, including per-sample values and
-environment metadata, is
-[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json)
-(source revision eb7092113e71a8ce4e86ac16cab31204b80e4070).
+used 1,000 measured samples and 50 warm-ups for every case. This is a same-device comparison, not a
+cross-platform claim; this machine provides no CUDA result. The complete raw report, including
+per-sample values and environment metadata, is
+[retained here](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json)
+(source revision f43b1ef91e2cbd118233992b7d2e2e7c49c6c195). The earlier single-size report remains
+[available](../benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json).
 The side-by-side tables in [the generated comparison page](benchmark-compute-results.md) are rendered
-directly from that report by [`render_comparison.py`](../tools/kora-bench/render_comparison.py).
+directly from the sweep report by [`render_comparison.py`](../tools/kora-bench/render_comparison.py).
 Regenerate them after a new run with:
 
 ```sh
 python3 tools/kora-bench/render_comparison.py \
-  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-1000x50-eb70921.json \
-  --sizes 4096 --kora-revision eb7092113e71a8ce4e86ac16cab31204b80e4070 \
-  > docs/benchmark-compute-results.md
+  benchmarks/results/macos-arm64-apple-m4-moltenvk-compute-sweep-1000x50-f43b1ef.json \
+  --sizes 4096 65536 1048576 4194240 > docs/benchmark-compute-results.md
 ```
 
-In this run, KORA default-to-deferred host median latency fell by 36–57% across the five compute
-workloads. Deferred KORA ranged from 0.77× to 2.82× the raw Vulkan host median: tiled matrix
-multiplication was 23% faster than raw Vulkan, while SAXPY remained 2.82× slower. Device timestamp
-medians were 4–25% slower than raw Vulkan across these five workloads. The probe uses KORA's default
-completion path because deferred completion does not publish Runtime profiling durations; this does
-not change the GPU timestamp interval, which remains the dispatch region. The separate large vector-add
-sizes did not provide KORA timestamps in this run. These are measured boundaries with distinct
-residency policies, not a pure abstraction overhead delta. The report covers one fixed 4,096-element
-workload point (64×64 for matrix multiplication), not small/medium/large scaling; vector-add remains
-the separate size sweep. Results identify follow-up profiling targets and do not establish CUDA parity
-or cross-platform performance.
+![Matched compute host latency across sizes, Apple M4/MoltenVK](../benchmarks/charts/compute-host-latency.svg)
+
+Across the 15 matched cases, deferred KORA ranged from 0.82× (64K scan) to 6.38× (1M SAXPY) the raw
+Vulkan host median and was faster in three cases. Default-to-deferred host medians improved 17–58%.
+The gap grows with size for workloads whose inputs are rewritten or whose outputs are large: SAXPY
+rewrites its 4 MiB input before every 1M sample, and KORA stages that upload through a separate
+transfer submission and waits for it before recording the dispatch, whereas raw Vulkan writes its
+persistent mapped buffer directly. Available KORA device timestamps at 1M were 0.96–4.1× raw Vulkan; one
+difference is that the runtime selected MoltenVK's host-invisible memory type while raw Vulkan uses
+host-visible memory.
+KORA timestamps were unavailable for several cases in this run and are shown as gaps. These are
+measured boundaries with distinct residency policies, not a pure abstraction overhead delta, and do
+not establish CUDA parity or cross-platform performance.
 
 ### Staging-ring reservation scaling
 
