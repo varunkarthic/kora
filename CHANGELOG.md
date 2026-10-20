@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Fix the Windows build of the remote-worker socket layer, where `windows.h` `min`/`max` macros broke
+  `std::min`/`std::max`.
+
 ### Added
 - Add `kora::Cluster`, `kora::WorkerServer`, and the `kora-worker` tool: offload dispatches to KORA
   workers on other machines or devices you own, with workers connecting, disconnecting, or

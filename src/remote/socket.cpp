@@ -7,6 +7,13 @@
 #include <utility>
 
 #ifdef _WIN32
+// windows.h (pulled in by winsock2.h) otherwise defines min/max macros that break std::min/std::max.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
