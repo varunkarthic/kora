@@ -1,8 +1,10 @@
 #include "profiling/timestamp.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 namespace kora::detail {
 
@@ -132,9 +134,20 @@ Result<std::vector<GpuTimestampSample>> TimestampRing::collect(std::uint64_t com
         auto& slot = slots_.front();
         if (!slot.submitted || slot.queue_value > completed_queue_value) break;
         std::uint64_t values[2]{};
-        const auto result =
-            api_.get_query_pool_results(device_, query_pool_, slot.query_index, 2, sizeof(values), values,
-                                        sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+        const auto read = [&] {
+            return api_.get_query_pool_results(device_, query_pool_, slot.query_index, 2, sizeof(values),
+                                               values, sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+        };
+        auto result = read();
+        // The slot's submission has completed, so both queries were executed. Some drivers publish
+        // results slightly after the queue signal; poll briefly instead of dropping the sample, but
+        // never block indefinitely on a driver that does not report availability.
+        // ponytail: fixed 2 ms poll budget; make it configurable if a driver needs longer.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+        while (result == VK_NOT_READY && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds(20));
+            result = read();
+        }
         if (result == VK_NOT_READY) break;
         if (result != VK_SUCCESS)
             return Error(ErrorCode::TransferFailed, "Reading completed GPU timestamps failed")

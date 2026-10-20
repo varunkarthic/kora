@@ -200,6 +200,19 @@ TEST(DeviceCaps, ClassifiesSyntheticMemoryTopologiesAndTypePreferences) {
     EXPECT_EQ(classification.type_preferences.streaming, (std::vector<std::uint32_t>{1, 2, 0}));
     EXPECT_EQ(classification.type_preferences.readback, (std::vector<std::uint32_t>{2, 1, 0}));
 
+    // One device-local heap holding host-invisible, host-visible, and lazily allocated types (no
+    // separate system-memory heap) is unified memory, and Auto prefers its mappable type.
+    const auto single_heap = make_memory_properties(
+        {VK_MEMORY_HEAP_DEVICE_LOCAL_BIT},
+        {{0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT},
+         {0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT},
+         {0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT}});
+    classification = kora::detail::DeviceCaps::classify_memory_properties(single_heap);
+    EXPECT_EQ(classification.topology, kora::MemoryTopology::Uma);
+    EXPECT_FALSE(classification.needs_benchmark);
+    EXPECT_EQ(classification.type_preferences.automatic.front(), 1U);
+
     const auto unknown = make_memory_properties(
         {0}, {{0, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT}});
     classification = kora::detail::DeviceCaps::classify_memory_properties(unknown);
