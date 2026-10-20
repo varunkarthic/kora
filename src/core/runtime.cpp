@@ -2085,8 +2085,6 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
                                               [&](const auto& device) { return device->id == device_id; });
     if (selected_device == impl_->devices.end())
         return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
-    auto metadata_status = validate_kernel_metadata(metadata);
-    if (!metadata_status) return std::move(metadata_status).error();
     std::ifstream input(spirv_path, std::ios::binary | std::ios::ate);
     if (!input) return Error(ErrorCode::InvalidKernel, "cannot open SPIR-V module: " + spirv_path.string());
     const auto end = input.tellg();
@@ -2098,6 +2096,23 @@ Result<Kernel> Runtime::load_kernel(const std::filesystem::path& spirv_path, std
     input.seekg(0);
     input.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(end));
     if (!input) return Error(ErrorCode::IoError, "failed to read complete SPIR-V module");
+    return load_kernel(std::span<const std::uint32_t>(words), std::move(entry_point), std::move(metadata),
+                       device_id);
+}
+
+Result<Kernel> Runtime::load_kernel(std::span<const std::uint32_t> spirv_words, std::string entry_point,
+                                    KernelMetadata metadata, const DeviceId& device_id) {
+    if (!impl_ || impl_->devices.empty())
+        return Error(ErrorCode::InvalidArgument, "runtime is not initialized");
+    const auto selected_device = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+                                              [&](const auto& device) { return device->id == device_id; });
+    if (selected_device == impl_->devices.end())
+        return Error(ErrorCode::InvalidArgument, "device is not owned by runtime");
+    auto metadata_status = validate_kernel_metadata(metadata);
+    if (!metadata_status) return std::move(metadata_status).error();
+    if (spirv_words.empty() || spirv_words.size() > 4U * 1024U * 1024U)
+        return Error(ErrorCode::InvalidKernel, "SPIR-V module is empty or exceeds 16 MiB");
+    std::vector<std::uint32_t> words(spirv_words.begin(), spirv_words.end());
     auto structure = detail::spirv::validate_module_structure(words);
     if (!structure) return std::move(structure).error();
     auto& device = **selected_device;
