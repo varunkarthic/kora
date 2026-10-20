@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Free each device's copy of a runtime buffer once its last handle is released and no queued GPU
+  work can still use it. Previously device allocations accumulated until the `Runtime` was
+  destroyed (48 create/dispatch/drop cycles grew live allocations from 5 to 152).
+
 ## [0.2.22] - 2026-10-20
 
 ### Changed

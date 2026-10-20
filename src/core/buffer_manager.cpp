@@ -1,10 +1,12 @@
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <stdexcept>
 #include <utility>
 
+#include "core/buffer_manager_access.hpp"
 #include "kora/buffer.hpp"
 #include "kora/detail/assert.hpp"
 #include "memory/dirty_ranges.hpp"
@@ -64,6 +66,11 @@ struct BufferManagerState {
     std::vector<std::uint32_t> available_slots;
     std::vector<BufferId> deferred;
     std::uint64_t completed_timeline_value = 0;
+    struct ReleaseListener {
+        std::weak_ptr<void> owner;
+        std::function<void(BufferId)> callback;
+    };
+    std::vector<ReleaseListener> release_listeners;
 
     BufferRecord* find(BufferId id) noexcept {
         if (id.slot >= slots.size()) return nullptr;
@@ -113,18 +120,25 @@ struct BufferManagerState {
     }
 
     void release(BufferId id) noexcept {
-        std::lock_guard lock(mutex);
-        auto* record = find(id);
-        if (record == nullptr || record->reference_count == 0) {
-            KORA_ASSERT(false && "buffer reference count invariant violated");
-            return;
-        }
-        --record->reference_count;
-        if (record->reference_count == 0) {
+        std::vector<ReleaseListener> listeners;
+        {
+            std::lock_guard lock(mutex);
+            auto* record = find(id);
+            if (record == nullptr || record->reference_count == 0) {
+                KORA_ASSERT(false && "buffer reference count invariant violated");
+                return;
+            }
+            --record->reference_count;
+            if (record->reference_count != 0) return;
             record->pending_free = true;
             deferred.push_back(id);
             collect_ready();
+            std::erase_if(release_listeners, [](const auto& listener) { return listener.owner.expired(); });
+            listeners = release_listeners;
         }
+        // Outside the registry lock: listeners only queue work and must not re-enter the manager.
+        for (const auto& listener : listeners)
+            if (auto owner = listener.owner.lock()) listener.callback(id);
     }
 
     Status mark_used(BufferId id, std::uint64_t value) {
@@ -154,6 +168,15 @@ struct BufferManagerState {
         collect_ready();
     }
 };
+
+void BufferManagerAccess::add_release_listener(BufferManager& manager, std::weak_ptr<void> owner,
+                                               std::function<void(BufferId)> callback) {
+    if (!manager.state_) return;
+    std::lock_guard lock(manager.state_->mutex);
+    std::erase_if(manager.state_->release_listeners,
+                  [](const auto& listener) { return listener.owner.expired(); });
+    manager.state_->release_listeners.push_back({std::move(owner), std::move(callback)});
+}
 
 }  // namespace kora::detail
 

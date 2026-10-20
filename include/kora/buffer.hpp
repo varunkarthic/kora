@@ -20,7 +20,8 @@ namespace kora {
 
 namespace detail {
 struct BufferManagerState;
-}
+struct BufferManagerAccess;
+}  // namespace detail
 
 enum class BufferUsage : std::uint8_t { Generic, Storage, Uniform, TransferSource, TransferDestination };
 enum class BufferResidency : std::uint8_t { HostOnly, DeviceResident, Mirrored };
@@ -215,6 +216,7 @@ public:
     std::size_t deferred_count() const noexcept;
 
 private:
+    friend struct detail::BufferManagerAccess;
     std::shared_ptr<detail::BufferManagerState> state_;
 };
 
