@@ -240,5 +240,44 @@ class BenchmarkChartTests(unittest.TestCase):
                 ab.render(before, after[:2], Path(directory) / "charts", "Test GPU")
 
 
+    def test_competitor_comparison_keeps_domains_and_reports_gaps(self):
+        spec = importlib.util.spec_from_file_location(
+            "render_competitors", ROOT / "tools/kora-bench/render_competitors.py"
+        )
+        competitors = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(competitors)
+        kora_results, other_results = [], []
+        for row in competitors.cases():
+            case, workload, size = row["case"], row["workload"], row["size"]
+            kora_results += [
+                result(f"gpu_{case}_dispatch_wait", "host_submit_completion", 4000, 5000),
+                result(f"gpu_{case}_deferred_readback_dispatch_wait", "host_submit_completion", 3000, 4000),
+                result(f"raw_vulkan_{case}_dispatch_wait", "host_submit_completion", 2000, 3000),
+                result(f"cpu_{workload}_{size}", "host_cpu_execution", 900, 950),
+            ]
+            for api in ("metal", "opencl", "opengl"):
+                other_results.append(result(f"{api}_{workload}_{size}{row['suffix']}", "host_submit_completion", 1500, 2000))
+            other_results.append(result(f"metal_{workload}_{size}_gpu_execution", "gpu_execution_timestamp", 100, 120))
+            if workload != "tiled_scan":
+                other_results.append(result(f"accelerate_{workload}_{size}", "host_cpu_execution", 300, 350))
+        with tempfile.TemporaryDirectory() as directory:
+            kora_path = Path(directory) / "kora.json"
+            kora_path.write_text(json.dumps(report(kora_results)), encoding="utf-8")
+            other_path = Path(directory) / "competitors.json"
+            other_path.write_text(json.dumps({"schema_version": 1, "results": other_results}), encoding="utf-8")
+            table = competitors.render([kora_path], [other_path], Path(directory) / "charts")
+            self.assertIn("| SAXPY | 4K | 4.000 µs | 3.000 µs | 2.000 µs | 1.500 µs | 1.500 µs | 1.500 µs | 2.00× |", table)
+            self.assertIn("| Scan | 4K | 900 ns | — | — |", table)  # No Accelerate scan: a gap, not a guess.
+            self.assertIn("physically impossible", table)
+            for name in ("competitors-host.svg", "competitors-device.svg"):
+                ElementTree.fromstring((Path(directory) / "charts" / name).read_text())
+            bad = [dict(item, timing_domain="gpu_execution_timestamp") if item["name"].startswith("metal_saxpy_4096_upload")
+                   else item for item in other_results]
+            other_path.write_text(json.dumps({"schema_version": 1, "results": bad}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must use host_submit_completion"):
+                competitors.render([kora_path], [other_path], None)
+
+
 if __name__ == "__main__":
     unittest.main()
