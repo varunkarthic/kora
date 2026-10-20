@@ -9,6 +9,7 @@ Every timing domain stays separate: host submit-to-completion, device timestamps
 from __future__ import annotations
 
 import argparse
+import gzip
 import importlib.util
 import json
 import statistics
@@ -52,7 +53,8 @@ def cases() -> list[dict[str, Any]]:
 def load(paths: list[Path], schema: int) -> list[dict[str, dict[str, Any]]]:
     runs = []
     for path in paths:
-        report = json.loads(path.read_text(encoding="utf-8"))
+        data = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
+        report = json.loads(data.decode("utf-8"))
         if report.get("schema_version") != schema:
             raise ValueError(f"{path} must use schema version {schema}")
         if report.get("diagnostic_profile") is True:

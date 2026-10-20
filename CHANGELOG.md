@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Add the optional macOS `competitor-bench` tool and `render_competitors.py`, and publish a same-device
+  comparison of KORA with Metal, OpenCL 1.2, OpenGL 4.1, Accelerate, and raw Vulkan, including a
+  KosmicKrisp-versus-MoltenVK driver comparison.
+
 ### Changed
 - Record per-dispatch GPU timestamps only as often as telemetry needs them: none at
   `TelemetryLevel::Off`, one dispatch in 16 at the default `Basic`, and every dispatch at `Profile` and

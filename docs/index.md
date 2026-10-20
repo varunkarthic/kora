@@ -111,6 +111,7 @@ autotuning
 scheduler
 benchmarking
 benchmark-compute-results
+benchmark-competitors
 debugging
 recovery
 ```
