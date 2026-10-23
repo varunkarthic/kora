@@ -7,9 +7,11 @@
 mod auth;
 mod protocol;
 mod session;
+mod worker;
 
 pub use auth::{HANDSHAKE_CONTEXT, challenge, response, verify_response};
 pub use protocol::{
     Frame, MessageType, PROTOCOL_VERSION, decode_frame, encode_frame, read_frame, write_frame,
 };
 pub use session::{WorkerSession, accept_session, connect_session};
+pub use worker::{WorkerOptions, WorkerServer, WorkerStats};

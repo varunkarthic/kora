@@ -77,8 +77,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Begin the Rust remote-worker port with a versioned CRC32C transport and domain-separated
   HMAC-SHA256 challenge-response authentication and bounded TCP sessions: frame parsing rejects
   unknown message types, malformed reserved bytes, truncation, trailing bytes, and oversized
-  payloads before allocation. This is the protocol foundation for the forthcoming Cluster and
-  `kora-worker` implementation; remote execution itself remains legacy C++ only.
+  payloads before allocation. The new loopback-safe `WorkerServer` authenticates health sessions,
+  responds to pings, and rejects unimplemented dispatches explicitly; remote Runtime execution,
+  Cluster routing, failover, and split dispatch remain legacy C++ only.
 
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
