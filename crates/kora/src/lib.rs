@@ -24,6 +24,7 @@ pub mod metadata;
 pub mod options;
 pub mod partition;
 pub mod performance_db;
+pub mod profiling;
 pub mod scheduler;
 pub mod task_graph;
 pub mod transfer_model;
