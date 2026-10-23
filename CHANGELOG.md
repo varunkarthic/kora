@@ -31,6 +31,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `DeviceInfo` capability tiers and memory topology, device selection, and deterministic fault
   injection. An advertised validation layer that fails to load now falls back to an unvalidated
   instance with a warning instead of failing creation.
+- Port the memory subsystem to Rust: the TLSF-style suballocator (statistics are now O(1)
+  running counters instead of a full region walk per allocation), device-memory pools that try
+  the allocation before running recovery and release surplus empty blocks, the budget ledger and
+  memory-type selection, staging rings whose slices keep their mapping alive and reclaim through a
+  timeline heap, dirty-range flush/invalidate, residency tracking, LRU-2 eviction planning, and
+  the bounded OOM recovery coordinator. Fault injection can now fail a window of consecutive calls.
 
 ## [0.3.0] - 2026-10-20
 

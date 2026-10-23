@@ -19,6 +19,7 @@ pub mod fsutil;
 pub mod ids;
 pub mod json;
 pub mod log;
+pub mod memory;
 pub mod metadata;
 pub mod options;
 pub mod partition;
@@ -36,6 +37,7 @@ pub use error::{Error, ErrorCode, Result, Status};
 pub use event::{Event, EventPromise};
 pub use execution_plan::ExecutionPlan;
 pub use ids::{BufferId, DeviceId};
+pub use memory::{DirtyRange, MemoryStats};
 pub use metadata::{
     KernelAccess, KernelBindingKind, KernelBindingMetadata, KernelMetadata, PushConstantFieldMetadata,
     SpecializationConstantMetadata, SpecializationValue, parse_kernel_metadata, validate_kernel_metadata,
