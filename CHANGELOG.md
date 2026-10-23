@@ -25,6 +25,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   submit/run path), `TaskGraph`/`ExecutionPlan` with allocation-free replay, temporary-buffer
   aliasing (reachability bitsets replace per-pair graph searches), `DynamicPartitioner`, scheduler
   cost/policy models, transfer models, and the persistent performance database.
+- Port the Vulkan bootstrap to Rust on `ash`: runtime loader discovery (including macOS SDK and
+  Homebrew locations), instance negotiation with portability enumeration, owned physical-device
+  snapshots with no escaping `pNext` chains, logical devices that enable only queried features,
+  `DeviceInfo` capability tiers and memory topology, device selection, and deterministic fault
+  injection. An advertised validation layer that fails to load now falls back to an unvalidated
+  instance with a warning instead of failing creation.
 
 ## [0.3.0] - 2026-10-20
 

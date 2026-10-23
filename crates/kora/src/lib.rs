@@ -11,6 +11,7 @@
 pub mod aliasing;
 pub mod checked;
 pub mod cpu_executor;
+pub mod device;
 pub mod error;
 pub mod event;
 pub mod execution_plan;
@@ -27,8 +28,10 @@ pub mod task_graph;
 pub mod transfer_model;
 pub mod verification;
 pub mod version;
+pub mod vulkan;
 
 pub use cpu_executor::{CpuExecutor, CpuExecutorOptions, CpuTaskPriority};
+pub use device::{CapabilityTier, DeviceCandidate, DeviceInfo, DeviceKind, MemoryTopology, select_devices};
 pub use error::{Error, ErrorCode, Result, Status};
 pub use event::{Event, EventPromise};
 pub use execution_plan::ExecutionPlan;
