@@ -453,8 +453,6 @@ impl TransferEngine {
                 }
             })),
             on_complete: Some(Box::new(move |_, status| {
-                let _pending = pending;
-                let _keepalive = keepalive;
                 let slice = work.lock().unwrap_or_else(|p| p.into_inner()).slice.take();
                 let status = match (status, complete) {
                     (Ok(()), Some(complete)) => {
@@ -462,8 +460,9 @@ impl TransferEngine {
                     }
                     (status, _) => status,
                 };
-                // Dropping the slice releases (or makes reclaimable) its staging range.
-                drop(slice);
+                // Release the staging range, pending uses, and keep-alives before publishing, so
+                // a waiter observes every resource of the finished transfer already released.
+                drop((slice, pending, keepalive));
                 promise.complete(status);
             })),
             ..Default::default()

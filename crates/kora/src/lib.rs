@@ -27,6 +27,7 @@ pub mod options;
 pub mod partition;
 pub mod performance_db;
 pub mod profiling;
+pub mod runtime;
 pub mod scheduler;
 pub mod task_graph;
 pub mod transfer_model;
@@ -48,6 +49,10 @@ pub use metadata::{
     SpecializationConstantMetadata, SpecializationValue, parse_kernel_metadata, validate_kernel_metadata,
 };
 pub use options::{DevicePolicy, ResolvedOptions, RuntimeOptions, ShutdownMode, TelemetryLevel};
+pub use runtime::{
+    CpuTaskContext, DeviceFaultReport, DispatchBuilder, DispatchPriority, Kernel, Runtime,
+    RuntimeProfilingStats, RuntimeTransferStats,
+};
 pub use task_graph::{
     AccessMode, BufferAccess, TaskGraph, TaskGraphPlan, TaskId, TaskMetadata, TaskNode, TaskType,
 };

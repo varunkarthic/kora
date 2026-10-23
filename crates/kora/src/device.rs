@@ -404,10 +404,6 @@ pub fn select_devices(options: &ResolvedOptions, devices: &[DeviceCandidate]) ->
 /// Initializes selected devices. With `isolate_failures` (the `AllEligible` policy), failing
 /// devices are quarantined and reported while healthy ones continue; otherwise the first failure
 /// is returned immediately. Errors carry the device identity.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by Runtime initialization (#258)")
-)]
 pub(crate) fn initialize_selected_devices(
     selected: &[DeviceId],
     isolate_failures: bool,

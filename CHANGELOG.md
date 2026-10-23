@@ -59,8 +59,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   and applied on the next access instead of blocking the completion thread. A thread that re-enters
   a buffer it has mapped gets an error instead of a deadlock. A full-range write mapping now
   clears a data-loss mark, and per-device replicas are released with the last handle.
+- Port the runtime core to Rust: `Runtime::new` with device selection and `AllEligible`
+  quarantine, kernels validated and pre-compiled at load (`load_kernel`, `load_kernel_on`,
+  `load_kernel_file`), the `DispatchBuilder` (`read`/`write`/`read_write`, `Pod` push constants,
+  priority, deferred readback), `readback`, CPU fallbacks with typed `CpuTaskContext` views,
+  memory, transfer, and timestamp statistics, and `VK_EXT_device_fault` reports. Staged input
+  uploads no longer block the submitting thread until the copy finishes, and device replicas are
+  freed as soon as the last handle and in-flight submission release them.
 
 ### Fixed
+- Dispatches that read or overwrite a buffer written by an earlier dispatch now record a memory
+  barrier; independent dispatches still record none. The C++ runtime recorded no barrier between
+  dependent dispatches.
+- Once a `LocalSizeId` kernel finishes autotuning, every dispatch is specialized with the tuned
+  workgroup size. The C++ runtime computed group counts from the tuned size but compiled the
+  default size, which could leave elements unprocessed.
+- A dispatch whose input has newer, unread results on another device now fails with a clear error
+  instead of silently uploading stale host bytes.
+- A graceful shutdown now drains follow-up work that completion callbacks enqueue (such as a
+  dispatch's output readback) instead of rejecting it.
 - Logical devices now enable `shaderInt16`, `shaderInt64`, and `shaderFloat64` when supported,
   so modules declaring those capabilities (which reflection already accepted) are valid, and
   enable `maintenance4` when available; `LocalSizeId` kernels are rejected with a clear error on

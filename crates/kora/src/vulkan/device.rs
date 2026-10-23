@@ -85,7 +85,6 @@ pub(crate) struct DeviceInner {
     timeline: Timeline,
     sync2: Sync2,
     calibrated: Option<Calibrated>,
-    #[expect(dead_code, reason = "read by Runtime device-loss reports (#258)")]
     device_fault: Option<ash::ext::device_fault::Device>,
     faults: FaultInjector,
 }
@@ -587,6 +586,73 @@ impl Device {
         // SAFETY: requires external synchronization of all queues; callers use it only after their
         // queue owners have stopped submitting.
         unsafe { self.inner.raw.device_wait_idle() }
+    }
+
+    /// `true` when `VK_EXT_device_fault` diagnostics were enabled.
+    pub fn supports_fault_diagnostics(&self) -> bool {
+        self.inner.device_fault.is_some()
+    }
+
+    /// Queries `VK_EXT_device_fault` after device loss, keeping at most 256 address and vendor
+    /// records each. Vendor binary dumps are never requested. Without the extension the snapshot
+    /// reports `supported == false`.
+    pub fn fault_snapshot(&self) -> super::DeviceFaultSnapshot {
+        const MAXIMUM_RECORDS: u32 = 256;
+        let mut snapshot = super::DeviceFaultSnapshot::default();
+        let Some(ext) = &self.inner.device_fault else {
+            return snapshot;
+        };
+        snapshot.supported = true;
+        snapshot.queried = true;
+        let device = self.inner.raw.handle();
+        let get = ext.fp().get_device_fault_info_ext;
+        let mut counts = vk::DeviceFaultCountsEXT::default();
+        // SAFETY: the extension is enabled on this device; a null info pointer requests counts only.
+        let result = unsafe { get(device, &mut counts, std::ptr::null_mut()) };
+        snapshot.query_result = result.as_raw();
+        if result != vk::Result::SUCCESS {
+            return snapshot;
+        }
+        let address_capacity = counts.address_info_count.min(MAXIMUM_RECORDS);
+        let vendor_capacity = counts.vendor_info_count.min(MAXIMUM_RECORDS);
+        let mut addresses = vec![vk::DeviceFaultAddressInfoEXT::default(); address_capacity as usize];
+        let mut vendors = vec![vk::DeviceFaultVendorInfoEXT::default(); vendor_capacity as usize];
+        let mut info = vk::DeviceFaultInfoEXT {
+            p_address_infos: addresses.as_mut_ptr(),
+            p_vendor_infos: vendors.as_mut_ptr(),
+            ..Default::default()
+        };
+        let mut truncated =
+            counts.address_info_count > address_capacity || counts.vendor_info_count > vendor_capacity;
+        counts.address_info_count = address_capacity;
+        counts.vendor_info_count = vendor_capacity;
+        counts.vendor_binary_size = 0;
+        // SAFETY: both arrays hold exactly the capacities written into `counts`, the binary dump is
+        // disabled, and every pointer outlives the call.
+        let result = unsafe { get(device, &mut counts, &mut info) };
+        snapshot.query_result = result.as_raw();
+        truncated |= result == vk::Result::INCOMPLETE;
+        snapshot.truncated = truncated;
+        snapshot.description = super::fixed_c_string(&info.description);
+        snapshot.addresses = addresses
+            .iter()
+            .take(counts.address_info_count.min(address_capacity) as usize)
+            .map(|a| super::DeviceFaultAddressRecord {
+                address_type: a.address_type.as_raw().cast_unsigned(),
+                reported_address: a.reported_address,
+                precision: a.address_precision,
+            })
+            .collect();
+        snapshot.vendor_records = vendors
+            .iter()
+            .take(counts.vendor_info_count.min(vendor_capacity) as usize)
+            .map(|v| super::DeviceFaultVendorRecord {
+                description: super::fixed_c_string(&v.description),
+                code: v.vendor_fault_code,
+                data: v.vendor_fault_data,
+            })
+            .collect();
+        snapshot
     }
 }
 

@@ -311,6 +311,10 @@ struct ReadyState {
     accepting: bool,
     stop_requested: bool,
     cancel_pending: bool,
+    /// Admitted submissions whose completion callback has not finished. A graceful shutdown keeps
+    /// the submission worker alive until this reaches zero, because a callback may enqueue
+    /// follow-up work (for example, a readback after a dispatch).
+    outstanding: u64,
 }
 
 struct CompletionState {
@@ -457,7 +461,7 @@ impl<B: QueueBackend> Shared<B> {
     /// Pops the next item (and compatible followers) or returns `None` to stop.
     fn next_batch(&self) -> Option<(Vec<Queued>, bool)> {
         let mut ready = lock(&self.ready);
-        while !ready.stop_requested && ready.queue.is_empty() {
+        while ready.queue.is_empty() && !(ready.stop_requested && ready.outstanding == 0) {
             ready = self.ready_changed.wait(ready).unwrap_or_else(|p| p.into_inner());
         }
         let first = ready.queue.pop_front()?;
@@ -811,6 +815,7 @@ impl<B: QueueBackend> Shared<B> {
                 .saturating_duration_since(completion.enqueued_at)
                 .as_nanos() as u64;
             let wait = finished.saturating_duration_since(started).as_nanos() as u64;
+            let finished_callbacks = completion.callbacks.len() as u64;
             for callback in completion.callbacks {
                 if let Some(profile) = callback.on_profile {
                     let _ = run_guarded(|| profile(delay.max(1), wait));
@@ -820,6 +825,8 @@ impl<B: QueueBackend> Shared<B> {
                     let _ = run_guarded(|| on_complete(callback.id, status));
                 }
             }
+            lock(&self.ready).outstanding -= finished_callbacks;
+            self.ready_changed.notify_all();
         }
         ACTIVE_CONTEXT.with(|c| c.set(0));
     }
@@ -910,6 +917,7 @@ impl<B: QueueBackend> QueueContext<B> {
                 accepting: true,
                 stop_requested: false,
                 cancel_pending: false,
+                outstanding: 0,
             }),
             ready_changed: Condvar::new(),
             completions: Mutex::new(CompletionState {
@@ -968,7 +976,9 @@ impl<B: QueueBackend> QueueContext<B> {
     /// Enqueues a submission; the returned ID is unique for this context's lifetime.
     pub fn submit(&self, submission: Submission) -> Result<u64> {
         let mut ready = lock(&self.shared.ready);
-        if !ready.accepting {
+        // During a graceful drain, this context's own callbacks may still enqueue follow-up work.
+        let follow_up = !ready.cancel_pending && ACTIVE_CONTEXT.with(|c| c.get()) == self.shared.identity();
+        if !ready.accepting && !follow_up {
             return Err(Error::new(
                 ErrorCode::Cancelled,
                 "QueueContext is shutting down and rejects new work",
@@ -988,6 +998,7 @@ impl<B: QueueBackend> QueueContext<B> {
             )
         })?;
         ready.queue.push_back(Queued { id, submission });
+        ready.outstanding += 1;
         drop(ready);
         self.shared.ready_changed.notify_one();
         Ok(id)

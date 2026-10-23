@@ -16,6 +16,7 @@ ash.workspace = true
 bytemuck.workspace = true
 
 [dev-dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
 proptest.workspace = true
 
 [lints]
