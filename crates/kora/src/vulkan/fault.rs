@@ -16,9 +16,13 @@ pub enum FaultFunction {
     QueueSubmit,
     /// `vkGetQueryPoolResults`.
     GetQueryPoolResults,
+    /// `vkCreateComputePipelines`.
+    CreateComputePipelines,
+    /// `vkAllocateDescriptorSets`.
+    AllocateDescriptorSets,
 }
 
-const FUNCTIONS: usize = 3;
+const FUNCTIONS: usize = 5;
 
 /// Fails the Nth call of a function with a chosen `VkResult` without forwarding it to the driver;
 /// every other call is forwarded unchanged. Unarmed injectors cost one relaxed atomic load.

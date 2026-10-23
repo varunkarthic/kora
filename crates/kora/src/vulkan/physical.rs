@@ -38,6 +38,8 @@ pub struct FeatureSupport {
     pub device_fault: bool,
     /// `VK_EXT_robustness2` robust buffer access 2.
     pub robust_buffer_access2: bool,
+    /// `maintenance4` (core 1.3 or `VK_KHR_maintenance4`), which allows `LocalSizeId`.
+    pub maintenance4: bool,
 }
 
 /// `VK_EXT_memory_budget` snapshot.
@@ -154,6 +156,7 @@ pub(crate) fn query_physical_device(
     let ext_memory_priority = has(ash::ext::memory_priority::NAME);
     let ext_device_fault = has(ash::ext::device_fault::NAME);
     let ext_robustness2 = has(ash::ext::robustness2::NAME);
+    let ext_maintenance4 = has(ash::khr::maintenance4::NAME);
     let ext_calibrated_khr = has(ash::khr::calibrated_timestamps::NAME);
     let ext_calibrated_ext = has(ash::ext::calibrated_timestamps::NAME);
 
@@ -180,6 +183,7 @@ pub(crate) fn query_physical_device(
     let mut priority = vk::PhysicalDeviceMemoryPriorityFeaturesEXT::default();
     let mut fault = vk::PhysicalDeviceFaultFeaturesEXT::default();
     let mut robustness2 = vk::PhysicalDeviceRobustness2FeaturesEXT::default();
+    let mut maintenance4 = vk::PhysicalDeviceMaintenance4Features::default();
     info.features = {
         let mut features = vk::PhysicalDeviceFeatures2::default();
         if core12 {
@@ -205,6 +209,9 @@ pub(crate) fn query_physical_device(
             }
             if ext_subgroup_size {
                 features = features.push_next(&mut subgroup_size);
+            }
+            if ext_maintenance4 {
+                features = features.push_next(&mut maintenance4);
             }
         }
         if ext_memory_priority {
@@ -286,6 +293,11 @@ pub(crate) fn query_physical_device(
         on(f13.subgroup_size_control)
     } else {
         on(subgroup_size.subgroup_size_control)
+    };
+    info.support.maintenance4 = if core13 {
+        on(f13.maintenance4)
+    } else {
+        on(maintenance4.maintenance4)
     };
     info.support.memory_priority = on(priority.memory_priority);
     info.support.device_fault = on(fault.device_fault);

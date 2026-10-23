@@ -193,6 +193,7 @@ pub fn device_info(raw: &PhysicalDeviceInfo) -> DeviceInfo {
         runtime_descriptor_array: raw.support.runtime_descriptor_array,
         synchronization2: raw.support.synchronization2,
         portability_subset: raw.has_extension(ash::khr::portability_subset::NAME),
+        maintenance4: raw.support.maintenance4,
     };
     let subgroup = match raw.subgroup {
         Some((size, ops)) => SubgroupInfo {

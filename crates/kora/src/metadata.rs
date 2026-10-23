@@ -423,6 +423,16 @@ fn parse_spec(value: &Value, index: usize) -> Result<SpecializationConstantMetad
         number @ Value::Number(_) => SpecializationValue::U64(unsigned(number, &default_path)?),
         _ => return Err(invalid(&default_path, "expected boolean or number")),
     };
+    // JSON has one number type: a non-negative integer default for a signed or floating-point
+    // constant is coerced to the declared type instead of being rejected as a type mismatch.
+    let default_value = match (type_name.as_str(), default_value) {
+        ("i32" | "i64", SpecializationValue::U64(u)) => SpecializationValue::I64(
+            i64::try_from(u).map_err(|_| invalid(&default_path, "integer is outside int64 range"))?,
+        ),
+        ("f32" | "f64", SpecializationValue::U64(u)) => SpecializationValue::F64(u as f64),
+        ("f32" | "f64", SpecializationValue::I64(i)) => SpecializationValue::F64(i as f64),
+        (_, value) => value,
+    };
     Ok(SpecializationConstantMetadata {
         id,
         name,
@@ -620,6 +630,40 @@ mod tests {
             ..Default::default()
         };
         validate_kernel_metadata(&constructed).unwrap();
+    }
+
+    #[test]
+    fn integer_defaults_are_coerced_to_the_declared_scalar_type() {
+        let signed =
+            parse_kernel_metadata(&minimal(r#"{"id":1,"name":"s","type":"i32","default":7}"#)).unwrap();
+        assert_eq!(
+            signed.specialization_constants[0].default_value,
+            SpecializationValue::I64(7)
+        );
+        let float =
+            parse_kernel_metadata(&minimal(r#"{"id":1,"name":"f","type":"f32","default":2}"#)).unwrap();
+        assert_eq!(
+            float.specialization_constants[0].default_value,
+            SpecializationValue::F64(2.0)
+        );
+        let negative =
+            parse_kernel_metadata(&minimal(r#"{"id":1,"name":"f","type":"f64","default":-3}"#)).unwrap();
+        assert_eq!(
+            negative.specialization_constants[0].default_value,
+            SpecializationValue::F64(-3.0)
+        );
+        let too_large = parse_kernel_metadata(&minimal(
+            r#"{"id":1,"name":"s","type":"i64","default":9223372036854775808}"#,
+        ))
+        .unwrap_err();
+        assert!(too_large.message().contains("int64"), "{}", too_large.message());
+        assert!(
+            parse_kernel_metadata(&minimal(
+                r#"{"id":1,"name":"s","type":"i32","default":2147483648}"#
+            ))
+            .is_err()
+        );
+        assert!(parse_kernel_metadata(&minimal(r#"{"id":1,"name":"u","type":"u32","default":-1}"#)).is_err());
     }
 
     #[test]

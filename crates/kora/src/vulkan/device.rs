@@ -49,6 +49,8 @@ pub struct EnabledFeatures {
     pub synchronization2: bool,
     /// `VK_EXT_device_fault`.
     pub device_fault_diagnostics: bool,
+    /// `maintenance4` (allows `LocalSizeId` workgroup sizes).
+    pub maintenance4: bool,
     /// Calibrated timestamps (KHR or EXT).
     pub calibrated_timestamps: bool,
 }
@@ -180,6 +182,8 @@ impl Instance {
                 support.runtime_descriptor_array
             };
         let sync2 = chain && options.enable_synchronization2 && support.synchronization2;
+        // maintenance4 lets kernels declare their workgroup size with LocalSizeId (autotuning).
+        let maintenance4 = chain && support.maintenance4;
         let fault = chain
             && options.enable_device_fault_diagnostics
             && support.device_fault
@@ -207,6 +211,9 @@ impl Instance {
         if !core13 && sync2 {
             enable(ash::khr::synchronization2::NAME);
         }
+        if !core13 && maintenance4 {
+            enable(ash::khr::maintenance4::NAME);
+        }
         if fault {
             enable(ash::ext::device_fault::NAME);
         }
@@ -217,8 +224,13 @@ impl Instance {
         }
         let extension_pointers: Vec<*const c_char> = extensions.iter().map(|n| n.as_ptr()).collect();
 
+        // Shader arithmetic features are enabled whenever supported so that modules declaring the
+        // matching capabilities (which reflection accepts only when supported) are valid.
         let base = vk::PhysicalDeviceFeatures {
             robust_buffer_access: physical.features.robust_buffer_access,
+            shader_int16: physical.features.shader_int16,
+            shader_int64: physical.features.shader_int64,
+            shader_float64: physical.features.shader_float64,
             ..Default::default()
         };
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default()
@@ -230,7 +242,10 @@ impl Instance {
             .descriptor_binding_variable_descriptor_count(
                 indexing && support.descriptor_binding_variable_descriptor_count,
             );
-        let mut f13 = vk::PhysicalDeviceVulkan13Features::default().synchronization2(sync2);
+        let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
+            .synchronization2(sync2)
+            .maintenance4(maintenance4);
+        let mut maintenance4_features = vk::PhysicalDeviceMaintenance4Features::default().maintenance4(true);
         let mut timeline_features =
             vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
         let mut bda_features =
@@ -265,8 +280,13 @@ impl Instance {
             }
             if core13 {
                 features2 = features2.push_next(&mut f13);
-            } else if sync2 {
-                features2 = features2.push_next(&mut sync2_features);
+            } else {
+                if sync2 {
+                    features2 = features2.push_next(&mut sync2_features);
+                }
+                if maintenance4 {
+                    features2 = features2.push_next(&mut maintenance4_features);
+                }
             }
             if fault {
                 features2 = features2.push_next(&mut fault_features);
@@ -317,6 +337,7 @@ impl Instance {
             descriptor_indexing: indexing,
             synchronization2: sync2,
             device_fault_diagnostics: fault,
+            maintenance4,
             calibrated_timestamps: calibrated.is_some(),
         };
         let inner = DeviceInner {

@@ -1,0 +1,34 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer MatrixA { float values[]; } matrix_a;
+layout(set = 0, binding = 1, std430) readonly buffer MatrixB { float values[]; } matrix_b;
+layout(set = 0, binding = 2, std430) writeonly buffer MatrixC { float values[]; } matrix_c;
+layout(push_constant) uniform Parameters { uint dimension; } parameters;
+
+shared float tile_a[8][8];
+shared float tile_b[8][8];
+
+void main() {
+    uint row = gl_WorkGroupID.y * 8 + gl_LocalInvocationID.y;
+    uint column = gl_WorkGroupID.x * 8 + gl_LocalInvocationID.x;
+    float sum = 0.0;
+    for (uint block = 0; block < parameters.dimension; block += 8) {
+        uint a_column = block + gl_LocalInvocationID.x;
+        uint b_row = block + gl_LocalInvocationID.y;
+        tile_a[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
+            row < parameters.dimension && a_column < parameters.dimension
+                ? matrix_a.values[row * parameters.dimension + a_column]
+                : 0.0;
+        tile_b[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
+            b_row < parameters.dimension && column < parameters.dimension
+                ? matrix_b.values[b_row * parameters.dimension + column]
+                : 0.0;
+        barrier();
+        for (uint k = 0; k < 8; ++k) sum += tile_a[gl_LocalInvocationID.y][k] * tile_b[k][gl_LocalInvocationID.x];
+        barrier();
+    }
+    if (row < parameters.dimension && column < parameters.dimension)
+        matrix_c.values[row * parameters.dimension + column] = sum;
+}

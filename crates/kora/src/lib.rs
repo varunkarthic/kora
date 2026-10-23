@@ -18,6 +18,7 @@ pub mod execution_plan;
 pub mod fsutil;
 pub mod ids;
 pub mod json;
+pub mod kernel;
 pub mod log;
 pub mod memory;
 pub mod metadata;
