@@ -20,6 +20,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   arithmetic, categorized logging (`kora_log!`), `RuntimeOptions` resolution with every `KORA_*`
   variable, the bounded strict JSON parser and writer, kernel-metadata parsing/validation/
   serialization, and verification comparators (now a type-safe `VerificationPolicy` enum).
+- Port host-side planning to Rust: `Event`/`EventPromise` (an abandoned promise now cancels its
+  event instead of hanging waiters), the work-stealing `CpuExecutor` (no global lock on the
+  submit/run path), `TaskGraph`/`ExecutionPlan` with allocation-free replay, temporary-buffer
+  aliasing (reachability bitsets replace per-pair graph searches), `DynamicPartitioner`, scheduler
+  cost/policy models, transfer models, and the persistent performance database.
 
 ## [0.3.0] - 2026-10-20
 
