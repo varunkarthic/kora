@@ -12,6 +12,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+ash.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
