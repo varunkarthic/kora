@@ -158,10 +158,6 @@ pub(crate) struct BufferInner {
     host: Mutex<HostStorage>,
     meta: Mutex<Meta>,
     /// Device copies keyed by the owning device context's ID.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     replicas: Mutex<Vec<(u64, Replica)>>,
 }
 
@@ -607,10 +603,6 @@ impl BufferHandle {
 
     /// Runs `f` with the current logical contents and their version without applying a parked
     /// device result, for uploads. Fails when this thread holds a mapping of the buffer.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn with_contents<R>(&self, f: impl FnOnce(&[u8], u64) -> R) -> Result<R> {
         self.check_not_mapped_here()?;
         {
@@ -636,10 +628,6 @@ impl BufferHandle {
     }
 
     /// The replica a device context keeps for this buffer.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn replica<R: Any + Send + Sync>(&self, context: u64) -> Option<Arc<R>> {
         lock(&self.inner.replicas)
             .iter()
@@ -648,10 +636,6 @@ impl BufferHandle {
     }
 
     /// Returns the existing replica for `context` or stores the one `create` builds.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn replica_or_insert<R: Any + Send + Sync>(
         &self,
         context: u64,
@@ -672,19 +656,11 @@ impl BufferHandle {
     }
 
     /// Drops the replica of `context` (it is destroyed once in-flight work releases it).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn remove_replica(&self, context: u64) {
         lock(&self.inner.replicas).retain(|(owner, _)| *owner != context);
     }
 
     /// Context IDs that hold a replica.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn replica_owners(&self) -> Vec<u64> {
         lock(&self.inner.replicas)
             .iter()
@@ -692,13 +668,27 @@ impl BufferHandle {
             .collect()
     }
 
+    /// A non-owning reference.
+    pub(crate) fn downgrade(&self) -> WeakBufferHandle {
+        WeakBufferHandle(Arc::downgrade(&self.inner))
+    }
+
     /// A keep-alive token for submissions that use this buffer.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the runtime dispatch path (#276)")
-    )]
     pub(crate) fn keepalive(&self) -> Arc<dyn Any + Send + Sync> {
         Arc::clone(&self.inner) as Arc<dyn Any + Send + Sync>
+    }
+}
+
+/// Non-owning reference to a buffer, used by device contexts to release their replicas.
+#[derive(Clone)]
+pub(crate) struct WeakBufferHandle(std::sync::Weak<BufferInner>);
+
+impl WeakBufferHandle {
+    pub(crate) fn upgrade(&self) -> Option<BufferHandle> {
+        self.0.upgrade().map(|inner| BufferHandle { inner })
+    }
+    pub(crate) fn is_alive(&self) -> bool {
+        self.0.strong_count() != 0
     }
 }
 

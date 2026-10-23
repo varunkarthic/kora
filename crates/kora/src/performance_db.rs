@@ -151,6 +151,13 @@ impl Entry {
     }
 }
 
+/// Milliseconds since the Unix epoch (0 if the clock is before it).
+pub fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// Thread-safe performance database. See the [module documentation](self).
 pub struct PerformanceDatabase {
     options: PerformanceDatabaseOptions,
