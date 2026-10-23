@@ -109,6 +109,38 @@ jobs:
           python3 -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.readthedocs.yaml').read_text())"
           sphinx-build -W --keep-going -b html docs docs/_build/html
 
+  rust:
+    name: Rust / Linux / lavapipe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Vulkan runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers vulkan-validationlayers glslang-tools spirv-tools
+      - name: Locate lavapipe ICD
+        run: |
+          icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
+          if [ -z "$icd" ]; then
+            echo "The mesa-vulkan-drivers package did not install a lavapipe ICD manifest." >&2
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
   platform:
     name: ${{ matrix.name }}
     if: github.event_name == 'push'
@@ -139,3 +171,6 @@ jobs:
         run: cmake --build --preset debug --parallel
       - name: Test
         run: ctest --preset debug --output-on-failure
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust build and test
+        run: cargo test --workspace --locked

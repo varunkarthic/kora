@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Start the KORA 1.0 Rust migration: a Cargo workspace (`crates/kora`) builds alongside the C++
+  tree, CI checks Rust formatting, Clippy, tests, and rustdoc, and the vendor-neutrality check now
+  scans Rust sources.
+
 ## [0.3.0] - 2026-10-20
 
 ### Changed
