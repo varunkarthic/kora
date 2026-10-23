@@ -29,6 +29,7 @@ pub mod partition;
 pub mod performance_db;
 pub mod placement;
 pub mod profiling;
+pub mod remote;
 pub mod runtime;
 pub mod scheduler;
 pub mod task_graph;
