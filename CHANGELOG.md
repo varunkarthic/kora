@@ -80,6 +80,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   payloads before allocation. The new loopback-safe `WorkerServer` authenticates health sessions,
   responds to pings, and rejects unimplemented dispatches explicitly; remote Runtime execution,
   Cluster routing, failover, and split dispatch remain legacy C++ only.
+- Add bounded little-endian payload readers and writers for the Rust worker protocol. Invalid UTF-8,
+  truncated fields, size overflows, and fields exceeding the negotiated limit fail before values are
+  used by kernel or buffer request handling.
 
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
