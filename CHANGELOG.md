@@ -53,6 +53,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   descriptor-set leases are reference counted so they stay valid after eviction or manager drop.
   Descriptor pools grow by counting their sets instead of relying on driver out-of-pool errors.
   SPIR-V test fixtures are committed, so `cargo test` needs no shader compiler.
+- Port logical buffers to Rust: `BufferHandle` and `Pod`-typed `Buffer<T>` with per-buffer locks
+  (no global registry mutex), exclusive mapping guards that cannot race host writes, and versions
+  that are unique across buffers. Device results that arrive while a buffer is mapped are parked
+  and applied on the next access instead of blocking the completion thread. A thread that re-enters
+  a buffer it has mapped gets an error instead of a deadlock. A full-range write mapping now
+  clears a data-loss mark, and per-device replicas are released with the last handle.
 
 ### Fixed
 - Logical devices now enable `shaderInt16`, `shaderInt64`, and `shaderFloat64` when supported,

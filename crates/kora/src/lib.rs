@@ -9,6 +9,7 @@
 //! [`Error`] with a stable [`ErrorCode`].
 
 pub mod aliasing;
+pub mod buffer;
 pub mod checked;
 pub mod cpu_executor;
 pub mod device;
@@ -33,6 +34,8 @@ pub mod verification;
 pub mod version;
 pub mod vulkan;
 
+pub use buffer::{Buffer, BufferHandle, BufferInfo, BufferManager, BufferUsage};
+pub use bytemuck;
 pub use cpu_executor::{CpuExecutor, CpuExecutorOptions, CpuTaskPriority};
 pub use device::{CapabilityTier, DeviceCandidate, DeviceInfo, DeviceKind, MemoryTopology, select_devices};
 pub use error::{Error, ErrorCode, Result, Status};

@@ -13,6 +13,7 @@ authors.workspace = true
 
 [dependencies]
 ash.workspace = true
+bytemuck.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

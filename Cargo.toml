@@ -12,6 +12,7 @@ authors = ["Varun Karthic"]
 
 [workspace.dependencies]
 ash = "0.38"
+bytemuck = "1.16"
 crc32c = "0.6"
 proptest = "1"
 
