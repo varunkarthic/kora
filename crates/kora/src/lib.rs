@@ -10,6 +10,7 @@
 
 pub mod aliasing;
 pub mod buffer;
+pub mod calibration;
 pub mod checked;
 pub mod cpu_executor;
 pub mod device;
@@ -26,6 +27,7 @@ pub mod metadata;
 pub mod options;
 pub mod partition;
 pub mod performance_db;
+pub mod placement;
 pub mod profiling;
 pub mod runtime;
 pub mod scheduler;
@@ -49,6 +51,7 @@ pub use metadata::{
     SpecializationConstantMetadata, SpecializationValue, parse_kernel_metadata, validate_kernel_metadata,
 };
 pub use options::{DevicePolicy, ResolvedOptions, RuntimeOptions, ShutdownMode, TelemetryLevel};
+pub use placement::{AdaptiveDispatchWorkload, AdaptiveKernelWorkKind};
 pub use runtime::{
     CpuTaskContext, DeviceFaultReport, DispatchBuilder, DispatchPriority, Kernel, Runtime,
     RuntimeProfilingStats, RuntimeTransferStats,

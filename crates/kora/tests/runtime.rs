@@ -244,12 +244,42 @@ fn dispatches_vector_add_on_every_device_with_timeline_and_fence_fallback() {
                         "device {device:?} legacy {legacy} index {index}"
                     );
                 }
-                match runtime.profiling_stats(&device) {
-                    Ok(stats) => {
-                        assert!(stats.samples_collected > 0);
-                        assert!(stats.last_duration_nanoseconds > 0);
-                    }
-                    Err(error) => assert_eq!(error.code(), ErrorCode::UnsupportedFeature),
+                let stats = runtime.profiling_stats(&device).unwrap();
+                if stats.gpu_timestamps {
+                    assert!(stats.samples_collected > 0);
+                    assert!(stats.last_duration_nanoseconds > 0);
+                }
+                // Trace telemetry records every host phase of the latest dispatch.
+                assert!(stats.last_profile_submission_id > 0, "{stats:?}");
+                for (name, value) in [
+                    ("validation", stats.last_dispatch_validation_nanoseconds),
+                    ("preflight", stats.last_binding_preflight_nanoseconds),
+                    ("pipeline", stats.last_pipeline_lookup_nanoseconds),
+                    ("residency", stats.last_buffer_residency_nanoseconds),
+                    ("assembly", stats.last_submission_assembly_nanoseconds),
+                    ("host", stats.last_host_submission_nanoseconds),
+                    ("enqueue", stats.last_queue_enqueue_nanoseconds),
+                    ("acquire", stats.last_command_buffer_acquire_nanoseconds),
+                    ("descriptors", stats.last_descriptor_setup_nanoseconds),
+                    ("recording", stats.last_command_recording_nanoseconds),
+                    ("completion", stats.last_queue_completion_nanoseconds),
+                    ("worker delay", stats.last_completion_worker_delay_nanoseconds),
+                    ("callback", stats.last_completion_callback_nanoseconds),
+                ] {
+                    assert!(value > 0, "{name}: {stats:?}");
+                }
+                let trace = runtime.export_trace_json().unwrap();
+                let parsed = kora::json::parse(trace.as_bytes()).unwrap();
+                let events = parsed.find("traceEvents").and_then(|v| v.as_array()).unwrap();
+                assert_eq!(!events.is_empty(), stats.gpu_timestamps);
+                for event in events {
+                    assert_eq!(event.find("ph").and_then(|v| v.as_str()), Some("X"));
+                    let args = event.find("args").unwrap();
+                    assert!(args.find("submission_id").is_some());
+                    assert!(
+                        args.find("scheduler_score").is_none(),
+                        "plain dispatches carry no score"
+                    );
                 }
 
                 let code = |builder: kora::DispatchBuilder| builder.submit().unwrap_err().code();

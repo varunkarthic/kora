@@ -1,6 +1,6 @@
 //! Per-device runtime state: queues, memory pools, transfers, pipelines, and timestamps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,6 +10,7 @@ use ash::vk;
 
 use super::replica::Replica;
 use crate::buffer::{BufferHandle, WeakBufferHandle};
+use crate::calibration::CalibrationRecord;
 use crate::device::DeviceInfo;
 use crate::error::{Error, ErrorCode, Result, Status};
 use crate::ids::DeviceId;
@@ -25,6 +26,7 @@ use crate::memory::{
 use crate::options::{ResolvedOptions, ShutdownMode, TelemetryLevel};
 use crate::performance_db::PerformanceDatabase;
 use crate::profiling::TimestampRing;
+use crate::scheduler::ScoreBreakdown;
 use crate::vulkan::{
     CoalescingOptions, CommandPoolSet, Device, DeviceFaultState, DeviceOptions, Instance, PhysicalDeviceInfo,
     QueueContext, QueueContextOptions, QueueFamilyPolicy, device_info,
@@ -88,6 +90,70 @@ pub(crate) struct PendingAutotune {
     pub(crate) key: String,
 }
 
+/// Host-side phase durations of one dispatch (nanoseconds; zero when unmeasured).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PhaseProfile {
+    pub(crate) submission_id: u64,
+    pub(crate) dispatch_validation_ns: u64,
+    pub(crate) binding_preflight_ns: u64,
+    pub(crate) pipeline_lookup_ns: u64,
+    pub(crate) buffer_residency_ns: u64,
+    pub(crate) submission_assembly_ns: u64,
+    pub(crate) host_submission_ns: u64,
+    pub(crate) queue_enqueue_ns: u64,
+    pub(crate) command_buffer_acquire_ns: u64,
+    pub(crate) descriptor_setup_ns: u64,
+    pub(crate) command_recording_ns: u64,
+    pub(crate) queue_completion_ns: u64,
+    pub(crate) completion_worker_delay_ns: u64,
+    pub(crate) device_completion_wait_ns: u64,
+    pub(crate) timestamp_collection_ns: u64,
+    pub(crate) completion_callback_ns: u64,
+}
+
+/// Elapsed nanoseconds, at least 1 so a measured phase is never reported as unmeasured.
+pub(crate) fn elapsed_ns(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_nanos())
+        .unwrap_or(u64::MAX)
+        .max(1)
+}
+
+/// The adaptive scheduler's score for a traced dispatch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TraceScore {
+    pub(crate) device_index: u32,
+    pub(crate) score: ScoreBreakdown,
+}
+
+const TRACE_SCORE_HISTORY: usize = 4096;
+
+#[derive(Debug, Default)]
+pub(crate) struct TraceScores {
+    pending: HashMap<u64, TraceScore>,
+    pub(crate) completed: HashMap<u64, TraceScore>,
+    order: VecDeque<u64>,
+}
+
+impl TraceScores {
+    pub(crate) fn add_pending(&mut self, submission: u64, score: TraceScore) {
+        if self.pending.len() >= TRACE_SCORE_HISTORY {
+            self.pending.clear();
+        }
+        self.pending.insert(submission, score);
+    }
+    fn complete(&mut self, submission: u64) {
+        if let Some(score) = self.pending.remove(&submission) {
+            self.completed.insert(submission, score);
+            self.order.push_back(submission);
+            while self.order.len() > TRACE_SCORE_HISTORY {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.completed.remove(&oldest);
+                }
+            }
+        }
+    }
+}
+
 /// Timestamp sampling period for a telemetry level (0 = never).
 pub(crate) const fn timestamp_interval(level: TelemetryLevel) -> u32 {
     match level {
@@ -127,6 +193,14 @@ pub(crate) struct DeviceContext {
     pub(crate) performance: Arc<PerformanceDatabase>,
     pub(crate) performance_path: PathBuf,
     pub(crate) pending_autotune: Mutex<HashMap<u64, PendingAutotune>>,
+    /// Adaptive dispatches awaiting their execution timestamp: submission → database key.
+    pub(crate) pending_observations: Mutex<HashMap<u64, String>>,
+    pub(crate) trace_scores: Mutex<TraceScores>,
+    pub(crate) phase_profile: bool,
+    pub(crate) trace: bool,
+    pub(crate) latest_profile: Mutex<PhaseProfile>,
+    pub(crate) calibration: Mutex<CalibrationRecord>,
+    pub(crate) calibration_path: Option<PathBuf>,
     /// Orders hazard bookkeeping with queue enqueue so barrier decisions match submission order.
     pub(crate) submit_lock: Mutex<()>,
     pub(crate) accepting: AtomicBool,
@@ -304,6 +378,12 @@ impl DeviceContext {
         if let Some(ring) = &timestamps {
             ring.enable_trace_history(options.telemetry == TelemetryLevel::Trace);
         }
+        let calibration = CalibrationRecord::new(id.uuid.to_string(), info.driver_version);
+        let calibration_path = (!id.uuid.is_empty()).then(|| {
+            PathBuf::from(&options.cache_dir)
+                .join("calibration")
+                .join(format!("{}.json", id.uuid))
+        });
         let context = Arc::new(Self {
             key: NEXT_CONTEXT.fetch_add(1, Ordering::Relaxed),
             runtime,
@@ -331,6 +411,13 @@ impl DeviceContext {
             performance_path: PathBuf::from(&options.cache_dir).join("performance-db.json"),
             performance,
             pending_autotune: Mutex::new(HashMap::new()),
+            pending_observations: Mutex::new(HashMap::new()),
+            trace_scores: Mutex::default(),
+            phase_profile: matches!(options.telemetry, TelemetryLevel::Profile | TelemetryLevel::Trace),
+            trace: options.telemetry == TelemetryLevel::Trace,
+            latest_profile: Mutex::default(),
+            calibration: Mutex::new(calibration),
+            calibration_path,
             submit_lock: Mutex::new(()),
             accepting: AtomicBool::new(true),
             quarantined: AtomicBool::new(false),
@@ -501,7 +588,8 @@ impl DeviceContext {
                 .is_multiple_of(u64::from(self.timestamp_interval))
     }
 
-    /// Consumes completed timestamp samples: autotuning trials are observed and persisted.
+    /// Consumes completed timestamp samples: autotuning trials and adaptive executions are
+    /// recorded in the performance database, and traced scheduler scores move to history.
     pub(crate) fn collect_timestamps(&self, wait: Duration) -> Status {
         let Some(ring) = &self.timestamps else {
             return Ok(());
@@ -514,15 +602,22 @@ impl DeviceContext {
         let now = crate::performance_db::unix_ms();
         let mut save = false;
         for sample in samples {
-            let pending = lock(&self.pending_autotune).remove(&sample.submission_id);
-            let Some(pending) = pending else { continue };
             let duration = sample.duration_nanoseconds as f64;
-            if pending.tuner.observe(&pending.trial, duration).is_ok()
+            if let Some(pending) = lock(&self.pending_autotune).remove(&sample.submission_id)
+                && pending.tuner.observe(&pending.trial, duration).is_ok()
                 && !pending.trial.warmup
                 && self.performance.observe(&pending.key, duration, now).is_ok()
             {
                 save = true;
             }
+            if let Some(key) = lock(&self.pending_observations).remove(&sample.submission_id)
+                && self.performance.observe(&key, duration, now).is_ok()
+            {
+                // Persist at the first sample, when the record becomes confident, then every 8.
+                let count = self.performance.query(&key).map_or(0, |s| s.count);
+                save |= count == 1 || count == 5 || count.is_multiple_of(8);
+            }
+            lock(&self.trace_scores).complete(sample.submission_id);
         }
         if save {
             // Persistence is best effort: a read-only cache directory must not fail dispatches.
@@ -542,8 +637,17 @@ impl DeviceContext {
         if !Arc::ptr_eq(&self.queue, &self.transfer_queue) {
             let _ = self.transfer_queue.shutdown(mode);
         }
+        let lost = !self.fault_state.healthy();
         for weak in std::mem::take(&mut *lock(&self.replicated)) {
             if let Some(buffer) = weak.upgrade() {
+                // Results that only this lost device held are gone with it.
+                if lost
+                    && let Some(replica) = buffer.replica::<Replica>(self.key)
+                    && replica.state().device_newer
+                    && replica.state().resident_version == Some(buffer.host_version())
+                {
+                    buffer.mark_data_lost();
+                }
                 buffer.remove_replica(self.key);
             }
         }

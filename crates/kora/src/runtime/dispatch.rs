@@ -3,11 +3,12 @@
 use std::any::Any;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use ash::vk;
 use bytemuck::Pod;
 
-use super::context::{DeviceContext, PendingAutotune, lock};
+use super::context::{DeviceContext, PendingAutotune, PhaseProfile, TraceScore, elapsed_ns, lock};
 use super::kernel::Kernel;
 use super::replica::{DeviceAccess, Replica};
 use crate::buffer::BufferHandle;
@@ -16,6 +17,12 @@ use crate::event::{Event, EventPromise};
 use crate::kernel::{DescriptorSetLease, PipelineRef, Trial, WorkgroupAutotuner};
 use crate::memory::{PendingUses, maintain_mapped_range};
 use crate::metadata::{KernelAccess, KernelBindingKind, SpecializationConstantMetadata, SpecializationValue};
+use crate::performance_db::{
+    PerformanceObservationKey, PerformanceTimingDomain, performance_observation_key,
+};
+use crate::placement::AdaptiveDispatchWorkload;
+use crate::scheduler::ScoreBreakdown;
+use crate::verification::{VerificationDataType, VerificationPolicy};
 use crate::vulkan::{CommandPoolSet, Submission};
 
 /// Scheduling hint for a dispatch. `High` and `RealtimeHint` are never delayed for coalescing.
@@ -41,25 +48,73 @@ pub enum DispatchPriority {
 #[must_use = "a dispatch does nothing until submitted"]
 #[derive(Debug, Clone)]
 pub struct DispatchBuilder {
-    kernel: Kernel,
-    global: [u64; 3],
-    bindings: Vec<(BufferHandle, KernelAccess)>,
-    push: Vec<u8>,
-    defer_readback: bool,
-    priority: DispatchPriority,
+    pub(crate) kernel: Kernel,
+    pub(crate) peers: Arc<[Arc<DeviceContext>]>,
+    pub(crate) global: [u64; 3],
+    pub(crate) bindings: Vec<(BufferHandle, KernelAccess)>,
+    pub(crate) push: Vec<u8>,
+    pub(crate) defer_readback: bool,
+    pub(crate) priority: DispatchPriority,
+    pub(crate) adaptive: Option<Arc<AdaptiveState>>,
+    pub(crate) verification: Option<(VerificationPolicy, VerificationDataType)>,
+    /// A verification duplicate: the other participants hold divergent copies by design.
+    pub(crate) duplicate: bool,
+}
+
+/// Placement made by [`Runtime::dispatch_adaptive`](super::Runtime::dispatch_adaptive).
+#[derive(Debug)]
+pub(crate) struct AdaptiveState {
+    /// The kernel as loaded by the caller (its device produced device-resident inputs).
+    pub(crate) original: Kernel,
+    pub(crate) workload: AdaptiveDispatchWorkload,
+    pub(crate) score: Option<ScoreBreakdown>,
+}
+
+/// Performance-database key for the device execution time of `identity` under `workload`.
+pub(crate) fn execution_key(
+    ctx: &DeviceContext,
+    identity: u64,
+    workload: &AdaptiveDispatchWorkload,
+) -> Option<String> {
+    if ctx.id.uuid.is_empty() {
+        return None;
+    }
+    performance_observation_key(&PerformanceObservationKey {
+        device_uuid: ctx.id.uuid.to_string(),
+        driver_version: ctx.info.driver_version,
+        runtime_schema: crate::version::SCHEMA_VERSION,
+        kernel_identity: identity,
+        workload_class: workload.kernel_kind as u8,
+        workload_bucket: workload.kernel_work.max(1).ilog2() as u8,
+        timing_domain: PerformanceTimingDomain::DeviceExecution,
+    })
+    .ok()
 }
 
 impl DispatchBuilder {
-    pub(crate) fn new(kernel: Kernel) -> Self {
+    pub(crate) fn new(kernel: Kernel, peers: Arc<[Arc<DeviceContext>]>) -> Self {
         let bindings = Vec::with_capacity(kernel.state.metadata.bindings.len());
         Self {
             kernel,
+            peers,
             global: [1, 1, 1],
             bindings,
             push: Vec::new(),
             defer_readback: false,
             priority: DispatchPriority::Normal,
+            adaptive: None,
+            verification: None,
+            duplicate: false,
         }
+    }
+
+    /// Runs the dispatch on every initialized, non-quarantined device that supports the kernel
+    /// and compares each writable output across devices with `policy`. Matching results are
+    /// published to the host; on a mismatch the outputs are marked lost, every participant is
+    /// quarantined, and the event fails with [`ErrorCode::ValidationError`].
+    pub fn verify_with(mut self, policy: VerificationPolicy, data_type: VerificationDataType) -> Self {
+        self.verification = Some((policy, data_type));
+        self
     }
 
     /// One-dimensional global size in invocations (rounded up to whole workgroups).
@@ -118,9 +173,47 @@ impl DispatchBuilder {
         self
     }
 
-    /// The device this dispatch targets.
+    /// The device this dispatch targets. An adaptive dispatch may still return to the kernel's
+    /// original device at submission to keep device-resident inputs local.
     pub fn device(&self) -> &crate::ids::DeviceId {
         self.kernel.device()
+    }
+
+    /// Keeps adaptive dispatches next to device-resident inputs: if exactly one device holds
+    /// newer results for an input, the dispatch must run there.
+    fn resolve_adaptive_inputs(&mut self, adaptive: &AdaptiveState) -> Status {
+        let mut producers: Vec<&Arc<DeviceContext>> = Vec::new();
+        for (buffer, access) in &self.bindings {
+            if !access.reads() {
+                continue;
+            }
+            let version = buffer.host_version();
+            for peer in self.peers.iter() {
+                let newer = buffer.replica::<Replica>(peer.key).is_some_and(|r| {
+                    let state = r.state();
+                    state.device_newer && state.resident_version == Some(version)
+                });
+                if newer && !producers.iter().any(|p| p.key == peer.key) {
+                    producers.push(peer);
+                }
+            }
+        }
+        match producers.as_slice() {
+            [] => Ok(()),
+            [producer] if producer.key == self.kernel.state.context.key => Ok(()),
+            [producer] if producer.key == adaptive.original.state.context.key => {
+                self.kernel = adaptive.original.clone();
+                Ok(())
+            }
+            [_] => Err(Error::new(
+                ErrorCode::UnsupportedFeature,
+                "adaptive dispatch input is newer on another device; read it back before migration",
+            )),
+            _ => Err(Error::new(
+                ErrorCode::UnsupportedFeature,
+                "adaptive dispatch inputs have newer copies on multiple devices; read them back first",
+            )),
+        }
     }
 
     /// Validates, uploads stale inputs, and enqueues the dispatch. The returned event completes
@@ -132,10 +225,31 @@ impl DispatchBuilder {
     /// for sizes the device cannot dispatch, [`ErrorCode::InvalidArgument`] for push-constant
     /// mismatches and for an input whose newest contents live on another device, plus allocation
     /// and transfer errors.
-    pub fn submit(self) -> Result<Event> {
+    pub fn submit(mut self) -> Result<Event> {
+        if self.verification.is_some() {
+            if self.adaptive.is_some() {
+                return Err(Error::new(
+                    ErrorCode::UnsupportedFeature,
+                    "adaptive dispatch cannot be combined with duplicate verification",
+                ));
+            }
+            return super::verify::submit_verified(self);
+        }
+        let started = Instant::now();
+        if let Some(adaptive) = self.adaptive.clone() {
+            self.resolve_adaptive_inputs(&adaptive)?;
+        }
         let state = Arc::clone(&self.kernel.state);
         let ctx = &state.context;
         ctx.check_accepting()?;
+        let mut profile = PhaseProfile::default();
+        let mut mark = Instant::now();
+        let mut phase = |slot: &mut u64| {
+            if ctx.phase_profile {
+                *slot = elapsed_ns(mark);
+                mark = Instant::now();
+            }
+        };
         let metadata = &state.metadata;
         if self.bindings.len() != metadata.bindings.len() {
             return Err(Error::new(
@@ -188,9 +302,11 @@ impl DispatchBuilder {
         let local_size = trial.local_size().unwrap_or(state.reflection.local_size);
         let groups = group_counts(self.global, local_size, &ctx.info.limits)?;
         let overrides = local_size_overrides(&state, local_size);
+        phase(&mut profile.dispatch_validation_ns);
         let pipeline = ctx
             .pipelines
             .get_or_create(&state.words, metadata, &overrides, &state.entry_point)?;
+        phase(&mut profile.pipeline_lookup_ns);
 
         let replicas = self
             .bindings
@@ -198,10 +314,11 @@ impl DispatchBuilder {
             .map(|(buffer, _)| ctx.replica(buffer))
             .collect::<Result<Vec<_>>>()?;
         for (buffer, access) in &self.bindings {
-            if access.reads() {
+            if access.reads() && !self.duplicate {
                 reject_newer_elsewhere(ctx, buffer)?;
             }
         }
+        phase(&mut profile.binding_preflight_ns);
         let mut bound_versions = Vec::with_capacity(self.bindings.len());
         let mut uploads = Vec::new();
         for ((buffer, access), replica) in self.bindings.iter().zip(&replicas) {
@@ -213,11 +330,13 @@ impl DispatchBuilder {
                 bound_versions.push(buffer.host_version());
             }
         }
+        phase(&mut profile.buffer_residency_ns);
 
         let host_read_barrier = ctx.direct_host_access && !self.defer_readback;
         let promise = EventPromise::new();
         let event = promise.event();
         let work = Arc::new(Mutex::new(Work::default()));
+        let profile_work = Arc::clone(&work);
         let mut keepalive: Vec<Arc<dyn Any + Send + Sync>> = self
             .bindings
             .iter()
@@ -237,7 +356,21 @@ impl DispatchBuilder {
         let outputs: Vec<usize> = (0..self.bindings.len())
             .filter(|&i| self.bindings[i].1.writes())
             .collect();
-        let timestamped = ctx.sample_timestamps() || trial.tracked();
+        let observation = self
+            .adaptive
+            .as_ref()
+            .and_then(|a| execution_key(ctx, state.semantic_identity, &a.workload));
+        let trace_score = self
+            .adaptive
+            .as_ref()
+            .and_then(|a| a.score)
+            .filter(|_| ctx.trace)
+            .map(|score| TraceScore {
+                device_index: ctx.id.index,
+                score,
+            });
+        let timestamped =
+            ctx.sample_timestamps() || trial.tracked() || observation.is_some() || trace_score.is_some();
 
         for &index in &outputs {
             if let Some(use_) = &replicas[index].transfer().queue_use {
@@ -287,6 +420,8 @@ impl DispatchBuilder {
             trial: trial
                 .take()
                 .map(|(tuner, trial)| (tuner, trial, state.autotune_keys[trial.candidate_index].clone())),
+            observation,
+            trace_score,
         };
         let completed = Completed {
             ctx: Arc::clone(ctx),
@@ -320,9 +455,41 @@ impl DispatchBuilder {
             record: Some(Box::new(move |id, commands| record.run(id, commands))),
             on_submitted: Some(Box::new(move |timeline, status| submitted.run(timeline, status))),
             on_complete: Some(Box::new(move |_, status| completed.run(status))),
+            on_completion_profile: ctx.phase_profile.then(|| {
+                let work = Arc::clone(&profile_work);
+                Box::new(move |delay: u64, wait: u64| {
+                    let mut work = lock(&work);
+                    work.profile.completion_worker_delay_ns = delay.max(1);
+                    work.profile.device_completion_wait_ns = wait.max(1);
+                }) as crate::vulkan::OnCompletionProfile
+            }),
             ..Submission::default()
         };
-        match ctx.queue.submit(submission) {
+        if ctx.phase_profile {
+            phase(&mut profile.submission_assembly_ns);
+            profile.host_submission_ns = elapsed_ns(started)
+                .saturating_sub(profile.buffer_residency_ns)
+                .max(1);
+            let mut work = lock(&profile_work);
+            work.profile = PhaseProfile {
+                command_buffer_acquire_ns: work.profile.command_buffer_acquire_ns,
+                descriptor_setup_ns: work.profile.descriptor_setup_ns,
+                command_recording_ns: work.profile.command_recording_ns,
+                ..profile
+            };
+        }
+        lock(&profile_work).queued_at = Some(Instant::now());
+        let enqueue_started = Instant::now();
+        let submitted = ctx.queue.submit(submission);
+        if ctx.phase_profile {
+            let enqueue = elapsed_ns(enqueue_started);
+            lock(&profile_work).profile.queue_enqueue_ns = enqueue;
+            let mut latest = lock(&ctx.latest_profile);
+            if latest.submission_id != 0 && latest.submission_id == lock(&profile_work).submission_id {
+                latest.queue_enqueue_ns = enqueue;
+            }
+        }
+        match submitted {
             Ok(_) => Ok(event),
             Err(error) => {
                 // The queue dropped the submission without running its callbacks.
@@ -343,6 +510,8 @@ struct Work {
     submission_id: u64,
     timestamped: bool,
     leases: Vec<DescriptorSetLease>,
+    profile: PhaseProfile,
+    queued_at: Option<Instant>,
 }
 
 /// Cancels an autotuning reservation unless the submission took ownership of it.
@@ -537,6 +706,7 @@ struct Recording {
 impl Recording {
     fn run(self, submission_id: u64, commands: &mut Vec<vk::CommandBuffer>) -> Status {
         let ctx = &self.ctx;
+        let acquire_started = Instant::now();
         let mut slot = lock(&ctx.commands);
         if slot.is_none() {
             *slot = Some(CommandPoolSet::new(
@@ -562,6 +732,9 @@ impl Recording {
         let mut work = lock(&self.work);
         work.command = command;
         work.submission_id = submission_id;
+        if ctx.phase_profile {
+            work.profile.command_buffer_acquire_ns = elapsed_ns(acquire_started);
+        }
         let recorded = self.record(command, submission_id, &mut work);
         match recorded.and_then(|()| pool.end_recording(command)) {
             Ok(()) => {
@@ -589,6 +762,7 @@ impl Recording {
                 .timestamps
                 .as_ref()
                 .is_some_and(|ring| ring.record_start(command, submission_id));
+        let descriptors_started = Instant::now();
         for set in 0..self.pipeline.descriptor_set_count() {
             work.leases
                 .push(ctx.pipelines.allocate_descriptor_set(&self.pipeline, set)?);
@@ -618,11 +792,16 @@ impl Recording {
             })
             .collect();
         let sets: Vec<vk::DescriptorSet> = work.leases.iter().map(DescriptorSetLease::handle).collect();
-        // SAFETY: the command buffer is recording on the submission thread; the descriptor sets are
-        // leased to this submission (not in use by pending work); the pipeline, layout, and buffers
-        // are kept alive by the submission until completion.
+        // SAFETY: the descriptor sets are leased to this submission and not used by pending work;
+        // the buffers they reference are kept alive by the submission until completion.
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        let recording_started = Instant::now();
+        if ctx.phase_profile {
+            work.profile.descriptor_setup_ns = elapsed_ns(descriptors_started);
+        }
+        // SAFETY: the command buffer is recording on the submission thread; the pipeline, layout,
+        // and descriptor sets are kept alive by the submission until completion.
         unsafe {
-            device.update_descriptor_sets(&writes, &[]);
             if self.barrier {
                 let barrier = [vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::TRANSFER_WRITE)
@@ -679,6 +858,9 @@ impl Recording {
         {
             ring.record_end(command, submission_id);
         }
+        if ctx.phase_profile {
+            work.profile.command_recording_ns = elapsed_ns(recording_started);
+        }
         Ok(())
     }
 }
@@ -689,6 +871,8 @@ struct Submitted {
     replicas: Vec<Arc<Replica>>,
     outputs: Vec<usize>,
     trial: Option<(Arc<WorkgroupAutotuner>, Trial, String)>,
+    observation: Option<String>,
+    trace_score: Option<TraceScore>,
 }
 
 impl Drop for Submitted {
@@ -727,6 +911,14 @@ impl Submitted {
                 lock(&ctx.pending_autotune).insert(work.submission_id, PendingAutotune { tuner, trial, key });
             } else {
                 tuner.cancel(&trial);
+            }
+        }
+        if status.is_ok() && work.timestamped {
+            if let Some(key) = self.observation.take() {
+                lock(&ctx.pending_observations).insert(work.submission_id, key);
+            }
+            if let Some(score) = self.trace_score.take() {
+                lock(&ctx.trace_scores).add_pending(work.submission_id, score);
             }
         }
         for replica in &self.replicas {
@@ -778,9 +970,19 @@ impl Completed {
             keepalive,
             pipeline,
         } = self;
+        let callback_started = Instant::now();
         // Descriptor sets return to their pool now that the GPU is done with them.
-        drop(std::mem::take(&mut lock(&work).leases));
+        let (mut profile, queued_at) = {
+            let mut work = lock(&work);
+            drop(std::mem::take(&mut work.leases));
+            let mut profile = work.profile;
+            profile.submission_id = work.submission_id;
+            (profile, work.queued_at)
+        };
         drop(work);
+        if let Some(queued_at) = queued_at.filter(|_| status.is_ok()) {
+            profile.queue_completion_ns = elapsed_ns(queued_at);
+        }
         if let Err(error) = &status
             && error.code() == ErrorCode::DeviceLost
         {
@@ -797,7 +999,9 @@ impl Completed {
             status = Err(failed);
         }
         drop(uploads);
+        let collect_started = Instant::now();
         let _ = ctx.collect_timestamps(std::time::Duration::ZERO);
+        profile.timestamp_collection_ns = elapsed_ns(collect_started);
         let mut events = Vec::new();
         if status.is_err() {
             for &index in &outputs {
@@ -820,6 +1024,10 @@ impl Completed {
                     }
                 }
             }
+        }
+        if ctx.phase_profile && status.is_ok() {
+            profile.completion_callback_ns = elapsed_ns(callback_started);
+            *lock(&ctx.latest_profile) = profile;
         }
         // Release every resource of the finished dispatch before anyone can observe completion.
         drop((pending, keepalive, pipeline, replicas, bindings, ctx));
