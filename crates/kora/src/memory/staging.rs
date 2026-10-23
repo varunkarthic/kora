@@ -8,7 +8,8 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use ash::vk;
 
@@ -101,6 +102,8 @@ struct RingInner {
     options: StagingOptions,
     host_coherent: bool,
     state: Mutex<RingState>,
+    /// Signalled whenever a reservation is retired, cancelled, consumed, reclaimed, or dropped.
+    changed: Condvar,
 }
 
 impl Drop for RingInner {
@@ -158,6 +161,27 @@ impl fmt::Debug for StagingSlice {
             .field("offset", &self.offset)
             .field("size", &self.size)
             .finish()
+    }
+}
+
+impl Drop for StagingSlice {
+    fn drop(&mut self) {
+        // An abandoned unsubmitted reservation is released; a dropped readback slice no longer
+        // needs its bytes, so it becomes reclaimable once its timeline completes.
+        let mut state = lock(&self.ring.state);
+        let Some(segment) = state.segment_mut(self.reservation) else {
+            return;
+        };
+        match segment.release_timeline {
+            None => state.remove(self.reservation),
+            Some(timeline) if segment.host_pending => {
+                segment.host_pending = false;
+                state.pending.push(Reverse((timeline, self.reservation)));
+            }
+            Some(_) => return,
+        }
+        drop(state);
+        self.ring.changed.notify_all();
     }
 }
 
@@ -300,6 +324,7 @@ impl StagingRing {
                     next_reservation: 1,
                     ..Default::default()
                 }),
+                changed: Condvar::new(),
             }),
         };
         {
@@ -404,8 +429,41 @@ impl StagingRing {
         size: u64,
         alignment: u64,
         completed_timeline: u64,
-        mut wait_for: Option<&mut dyn FnMut(u64) -> Result<u64>>,
+        wait_for: Option<&mut dyn FnMut(u64) -> Result<u64>>,
     ) -> Result<StagingSlice> {
+        self.reserve_with(size, alignment, completed_timeline, wait_for, None)
+    }
+
+    /// Like [`reserve`](Self::reserve), but when the ring is full only of reservations that are
+    /// still waiting to be submitted (or consumed), waits up to `pending_timeout` for another
+    /// thread (normally the queue's submission worker) to retire or release them. This lets
+    /// producers pipeline staged transfers instead of serializing on each other.
+    pub fn reserve_blocking(
+        &self,
+        size: u64,
+        alignment: u64,
+        completed_timeline: u64,
+        wait_for: Option<&mut dyn FnMut(u64) -> Result<u64>>,
+        pending_timeout: Duration,
+    ) -> Result<StagingSlice> {
+        self.reserve_with(
+            size,
+            alignment,
+            completed_timeline,
+            wait_for,
+            Some(pending_timeout),
+        )
+    }
+
+    fn reserve_with(
+        &self,
+        size: u64,
+        alignment: u64,
+        completed_timeline: u64,
+        mut wait_for: Option<&mut dyn FnMut(u64) -> Result<u64>>,
+        pending_timeout: Option<Duration>,
+    ) -> Result<StagingSlice> {
+        let pending_deadline = pending_timeout.map(|t| Instant::now() + t);
         if size == 0 || !checked::is_pow2(alignment) {
             return Err(Error::new(
                 ErrorCode::InvalidArgument,
@@ -486,6 +544,22 @@ impl StagingRing {
             }
             let oldest = state.oldest_reclaimable();
             let (Some(oldest), Some(wait)) = (oldest, wait_for.as_mut()) else {
+                if let Some(deadline) = pending_deadline
+                    && !state.ids.is_empty()
+                {
+                    let now = Instant::now();
+                    if now < deadline {
+                        // Wait for the submission worker to retire (or a consumer to release) a
+                        // reservation, then retry the whole search.
+                        state = self
+                            .inner
+                            .changed
+                            .wait_timeout(state, deadline - now)
+                            .unwrap_or_else(|p| p.into_inner())
+                            .0;
+                        continue;
+                    }
+                }
                 return Err(Error::new(
                     ErrorCode::AllocationFailed,
                     "staging ring is full with unsubmitted or unconsumed reservations, or has no wait callback",
@@ -532,6 +606,8 @@ impl StagingRing {
         }
         segment.release_timeline = Some(release_timeline);
         state.pending.push(Reverse((release_timeline, slice.reservation)));
+        drop(state);
+        self.inner.changed.notify_all();
         Ok(())
     }
 
@@ -549,6 +625,8 @@ impl StagingRing {
         if let Some(timeline) = segment.release_timeline {
             state.pending.push(Reverse((timeline, slice.reservation)));
         }
+        drop(state);
+        self.inner.changed.notify_all();
         Ok(())
     }
 
@@ -569,6 +647,8 @@ impl StagingRing {
             ));
         }
         state.remove(slice.reservation);
+        drop(state);
+        self.inner.changed.notify_all();
         Ok(())
     }
 
@@ -622,6 +702,7 @@ impl StagingRing {
     /// Reclaims every submitted reservation whose release timeline is at or below `completed`.
     pub fn reclaim_completed(&self, completed: u64) {
         lock(&self.inner.state).reclaim(completed);
+        self.inner.changed.notify_all();
     }
 
     /// Total capacity.

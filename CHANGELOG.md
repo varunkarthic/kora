@@ -37,6 +37,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   memory-type selection, staging rings whose slices keep their mapping alive and reclaim through a
   timeline heap, dirty-range flush/invalidate, residency tracking, LRU-2 eviction planning, and
   the bounded OOM recovery coordinator. Fault injection can now fail a window of consecutive calls.
+- Port queue execution and transfers to Rust: `QueueContext` (submission and completion threads,
+  timeline or pooled-fence completion, coalescing, device-loss propagation; Vulkan objects are
+  released only after both workers exit), the command-buffer ring, hazard tracking with precise
+  barriers, queue-family ownership barriers, the GPU timestamp ring, and the `TransferEngine`.
+  Staged transfers no longer serialize on the previous staged transfer: producers wait for pending
+  reservations to be submitted, and transfers larger than the staging ring are split into pipelined
+  chunks instead of failing. Downloads deliver bytes to a completion closure, and transfers keep
+  their buffers alive until completion.
 
 ## [0.3.0] - 2026-10-20
 

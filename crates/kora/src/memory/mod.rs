@@ -12,6 +12,7 @@ mod recovery;
 mod residency;
 mod staging;
 mod suballocator;
+mod transfer;
 
 pub use dirty::{DirtyRange, DirtyRangeSet, MappedMemoryOps, flush_mapped_ranges, invalidate_mapped_ranges};
 pub use eviction::{
@@ -36,3 +37,6 @@ pub use residency::{
 };
 pub use staging::{SharedPool, StagingDirection, StagingOptions, StagingRing, StagingSlice};
 pub use suballocator::{Suballocation, Suballocator, SuballocatorStats};
+pub use transfer::{
+    PendingUses, QueueTimelineUse, TransferBuffer, TransferEngine, TransferOptions, maintain_mapped_range,
+};

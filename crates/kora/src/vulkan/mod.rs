@@ -9,17 +9,37 @@
 //! `kora-info`) and interop with other Vulkan code.
 
 mod caps;
+mod command_pool;
 mod device;
 mod fault;
+mod fault_state;
+mod hazard;
 mod loader;
+mod ownership;
 mod physical;
+mod queue;
 
 pub use ash;
 pub use caps::{MemoryClassification, classify_memory_properties, classify_queue_families, device_info};
+pub use command_pool::{CommandBackend, CommandPoolSet};
 pub use device::{Device, DeviceOptions, EnabledFeatures};
 pub use fault::{FaultFunction, FaultInjector};
+pub use fault_state::{
+    DeviceFaultAddressRecord, DeviceFaultSnapshot, DeviceFaultState, DeviceFaultVendorRecord,
+    DiagnosticsQuery,
+};
+pub use hazard::{
+    AccessKind, AccessScope, BarrierPlan, HazardTracker, access_scope, accesses_conflict, record_barrier,
+    record_transition,
+};
 pub use loader::{Instance, InstanceOptions, Loader};
+pub use ownership::{OwnershipBarrierPair, QueueFamilyPolicy, make_ownership_barrier_pair};
 pub use physical::{FeatureSupport, MemoryBudget, PhysicalDeviceInfo};
+pub use queue::{
+    CoalescingOptions, CompletionWaitOptions, OnComplete, OnCompletionProfile, OnSubmitted, QueueBackend,
+    QueueContext, QueueContextOptions, QueueWait, RecordCommands, ResourceAccess, Submission,
+    SubmitDescription,
+};
 
 use ash::vk;
 
