@@ -537,6 +537,30 @@ impl Device {
             .map(|(values, deviation)| (values[0], values[1], deviation))
     }
 
+    /// Re-queries `VK_EXT_memory_budget` (None when the extension is not advertised or the
+    /// instance lacks properties2).
+    pub fn memory_budget(&self) -> Option<super::MemoryBudget> {
+        if !self.inner.physical.has_extension(ash::ext::memory_budget::NAME)
+            || self.inner.instance.api_version() < vk::API_VERSION_1_1
+        {
+            return None;
+        }
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut memory = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+        // SAFETY: the instance is Vulkan 1.1+, the physical device advertises the budget extension,
+        // and both structures outlive the call.
+        unsafe {
+            self.inner
+                .instance
+                .raw()
+                .get_physical_device_memory_properties2(self.inner.physical.handle, &mut memory)
+        };
+        Some(super::MemoryBudget {
+            heap_budget: budget.heap_budget,
+            heap_usage: budget.heap_usage,
+        })
+    }
+
     /// Blocks until the device is idle (teardown and recovery only).
     pub fn wait_idle(&self) -> std::result::Result<(), vk::Result> {
         // SAFETY: requires external synchronization of all queues; callers use it only after their

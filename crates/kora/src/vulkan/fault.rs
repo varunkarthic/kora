@@ -26,14 +26,19 @@ const FUNCTIONS: usize = 3;
 pub struct FaultInjector {
     armed: AtomicBool,
     calls: [AtomicU64; FUNCTIONS],
-    rules: Mutex<[Option<(u64, vk::Result)>; FUNCTIONS]>,
+    rules: Mutex<[Option<(u64, u64, vk::Result)>; FUNCTIONS]>,
 }
 
 impl FaultInjector {
     /// Arms a failure of call number `call` (1-based, counted from now on) with `result`, which must
     /// be a Vulkan error code.
     pub fn fail_on_nth(&self, function: FaultFunction, call: u64, result: vk::Result) -> Status {
-        if call == 0 || result.as_raw() >= 0 {
+        self.fail_calls(function, call, 1, result)
+    }
+
+    /// Fails `count` consecutive calls starting at call number `first` (1-based, from now on).
+    pub fn fail_calls(&self, function: FaultFunction, first: u64, count: u64, result: vk::Result) -> Status {
+        if first == 0 || count == 0 || result.as_raw() >= 0 {
             return Err(Error::new(
                 ErrorCode::InvalidArgument,
                 "fault injection needs a 1-based call and a Vulkan error",
@@ -42,7 +47,7 @@ impl FaultInjector {
         let index = function as usize;
         let mut rules = self.rules.lock().unwrap_or_else(|p| p.into_inner());
         self.calls[index].store(0, Ordering::SeqCst);
-        rules[index] = Some((call, result));
+        rules[index] = Some((first, count, result));
         self.armed.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -60,9 +65,9 @@ impl FaultInjector {
         }
         let index = function as usize;
         let rules = self.rules.lock().unwrap_or_else(|p| p.into_inner());
-        let (nth, result) = rules[index]?;
-        let count = self.calls[index].fetch_add(1, Ordering::SeqCst) + 1;
-        (count == nth).then_some(result)
+        let (first, count, result) = rules[index]?;
+        let call = self.calls[index].fetch_add(1, Ordering::SeqCst) + 1;
+        (call >= first && call - first < count).then_some(result)
     }
 }
 
@@ -114,6 +119,29 @@ mod tests {
             .unwrap();
         injector.clear();
         assert_eq!(injector.check(FaultFunction::GetQueryPoolResults), None);
+    }
+
+    #[test]
+    fn consecutive_failures_cover_a_window() {
+        let injector = FaultInjector::default();
+        injector
+            .fail_calls(
+                FaultFunction::AllocateMemory,
+                2,
+                2,
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+            )
+            .unwrap();
+        let results: Vec<_> = (0..5)
+            .map(|_| injector.check(FaultFunction::AllocateMemory))
+            .collect();
+        let failed = Some(vk::Result::ERROR_OUT_OF_HOST_MEMORY);
+        assert_eq!(results, [None, failed, failed, None, None]);
+        assert!(
+            injector
+                .fail_calls(FaultFunction::AllocateMemory, 1, 0, vk::Result::ERROR_DEVICE_LOST)
+                .is_err()
+        );
     }
 
     #[test]
