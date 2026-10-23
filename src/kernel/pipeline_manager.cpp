@@ -219,7 +219,8 @@ bool read_valid_cache_file(const std::filesystem::path& path, const PipelineCach
         !read_little_endian(all, 16, device) || !read_little_endian(all, 20, driver) ||
         !read_little_endian(all, 56, payload_size) || !read_little_endian(all, 64, checksum))
         return false;
-    if (schema != kCacheSchema || vendor != identity.vendor_id || device != identity.device_id ||
+    const bool same_vendor = vendor == identity.vendor_id;  // kora:identity-check
+    if (schema != kCacheSchema || !same_vendor || device != identity.device_id ||
         driver != identity.driver_version ||
         !std::equal(identity.device_uuid.begin(), identity.device_uuid.end(), bytes.begin() + 24) ||
         !std::equal(identity.driver_uuid.begin(), identity.driver_uuid.end(), bytes.begin() + 40) ||

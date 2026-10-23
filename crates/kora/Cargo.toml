@@ -1,0 +1,20 @@
+[package]
+name = "kora"
+description = "Kernel Offload Runtime Architecture: explicit, vendor-neutral CPU and Vulkan compute"
+readme = "../../README.md"
+keywords = ["vulkan", "gpu", "compute", "runtime", "heterogeneous"]
+categories = ["concurrency", "hardware-support"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

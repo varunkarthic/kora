@@ -10,3 +10,4 @@ compile_commands.json
 graphify-out/
 context/
 .kora-cache/
+target/
