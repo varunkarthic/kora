@@ -16,6 +16,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Start the KORA 1.0 Rust migration: a Cargo workspace (`crates/kora`) builds alongside the C++
   tree, CI checks Rust formatting, Clippy, tests, and rustdoc, and the vendor-neutrality check now
   scans Rust sources.
+- Port the core types to Rust: structured `Error`/`ErrorCode` with cause chains, checked size
+  arithmetic, categorized logging (`kora_log!`), `RuntimeOptions` resolution with every `KORA_*`
+  variable, the bounded strict JSON parser and writer, kernel-metadata parsing/validation/
+  serialization, and verification comparators (now a type-safe `VerificationPolicy` enum).
 
 ## [0.3.0] - 2026-10-20
 
