@@ -1,8 +1,8 @@
 //! Device-bound compute kernels.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use super::context::DeviceContext;
+use super::context::{DeviceContext, lock};
 use crate::error::{Error, ErrorCode, Result};
 use crate::ids::DeviceId;
 use crate::kernel::{
@@ -21,6 +21,10 @@ pub(crate) struct KernelState {
     pub(crate) reflection: Reflection,
     pub(crate) autotuner: Option<Arc<WorkgroupAutotuner>>,
     pub(crate) autotune_keys: Vec<String>,
+    /// Fingerprint of module and entry point for performance records (never zero).
+    pub(crate) semantic_identity: u64,
+    /// The same kernel loaded on other devices (adaptive placement and verification).
+    pub(crate) migrations: Mutex<Vec<Kernel>>,
 }
 
 /// A validated SPIR-V compute kernel bound to one device of a [`Runtime`](super::Runtime).
@@ -73,6 +77,36 @@ impl Kernel {
     pub fn is_autotuned(&self) -> bool {
         self.state.autotuner.is_some()
     }
+
+    /// This kernel loaded on `context`, loading and caching it on first use.
+    pub(crate) fn on(&self, context: &Arc<DeviceContext>) -> Result<Kernel> {
+        if Arc::ptr_eq(&self.state.context, context) {
+            return Ok(self.clone());
+        }
+        let mut migrations = lock(&self.state.migrations);
+        if let Some(existing) = migrations.iter().find(|k| Arc::ptr_eq(&k.state.context, context)) {
+            return Ok(existing.clone());
+        }
+        let loaded = load(
+            context,
+            &self.state.words,
+            &self.state.entry_point,
+            self.state.metadata.clone(),
+        )?;
+        migrations.push(loaded.clone());
+        Ok(loaded)
+    }
+}
+
+fn semantic_identity(words: &[u32], entry_point: &str) -> u64 {
+    let bytes = words
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .chain(entry_point.bytes());
+    let hash = bytes.fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    hash.max(1)
 }
 
 /// Validates, reflects, and pre-compiles a kernel for `context`.
@@ -142,6 +176,7 @@ pub(crate) fn load(
     context
         .pipelines
         .get_or_create(&words, &metadata, &[], entry_point)?;
+    let identity = semantic_identity(&words, entry_point);
     Ok(Kernel {
         state: Arc::new(KernelState {
             context: Arc::clone(context),
@@ -149,8 +184,10 @@ pub(crate) fn load(
             metadata,
             words,
             reflection,
+            semantic_identity: identity,
             autotuner,
             autotune_keys,
+            migrations: Mutex::new(Vec::new()),
         }),
     })
 }

@@ -54,11 +54,13 @@
 //! # }
 //! ```
 
+mod calibrate;
 mod context;
 mod cpu;
 mod dispatch;
 mod kernel;
 mod replica;
+mod verify;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -71,17 +73,21 @@ use bytemuck::Pod;
 use self::context::{DeviceContext, lock};
 use self::replica::Replica;
 use crate::buffer::{Buffer, BufferHandle, BufferManager, BufferUsage};
+use crate::calibration::CalibrationRecord;
 use crate::cpu_executor::{CpuExecutor, CpuExecutorOptions, CpuTaskPriority};
 use crate::device::{DeviceCandidate, DeviceInfo, initialize_selected_devices, select_devices};
 use crate::error::{Error, ErrorCode, Result, Status};
 use crate::event::{Event, EventPromise};
 use crate::ids::DeviceId;
+use crate::json::{self, Value};
 use crate::kernel::spirv::words_from_bytes;
+use crate::kernel::validate_and_reflect;
 use crate::log::{self, Category, Level};
 use crate::memory::{MemoryHeapStats, MemoryManager, MemoryStats};
 use crate::metadata::{KernelAccess, KernelMetadata};
 use crate::options::{ResolvedOptions, RuntimeOptions};
 use crate::performance_db::{PerformanceDatabase, unix_ms};
+use crate::placement::{AdaptiveDispatchWorkload, PlacementCandidate, select_adaptive_device};
 use crate::vulkan::{
     DeviceFaultAddressRecord, DeviceFaultVendorRecord, InstanceOptions, Loader, ash::vk, device_info,
 };
@@ -102,6 +108,8 @@ pub struct RuntimeTransferStats {
 /// GPU dispatch timing collected from completed submissions without waiting for pending work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeProfilingStats {
+    /// The device supports GPU timestamp queries (sample fields stay zero without them).
+    pub gpu_timestamps: bool,
     /// Samples collected.
     pub samples_collected: u64,
     /// Samples dropped because the ring was full or a query failed.
@@ -114,6 +122,38 @@ pub struct RuntimeProfilingStats {
     pub last_host_timestamp_nanoseconds: u64,
     /// Calibration deviation of the latest sample.
     pub last_calibration_deviation_nanoseconds: u64,
+    /// Submission of the latest host phase profile (0 without `Profile` or `Trace` telemetry).
+    pub last_profile_submission_id: u64,
+    /// Binding, size, and limit validation.
+    pub last_dispatch_validation_nanoseconds: u64,
+    /// Device copies and cross-device checks.
+    pub last_binding_preflight_nanoseconds: u64,
+    /// Pipeline cache lookup (or compilation).
+    pub last_pipeline_lookup_nanoseconds: u64,
+    /// Input uploads (enqueue, not completion).
+    pub last_buffer_residency_nanoseconds: u64,
+    /// Building the queue submission.
+    pub last_submission_assembly_nanoseconds: u64,
+    /// Host time in `submit` excluding residency.
+    pub last_host_submission_nanoseconds: u64,
+    /// Handing the submission to the queue.
+    pub last_queue_enqueue_nanoseconds: u64,
+    /// Command buffer acquisition on the submission thread.
+    pub last_command_buffer_acquire_nanoseconds: u64,
+    /// Descriptor set allocation and update.
+    pub last_descriptor_setup_nanoseconds: u64,
+    /// Command recording.
+    pub last_command_recording_nanoseconds: u64,
+    /// Enqueue to completion callback.
+    pub last_queue_completion_nanoseconds: u64,
+    /// Completion worker wake-up delay.
+    pub last_completion_worker_delay_nanoseconds: u64,
+    /// Time the completion worker waited on the device.
+    pub last_device_completion_wait_nanoseconds: u64,
+    /// Timestamp result collection.
+    pub last_timestamp_collection_nanoseconds: u64,
+    /// The completion callback itself.
+    pub last_completion_callback_nanoseconds: u64,
 }
 
 /// Optional `VK_EXT_device_fault` details captured after device loss. Addresses are returned only
@@ -152,8 +192,9 @@ static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 /// Dropping it drains (or cancels, per [`ShutdownMode`](crate::ShutdownMode)) queued work.
 pub struct Runtime {
     id: u64,
+    requested: RuntimeOptions,
     options: ResolvedOptions,
-    contexts: Vec<Arc<DeviceContext>>,
+    contexts: Arc<[Arc<DeviceContext>]>,
     quarantined: Vec<DeviceId>,
     buffers: BufferManager,
     performance: Arc<PerformanceDatabase>,
@@ -182,7 +223,15 @@ impl Runtime {
     /// [`ErrorCode::NoEligibleDevice`] when no device matches, and initialization errors of the
     /// selected device (with `AllEligible`, failing devices are quarantined instead).
     pub fn new(options: &RuntimeOptions) -> Result<Runtime> {
-        let options = options.resolve();
+        let runtime = Self::without_calibration(options)?;
+        if runtime.options.enable_startup_calibration {
+            runtime.run_calibration(false);
+        }
+        Ok(runtime)
+    }
+
+    fn without_calibration(requested: &RuntimeOptions) -> Result<Runtime> {
+        let options = requested.resolve();
         if options.debug_safety {
             log::set_category_level(Category::Sync, Level::Trace);
         }
@@ -253,8 +302,9 @@ impl Runtime {
         )?;
         Ok(Runtime {
             id,
+            requested: requested.clone(),
             options,
-            contexts,
+            contexts: contexts.into(),
             quarantined,
             buffers: BufferManager::new(),
             performance,
@@ -380,7 +430,275 @@ impl Runtime {
 
     /// Starts a dispatch of `kernel` on the device it was loaded for.
     pub fn dispatch(&self, kernel: &Kernel) -> DispatchBuilder {
-        DispatchBuilder::new(kernel.clone())
+        DispatchBuilder::new(kernel.clone(), Arc::clone(&self.contexts))
+    }
+
+    /// Chooses the device with the lowest predicted finish time for `workload` from startup
+    /// calibration and confident online observations, and returns a dispatch bound to it. Without
+    /// complete calibration on every eligible device the kernel's own device is kept. At
+    /// submission, a dispatch whose inputs hold unread results on the kernel's own device returns
+    /// there instead of moving them.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidArgument`] for zero kernel work or a kernel from another runtime;
+    /// [`ErrorCode::NoEligibleDevice`] when the kernel's device is not eligible.
+    pub fn dispatch_adaptive(
+        &self,
+        kernel: &Kernel,
+        workload: &AdaptiveDispatchWorkload,
+    ) -> Result<DispatchBuilder> {
+        if !self.owns(kernel) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "adaptive dispatch kernel does not belong to this runtime",
+            ));
+        }
+        if workload.kernel_work == 0 {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "adaptive dispatch kernel work must be nonzero",
+            ));
+        }
+        let state = &kernel.state;
+        let current = &state.context;
+        let now = unix_ms();
+        let mut candidates = Vec::with_capacity(self.contexts.len());
+        for context in self.contexts.iter() {
+            let is_current = Arc::ptr_eq(context, current);
+            let healthy = context.check_accepting().is_ok() && context.fault_state.healthy();
+            if !healthy && !is_current {
+                continue;
+            }
+            // An autotuned kernel stays on the device whose tuner owns it.
+            let supported = (is_current || state.autotuner.is_none())
+                && validate_and_reflect(
+                    &state.words,
+                    &state.metadata,
+                    &context.capabilities,
+                    &state.entry_point,
+                )
+                .is_ok();
+            let available = self.memory_stats(&context.id).map_or(0, |stats| {
+                stats
+                    .heaps
+                    .iter()
+                    .filter(|h| {
+                        context
+                            .info
+                            .memory_heaps
+                            .get(h.heap_index as usize)
+                            .is_some_and(|heap| heap.device_local)
+                    })
+                    .map(|h| h.available_bytes)
+                    .max()
+                    .unwrap_or(0)
+            });
+            candidates.push(PlacementCandidate {
+                id: context.id.clone(),
+                driver_version: context.info.driver_version,
+                calibration: lock(&context.calibration).clone(),
+                online_execution: dispatch::execution_key(context, state.semantic_identity, workload)
+                    .and_then(|key| self.performance.query_confident(&key, now, 5)),
+                available_device_memory_bytes: available,
+                supported,
+                healthy,
+                allowed: true,
+            });
+        }
+        let decision = select_adaptive_device(&candidates, &current.id, workload)?;
+        let target = self
+            .contexts
+            .iter()
+            .find(|c| c.id == decision.device)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InternalInvariantViolation,
+                    "adaptive scheduler selected an unknown device",
+                )
+            })?;
+        let mut builder = DispatchBuilder::new(kernel.on(target)?, Arc::clone(&self.contexts));
+        builder.adaptive = Some(Arc::new(dispatch::AdaptiveState {
+            original: kernel.clone(),
+            workload: *workload,
+            score: decision.score,
+        }));
+        Ok(builder)
+    }
+
+    fn run_calibration(&self, force: bool) {
+        let budget = Duration::from_millis(u64::from(self.options.calibration_budget_ms));
+        for context in self.contexts.iter() {
+            calibrate::calibrate_device(&self.buffers, context, budget, force);
+        }
+    }
+
+    /// Re-runs calibration on every device, ignoring cached records. Probes that cannot run
+    /// within the budget stay zero.
+    pub fn calibrate(&self) {
+        self.run_calibration(true);
+    }
+
+    /// The calibration record of a device (measurements are zero until calibrated).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidArgument`] for a device this runtime does not own.
+    pub fn calibration(&self, device: &DeviceId) -> Result<CalibrationRecord> {
+        Ok(lock(&self.context(device)?.calibration).clone())
+    }
+
+    /// Test hook: replaces a device's calibration record.
+    #[doc(hidden)]
+    pub fn set_calibration(&self, device: &DeviceId, mut record: CalibrationRecord) -> Status {
+        let context = self.context(device)?;
+        record.device_uuid = context.id.uuid.to_string();
+        record.driver_version = context.info.driver_version;
+        *lock(&context.calibration) = record;
+        Ok(())
+    }
+
+    /// Recreates every device after an observed device loss. Buffers keep their host contents
+    /// (results that only the lost device held are marked lost); kernels must be loaded again.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidArgument`] when no device was lost; otherwise as
+    /// [`rebuild_devices`](Self::rebuild_devices).
+    pub fn recover(&mut self) -> Status {
+        if self.contexts.iter().all(|c| c.fault_state.healthy()) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "runtime recovery requires an observed device loss",
+            ));
+        }
+        self.rebuild_devices()
+    }
+
+    /// Re-enumerates and recreates every device from the original options, picking up devices
+    /// that appeared or disappeared. Buffers, CPU fallbacks, and quarantine decisions are kept;
+    /// existing kernels are invalidated. Call only when no work is in flight. On failure the
+    /// runtime is unchanged.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Runtime::new`].
+    pub fn rebuild_devices(&mut self) -> Status {
+        let mut replacement = Self::without_calibration(&self.requested)?;
+        let quarantined: Vec<DeviceId> = self.quarantined_devices();
+        for context in replacement.contexts.iter() {
+            if quarantined.contains(&context.id) {
+                context.quarantined.store(true, Ordering::Release);
+            }
+        }
+        replacement.quarantined.extend(
+            quarantined
+                .into_iter()
+                .filter(|id| !replacement.contexts.iter().any(|c| c.id == *id)),
+        );
+        std::mem::swap(&mut self.id, &mut replacement.id);
+        std::mem::swap(&mut self.contexts, &mut replacement.contexts);
+        std::mem::swap(&mut self.quarantined, &mut replacement.quarantined);
+        std::mem::swap(&mut self.performance, &mut replacement.performance);
+        std::mem::swap(&mut self._instance, &mut replacement._instance);
+        std::mem::swap(&mut self._loader, &mut replacement._loader);
+        // `replacement` now owns the old devices; dropping it drains their queues and releases
+        // their copies of every buffer, marking results that only a lost device held.
+        drop(replacement);
+        if self.options.enable_startup_calibration {
+            self.run_calibration(false);
+        }
+        Ok(())
+    }
+
+    /// Completed GPU dispatch samples as Chrome Trace Event JSON (open in Perfetto). Needs
+    /// `TelemetryLevel::Trace`; history is bounded to 4096 samples per device. Adaptive dispatches
+    /// include the scheduler score that selected their device.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidArgument`] without trace telemetry.
+    pub fn export_trace_json(&self) -> Result<String> {
+        if self.options.telemetry != crate::options::TelemetryLevel::Trace {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "trace export requires TelemetryLevel::Trace",
+            ));
+        }
+        let mut events = Vec::new();
+        for context in self.contexts.iter() {
+            let Some(ring) = &context.timestamps else {
+                continue;
+            };
+            context.collect_timestamps(Duration::ZERO)?;
+            let scores = lock(&context.trace_scores).completed.clone();
+            for sample in ring.history() {
+                let mut args = vec![
+                    ("submission_id".to_owned(), Value::uint(sample.submission_id)),
+                    ("queue_value".to_owned(), Value::uint(sample.queue_value)),
+                    (
+                        "host_clock_calibrated".to_owned(),
+                        Value::Bool(sample.host_timestamp_nanoseconds != 0),
+                    ),
+                    (
+                        "calibration_deviation_ns".to_owned(),
+                        Value::uint(sample.calibration_deviation_nanoseconds),
+                    ),
+                ];
+                if let Some(selected) = scores.get(&sample.submission_id) {
+                    let s = &selected.score;
+                    let fields = [
+                        ("ready_delay_ns", s.ready_delay_ns),
+                        ("queue_delay_ns", s.queue_delay_ns),
+                        ("input_transfer_ns", s.input_transfer_ns),
+                        ("execute_ns", s.execute_ns),
+                        ("required_output_ns", s.required_output_ns),
+                        ("synchronization_ns", s.synchronization_ns),
+                        ("memory_penalty_ns", s.memory_penalty_ns),
+                        ("uncertainty_penalty_ns", s.uncertainty_penalty_ns),
+                        ("locality_bonus_ns", s.locality_bonus_ns),
+                        ("downstream_movement_penalty_ns", s.downstream_movement_penalty_ns),
+                        ("predicted_finish_ns", s.predicted_finish_ns),
+                    ];
+                    let mut score = vec![(
+                        "selected_device_index".to_owned(),
+                        Value::uint(u64::from(selected.device_index)),
+                    )];
+                    score.extend(fields.iter().map(|(k, v)| ((*k).to_owned(), Value::float(*v))));
+                    args.push(("scheduler_score".to_owned(), Value::Object(score)));
+                }
+                events.push(Value::Object(vec![
+                    ("name".to_owned(), Value::string("gpu_dispatch")),
+                    ("cat".to_owned(), Value::string("kora.gpu")),
+                    ("ph".to_owned(), Value::string("X")),
+                    (
+                        "ts".to_owned(),
+                        Value::uint(sample.host_timestamp_nanoseconds / 1000),
+                    ),
+                    ("dur".to_owned(), Value::uint(sample.duration_nanoseconds / 1000)),
+                    ("pid".to_owned(), Value::uint(1)),
+                    ("tid".to_owned(), Value::uint(u64::from(context.id.index))),
+                    ("args".to_owned(), Value::Object(args)),
+                ]));
+            }
+        }
+        let document = Value::Object(vec![
+            ("traceEvents".to_owned(), Value::Array(events)),
+            ("displayTimeUnit".to_owned(), Value::string("us")),
+            (
+                "metadata".to_owned(),
+                Value::Object(vec![
+                    ("format".to_owned(), Value::string("Chrome Trace Event")),
+                    (
+                        "time_origin".to_owned(),
+                        Value::string("calibrated_monotonic_host_timestamp_when_available"),
+                    ),
+                ]),
+            ),
+        ]);
+        let mut out = String::new();
+        json::write_value(&mut out, &document);
+        Ok(out)
     }
 
     /// Makes the newest device-resident contents of `buffer` visible in its host shadow. Completes
@@ -391,7 +709,7 @@ impl Runtime {
     /// Transfer errors.
     pub fn readback(&self, buffer: &impl AsRef<BufferHandle>) -> Result<Event> {
         let buffer = buffer.as_ref();
-        for context in &self.contexts {
+        for context in self.contexts.iter() {
             if let Some(event) = readback_from(context, buffer)? {
                 return Ok(event);
             }
@@ -537,22 +855,42 @@ impl Runtime {
     /// [`ErrorCode::UnsupportedFeature`] when the device has no timestamp queries.
     pub fn profiling_stats(&self, device: &DeviceId) -> Result<RuntimeProfilingStats> {
         let context = self.context(device)?;
-        let ring = context.timestamps.as_ref().ok_or_else(|| {
-            Error::new(
+        if context.timestamps.is_none() && !context.phase_profile {
+            return Err(Error::new(
                 ErrorCode::UnsupportedFeature,
                 "GPU timestamp profiling is unavailable for this device",
-            )
-        })?;
-        context.collect_timestamps(Duration::from_millis(2))?;
-        let latest = ring.latest_sample();
-        Ok(RuntimeProfilingStats {
-            samples_collected: ring.samples_collected(),
-            dropped_samples: ring.dropped_samples(),
-            last_submission_id: latest.submission_id,
-            last_duration_nanoseconds: latest.duration_nanoseconds,
-            last_host_timestamp_nanoseconds: latest.host_timestamp_nanoseconds,
-            last_calibration_deviation_nanoseconds: latest.calibration_deviation_nanoseconds,
-        })
+            ));
+        }
+        let mut stats = RuntimeProfilingStats::default();
+        if let Some(ring) = &context.timestamps {
+            stats.gpu_timestamps = true;
+            context.collect_timestamps(Duration::from_millis(2))?;
+            let latest = ring.latest_sample();
+            stats.samples_collected = ring.samples_collected();
+            stats.dropped_samples = ring.dropped_samples();
+            stats.last_submission_id = latest.submission_id;
+            stats.last_duration_nanoseconds = latest.duration_nanoseconds;
+            stats.last_host_timestamp_nanoseconds = latest.host_timestamp_nanoseconds;
+            stats.last_calibration_deviation_nanoseconds = latest.calibration_deviation_nanoseconds;
+        }
+        let p = *lock(&context.latest_profile);
+        stats.last_profile_submission_id = p.submission_id;
+        stats.last_dispatch_validation_nanoseconds = p.dispatch_validation_ns;
+        stats.last_binding_preflight_nanoseconds = p.binding_preflight_ns;
+        stats.last_pipeline_lookup_nanoseconds = p.pipeline_lookup_ns;
+        stats.last_buffer_residency_nanoseconds = p.buffer_residency_ns;
+        stats.last_submission_assembly_nanoseconds = p.submission_assembly_ns;
+        stats.last_host_submission_nanoseconds = p.host_submission_ns;
+        stats.last_queue_enqueue_nanoseconds = p.queue_enqueue_ns;
+        stats.last_command_buffer_acquire_nanoseconds = p.command_buffer_acquire_ns;
+        stats.last_descriptor_setup_nanoseconds = p.descriptor_setup_ns;
+        stats.last_command_recording_nanoseconds = p.command_recording_ns;
+        stats.last_queue_completion_nanoseconds = p.queue_completion_ns;
+        stats.last_completion_worker_delay_nanoseconds = p.completion_worker_delay_ns;
+        stats.last_device_completion_wait_nanoseconds = p.device_completion_wait_ns;
+        stats.last_timestamp_collection_nanoseconds = p.timestamp_collection_ns;
+        stats.last_completion_callback_nanoseconds = p.completion_callback_ns;
+        Ok(stats)
     }
 
     /// Fault details captured after a device loss.
@@ -642,7 +980,7 @@ fn run_cpu_task(function: &CpuFallback, bindings: &[(BufferHandle, KernelAccess)
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        for context in &self.contexts {
+        for context in self.contexts.iter() {
             context.shutdown(self.options.shutdown_mode);
         }
         if let Some(executor) = lock(&self.cpu).executor.take() {

@@ -66,8 +66,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   memory, transfer, and timestamp statistics, and `VK_EXT_device_fault` reports. Staged input
   uploads no longer block the submitting thread until the copy finishes, and device replicas are
   freed as soon as the last handle and in-flight submission release them.
+- Complete the Rust runtime: bounded startup calibration (submission, transfer, and compute
+  probes cached per device and driver; corrupt caches are rebuilt, and `Runtime::calibrate`
+  forces a refresh), the calibration cost model, `dispatch_adaptive` placement that blends
+  calibration with confident online observations and returns to the device that holds
+  device-resident inputs, duplicate verification across devices with quarantine on mismatch,
+  `recover` and `rebuild_devices` that keep buffers and CPU fallbacks, per-dispatch host phase
+  profiling, and Chrome trace export with scheduler scores. Profiling stats report whether the
+  device has GPU timestamps.
 
 ### Fixed
+- After a device loss, results that only the lost device held (deferred outputs that were never
+  read back) are marked lost on recovery instead of silently reverting to older host contents.
 - Dispatches that read or overwrite a buffer written by an earlier dispatch now record a memory
   barrier; independent dispatches still record none. The C++ runtime recorded no barrier between
   dependent dispatches.
