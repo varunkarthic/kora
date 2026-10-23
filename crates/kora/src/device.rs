@@ -145,6 +145,8 @@ pub struct DeviceFeatures {
     pub synchronization2: bool,
     /// The device is a portability-subset implementation (for example a translation layer).
     pub portability_subset: bool,
+    /// `maintenance4`, which allows kernels to declare `LocalSizeId` workgroup sizes.
+    pub maintenance4: bool,
 }
 
 /// Subgroup support.

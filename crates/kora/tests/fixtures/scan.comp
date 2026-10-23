@@ -1,0 +1,23 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Input { uint values[]; } input_data;
+layout(set = 0, binding = 1, std430) writeonly buffer Output { uint values[]; } output_data;
+layout(push_constant) uniform Parameters { uint count; } parameters;
+
+shared uint partial[64];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint index = gl_GlobalInvocationID.x;
+    partial[lane] = index < parameters.count ? input_data.values[index] : 0;
+    barrier();
+    for (uint offset = 1; offset < 64; offset <<= 1) {
+        uint addend = lane >= offset ? partial[lane - offset] : 0;
+        barrier();
+        partial[lane] += addend;
+        barrier();
+    }
+    if (index < parameters.count) output_data.values[index] = partial[lane];
+}

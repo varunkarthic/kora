@@ -45,6 +45,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   reservations to be submitted, and transfers larger than the staging ring are split into pipelined
   chunks instead of failing. Downloads deliver bytes to a completion closure, and transfers keep
   their buffers alive until completion.
+- Port the kernel layer to Rust: structural SPIR-V validation and compute-interface reflection,
+  the per-device `PipelineManager` (LRU pipeline cache, shared descriptor and pipeline layouts,
+  descriptor pools, and the identity-bound persistent pipeline cache in the existing file format),
+  and the `LocalSizeId` workgroup autotuner. Cache hits no longer re-validate the module or copy it
+  into a key, pipeline compilation runs outside the manager lock, and pipelines, layouts, and
+  descriptor-set leases are reference counted so they stay valid after eviction or manager drop.
+  Descriptor pools grow by counting their sets instead of relying on driver out-of-pool errors.
+  SPIR-V test fixtures are committed, so `cargo test` needs no shader compiler.
+
+### Fixed
+- Logical devices now enable `shaderInt16`, `shaderInt64`, and `shaderFloat64` when supported,
+  so modules declaring those capabilities (which reflection already accepted) are valid, and
+  enable `maintenance4` when available; `LocalSizeId` kernels are rejected with a clear error on
+  devices without it instead of creating an invalid pipeline.
+- A positive integer `default` for an `i32`/`i64` specialization constant, or an integer default
+  for an `f32`/`f64` constant, is now accepted and converted to the declared type instead of being
+  rejected as a type mismatch.
 
 ## [0.3.0] - 2026-10-20
 

@@ -2,44 +2,8 @@
 
 mod common;
 
-use std::sync::{Arc, Mutex};
-
-use kora::log::{self, Category, Level};
 use kora::vulkan::ash::vk;
 use kora::vulkan::{DeviceOptions, FaultFunction, InstanceOptions, device_info};
-
-/// Captures validation errors routed to the KORA log for the duration of a test.
-struct ValidationErrors {
-    messages: Arc<Mutex<Vec<String>>>,
-}
-
-static LOG_LOCK: Mutex<()> = Mutex::new(());
-
-impl ValidationErrors {
-    fn capture() -> (Self, std::sync::MutexGuard<'static, ()>) {
-        let guard = LOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let messages = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&messages);
-        log::set_level(Level::Warn);
-        log::set_sink(Some(Box::new(move |level, category, message| {
-            if category == Category::Device && level == Level::Error {
-                sink.lock().unwrap().push(message.to_string());
-            }
-        })));
-        (Self { messages }, guard)
-    }
-
-    fn assert_none(&self) {
-        let messages = self.messages.lock().unwrap();
-        assert!(messages.is_empty(), "validation errors: {messages:#?}");
-    }
-}
-
-impl Drop for ValidationErrors {
-    fn drop(&mut self) {
-        log::set_sink(None);
-    }
-}
 
 fn validated() -> InstanceOptions {
     InstanceOptions {
@@ -77,7 +41,7 @@ fn requested_api_version_is_clamped() {
 
 #[test]
 fn enumerates_and_queries_every_device() {
-    let (errors, _guard) = ValidationErrors::capture();
+    let (errors, _guard) = common::ValidationErrors::capture();
     let Some((_, instance)) = common::vulkan(&validated()) else {
         return;
     };
@@ -125,7 +89,7 @@ fn enumerates_and_queries_every_device() {
 
 #[test]
 fn creates_a_logical_device_for_every_compute_capable_device() {
-    let (errors, _guard) = ValidationErrors::capture();
+    let (errors, _guard) = common::ValidationErrors::capture();
     let Some((_, instance)) = common::vulkan(&validated()) else {
         return;
     };
