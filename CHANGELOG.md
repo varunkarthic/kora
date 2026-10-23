@@ -74,6 +74,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `recover` and `rebuild_devices` that keep buffers and CPU fallbacks, per-dispatch host phase
   profiling, and Chrome trace export with scheduler scores. Profiling stats report whether the
   device has GPU timestamps.
+- Begin the Rust remote-worker port with a versioned CRC32C transport: bounded frame parsing
+  rejects unknown message types, malformed reserved bytes, truncation, trailing bytes, and
+  oversized payloads before allocation. This is the protocol foundation for the forthcoming
+  Cluster and `kora-worker` implementation; remote execution itself remains legacy C++ only.
 
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never

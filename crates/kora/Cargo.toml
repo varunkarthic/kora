@@ -14,6 +14,7 @@ authors.workspace = true
 [dependencies]
 ash.workspace = true
 bytemuck.workspace = true
+crc32c.workspace = true
 
 [dev-dependencies]
 bytemuck = { workspace = true, features = ["derive"] }
