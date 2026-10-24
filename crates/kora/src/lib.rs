@@ -12,6 +12,7 @@ pub mod aliasing;
 pub mod buffer;
 pub mod calibration;
 pub mod checked;
+pub mod cluster;
 pub mod cpu_executor;
 pub mod device;
 pub mod error;
@@ -29,6 +30,7 @@ pub mod partition;
 pub mod performance_db;
 pub mod placement;
 pub mod profiling;
+pub mod remote;
 pub mod runtime;
 pub mod scheduler;
 pub mod task_graph;
@@ -39,6 +41,10 @@ pub mod vulkan;
 
 pub use buffer::{Buffer, BufferHandle, BufferInfo, BufferManager, BufferUsage};
 pub use bytemuck;
+pub use cluster::{
+    Cluster, ClusterDispatch, ClusterEvent, ClusterKernel, ClusterOptions, ClusterStats, LocalDeviceStatus,
+    OffloadPolicy, WorkerStatus,
+};
 pub use cpu_executor::{CpuExecutor, CpuExecutorOptions, CpuTaskPriority};
 pub use device::{CapabilityTier, DeviceCandidate, DeviceInfo, DeviceKind, MemoryTopology, select_devices};
 pub use error::{Error, ErrorCode, Result, Status};
@@ -52,6 +58,7 @@ pub use metadata::{
 };
 pub use options::{DevicePolicy, ResolvedOptions, RuntimeOptions, ShutdownMode, TelemetryLevel};
 pub use placement::{AdaptiveDispatchWorkload, AdaptiveKernelWorkKind};
+pub use remote::{WorkerOptions, WorkerServer, WorkerStats};
 pub use runtime::{
     CpuTaskContext, DeviceFaultReport, DispatchBuilder, DispatchPriority, Kernel, Runtime,
     RuntimeProfilingStats, RuntimeTransferStats,

@@ -59,6 +59,9 @@ pub struct DispatchBuilder {
     pub(crate) verification: Option<(VerificationPolicy, VerificationDataType)>,
     /// A verification duplicate: the other participants hold divergent copies by design.
     pub(crate) duplicate: bool,
+    /// A slice of a split dispatch: its outputs are partial, so they never become the buffer's
+    /// newest contents; the caller reads its range back with a replica reader.
+    pub(crate) partial: bool,
 }
 
 /// Placement made by [`Runtime::dispatch_adaptive`](super::Runtime::dispatch_adaptive).
@@ -105,6 +108,7 @@ impl DispatchBuilder {
             adaptive: None,
             verification: None,
             duplicate: false,
+            partial: false,
         }
     }
 
@@ -163,6 +167,13 @@ impl DispatchBuilder {
     /// Keeps device-written outputs resident instead of copying them to the host on completion.
     /// Use [`Runtime::readback`](super::Runtime::readback) when the host needs them.
     pub fn defer_readback(mut self) -> Self {
+        self.defer_readback = true;
+        self
+    }
+
+    /// Marks this dispatch as one slice of a split dispatch (see [`DispatchBuilder::partial`]).
+    pub(crate) fn partial_outputs(mut self) -> Self {
+        self.partial = true;
         self.defer_readback = true;
         self
     }
@@ -314,7 +325,7 @@ impl DispatchBuilder {
             .map(|(buffer, _)| ctx.replica(buffer))
             .collect::<Result<Vec<_>>>()?;
         for (buffer, access) in &self.bindings {
-            if access.reads() && !self.duplicate {
+            if access.reads() && !self.duplicate && !self.partial {
                 reject_newer_elsewhere(ctx, buffer)?;
             }
         }
@@ -395,8 +406,8 @@ impl DispatchBuilder {
                 DeviceAccess::Read
             };
             if access.writes() {
-                replica_state.resident_version = Some(bound_versions[index]);
-                replica_state.device_newer = true;
+                replica_state.resident_version = (!self.partial).then_some(bound_versions[index]);
+                replica_state.device_newer = !self.partial;
             }
         }
 
@@ -1102,6 +1113,33 @@ pub(crate) fn read_to_host(
         state.access = DeviceAccess::Read;
     }
     Ok(Some(event))
+}
+
+/// Copies `size` bytes at `offset` of `buffer`'s replica on `ctx` to `sink` without touching the
+/// host shadow. Call only after the work that produced the replica completed.
+pub(crate) fn read_replica_range(
+    ctx: &Arc<DeviceContext>,
+    buffer: &BufferHandle,
+    offset: u64,
+    size: u64,
+    sink: impl FnOnce(&[u8]) -> Status + Send + 'static,
+) -> Result<Event> {
+    let replica = buffer
+        .replica::<Replica>(ctx.key)
+        .ok_or_else(|| Error::new(ErrorCode::InvalidArgument, "buffer has no replica on this device"))?;
+    if size == 0 {
+        sink(&[])?;
+        return Ok(Event::ready(Ok(())));
+    }
+    let _order = lock(&ctx.submit_lock);
+    let event = ctx
+        .transfers
+        .download(&replica.transfer_view(), offset, size, None, sink)?;
+    let mut state = replica.state();
+    if state.access == DeviceAccess::None {
+        state.access = DeviceAccess::Read;
+    }
+    Ok(event)
 }
 
 #[cfg(test)]
