@@ -205,6 +205,8 @@ mod tests {
     const _: () = assert!(matches!(align_up(3, 4), Some(4)));
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(if cfg!(miri) { 8 } else { 256 }))]
+
         #[test]
         fn align_up_is_the_smallest_aligned_value_not_below_input(value in 0u64..u64::MAX / 2, shift in 0u32..32) {
             let align = 1u64 << shift;

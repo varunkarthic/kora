@@ -1260,7 +1260,7 @@ mod tests {
             .map(|thread| {
                 let buffers = buffers.clone();
                 std::thread::spawn(move || {
-                    for iteration in 0..250_u64 {
+                    for iteration in 0..if cfg!(miri) { 8 } else { 250_u64 } {
                         let handle = buffers
                             .create(64 + iteration, BufferUsage::TransferDestination)
                             .unwrap();
@@ -1285,7 +1285,7 @@ mod tests {
             .map(|value| {
                 let handle = handle.clone();
                 std::thread::spawn(move || {
-                    for _ in 0..200 {
+                    for _ in 0..if cfg!(miri) { 4 } else { 200 } {
                         if value % 2 == 0 {
                             handle.write_bytes(&[value; 4096]).unwrap();
                         } else {

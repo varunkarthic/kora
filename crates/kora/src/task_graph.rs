@@ -467,7 +467,7 @@ pub(crate) mod tests {
     fn random_access_sequences_match_independent_hazard_oracle() {
         let modes = [AccessMode::Read, AccessMode::Write, AccessMode::ReadWrite];
         let mut random = SplitMix(0x4b4f_5241);
-        for sequence in 0..80 {
+        for sequence in 0..if cfg!(miri) { 2 } else { 80 } {
             let mut graph = TaskGraph::new();
             let mut expected: Vec<BTreeSet<TaskId>> = vec![BTreeSet::new(); 96];
             let mut hazards: BTreeMap<u32, (Option<TaskId>, BTreeSet<TaskId>)> = BTreeMap::new();
@@ -516,7 +516,7 @@ pub(crate) mod tests {
     #[test]
     fn random_explicit_dags_respect_every_edge_and_stay_deterministic() {
         let mut random = SplitMix(0x4752_4150);
-        for _ in 0..64 {
+        for _ in 0..if cfg!(miri) { 2 } else { 64 } {
             let mut graph = TaskGraph::new();
             for _ in 0..72 {
                 graph.add_task(task(&[])).unwrap();

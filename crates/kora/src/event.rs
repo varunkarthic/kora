@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn concurrent_completion_and_registration_runs_every_callback_once() {
-        for _ in 0..200 {
+        for _ in 0..if cfg!(miri) { 8 } else { 200 } {
             let promise = EventPromise::new();
             let event = promise.event();
             let count = Arc::new(AtomicUsize::new(0));

@@ -125,7 +125,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Close the gaps found by auditing the C++ tests against the Rust suite: tests now cover the
   pre-1.2 extension feature path, CPU-task access rules and push constants, draining pending CPU
   fallbacks when a runtime is dropped, and releasing inputs while their dispatch is in flight. The
-  GPU-timestamp test skips on devices that report no timestamp support.
+  GPU-timestamp test skips on devices that report no timestamp support. Concurrency and randomized
+  tests run fewer rounds under Miri, so the documented Miri command finishes (73 tests, no findings).
 ### Fixed
 - A split `Cluster` dispatch could commit one slice's range a dispatch behind when a worker failed
   over and its slice re-ran on a local device that had already run another slice of the same split:
