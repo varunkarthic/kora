@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- The Windows release package builds with the MSVC linker; the v1.0.0 run linked with Git Bash's
+  `link`, so v1.0.0 was tagged but not published.
+
 ## [1.0.0] - 2026-10-24
 
 KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the

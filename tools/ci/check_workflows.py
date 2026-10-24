@@ -22,9 +22,11 @@ def main() -> None:
         print(f"validated {path}")
 
     release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    for contract in ("ilammy/msvc-dev-cmd@v1", "Verify MSVC selection", "cl.exe"):
+    for contract in ("Verify MSVC selection", "x86_64-pc-windows-msvc"):
         if contract not in release:
             raise SystemExit(f"release workflow is missing Windows package contract: {contract}")
+    if "ilammy/msvc-dev-cmd" in release:
+        raise SystemExit("release workflow must not put MSVC on PATH: Git Bash's link would shadow link.exe")
     print("validated Windows release package compiler contract")
 
     release_document = yaml.safe_load(release)

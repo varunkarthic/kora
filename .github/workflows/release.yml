@@ -91,14 +91,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Initialize MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+      # Rust locates the MSVC linker itself. Putting MSVC on PATH for bash steps would let Git
+      # Bash's /usr/bin/link (coreutils) shadow link.exe.
       - name: Verify MSVC selection
         if: runner.os == 'Windows'
         run: |
           rustc -vV | grep -q 'host: x86_64-pc-windows-msvc' || { echo 'Rust is not targeting MSVC' >&2; exit 1; }
-          command -v cl.exe >/dev/null || { echo 'MSVC cl.exe is not on PATH' >&2; exit 1; }
       - name: Stamp the package version
         # Cargo and the wheel carry the full release version; the runtime reads VERSION and the patch.
         run: |
