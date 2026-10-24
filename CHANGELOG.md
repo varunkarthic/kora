@@ -12,6 +12,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- Releases use the current release workflow. GitHub runs it from the default branch, which still
+  held the pre-cut-over `v1` copy, so `v1.0.0`, `v1.0.1`, and `v1.0.2` were tagged without
+  published packages. Their changelog sections describe the changes they contain.
+
 ## [1.0.2] - 2026-10-24
 
 ### Fixed
