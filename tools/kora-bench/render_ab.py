@@ -13,6 +13,7 @@ import argparse
 import gzip
 import importlib.util
 import json
+import re
 import statistics
 from pathlib import Path
 from typing import Any
@@ -64,8 +65,8 @@ def load_runs(paths: list[Path]) -> tuple[list[dict[str, dict[str, Any]]], str]:
     runs, revisions = [], set()
     for path in paths:
         report = read_report(path)
-        if report.get("schema_version") != 3 or report.get("diagnostic_profile") is True:
-            raise ValueError(f"{path} is not a schema-3 comparison report")
+        if report.get("schema_version") not in (3, 4) or report.get("diagnostic_profile") is True:
+            raise ValueError(f"{path} is not a schema-3 or schema-4 comparison report")
         if not report.get("gpu_measurements", {}).get("same_physical_device_for_kora_and_raw_vulkan"):
             raise ValueError(f"{path} must confirm a shared physical device")
         revisions.add(report["environment"]["source_revision"])
@@ -90,6 +91,61 @@ def paired_change(before: list[dict[str, dict[str, Any]]], after: list[dict[str,
     ratios = [new[name]["median"] / old[name]["median"] for old, new in zip(before, after)]
     wins = sum(ratio < 1 for ratio in ratios)
     return f"{100 * (statistics.median(ratios) - 1):+.0f}% ({wins}/{len(ratios)})"
+
+
+def family(name: str) -> str:
+    """A result name without its size tokens, e.g. gpu_vector_add_dispatch_wait."""
+    return re.sub(r"_\d+(?=_|$)", "", name)
+
+
+def render_families(before_paths: list[Path], after_paths: list[Path]) -> tuple[str, list[dict[str, Any]]]:
+    """Per-family medians of every per-pair after/before p50 ratio across the family's cases.
+
+    Returns the Markdown table and the rows (family, cases, pairs, ratio, wins, comparisons).
+    """
+    before, before_revision = load_runs(before_paths)
+    after, after_revision = load_runs(after_paths)
+    if len(before) != len(after):
+        raise ValueError("before and after runs must be paired one-to-one")
+    names = set.intersection(*(set(run) for run in before + after))
+    grouped: dict[str, list[str]] = {}
+    for name in sorted(names):
+        if name.startswith("profile_"):
+            continue
+        grouped.setdefault(family(name), []).append(name)
+    rows = []
+    for key, members in sorted(grouped.items()):
+        ratios = [
+            new[name]["median"] / old[name]["median"]
+            for name in members
+            for old, new in zip(before, after)
+            if old[name]["median"] > 0
+        ]
+        if not ratios:
+            continue
+        rows.append(
+            {
+                "family": key,
+                "cases": len(members),
+                "pairs": len(before),
+                "ratio": statistics.median(ratios),
+                "wins": sum(ratio < 1 for ratio in ratios),
+                "comparisons": len(ratios),
+            }
+        )
+    lines = [
+        f"Before: `{before_revision}` ({len(before)} runs); after: `{after_revision}` ({len(after)} runs). "
+        "Ratio is the median of every per-pair after/before p50 ratio across the family's sizes "
+        "(below 1.00 means the after build is faster); wins counts the comparisons the after build won.",
+        "",
+        "| Family | Sizes | Ratio | Wins |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row['family']}` | {row['cases']} | {row['ratio']:.2f} | {row['wins']}/{row['comparisons']} |"
+        )
+    return "\n".join(lines) + "\n", rows
 
 
 def render(
@@ -169,8 +225,14 @@ def main() -> int:
     parser.add_argument("--title-suffix", default="Apple M4 / MoltenVK")
     parser.add_argument("--change", default="#227", help="change name used in chart titles")
     parser.add_argument("--prefix", default="uma-direct", help="chart file name prefix")
+    parser.add_argument(
+        "--families", action="store_true", help="print the per-family summary instead of the compute table"
+    )
     args = parser.parse_args()
     try:
+        if args.families:
+            print(render_families(args.before, args.after)[0], end="")
+            return 0
         print(render(args.before, args.after, args.output_dir, args.title_suffix, args.change, args.prefix), end="")
     except (OSError, KeyError, ValueError, json.JSONDecodeError) as error:
         parser.error(str(error))

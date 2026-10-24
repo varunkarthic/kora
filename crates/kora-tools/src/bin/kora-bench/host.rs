@@ -149,8 +149,13 @@ fn allocator_churn_operation() -> bool {
     live.iter().all(|a| allocator.deallocate(a).is_ok()) && allocator.validate_invariants()
 }
 
+/// Allocates and then fills 4 KiB, as the C++ benchmark does (`vec![0; n]` would measure
+/// `calloc`'s zero-page shortcut instead).
+#[allow(clippy::slow_vector_initialization)]
 fn allocation_operation() -> bool {
-    let bytes = std::hint::black_box(vec![0_u8; 4096]);
+    let mut bytes: Vec<u8> = Vec::with_capacity(4096);
+    bytes.resize(4096, 0);
+    std::hint::black_box(&mut bytes);
     bytes[0] == 0
 }
 
@@ -232,11 +237,16 @@ fn tiled_matmul(a: &[f32], b: &[f32], rows: std::ops::Range<usize>, dimension: u
     let first = rows.start;
     for kk in (0..dimension).step_by(TILE) {
         for jj in (0..dimension).step_by(TILE) {
+            let j_end = (jj + TILE).min(dimension);
             for i in rows.clone() {
+                let out_row = &mut output[(i - first) * dimension + jj..(i - first) * dimension + j_end];
                 for k in kk..(kk + TILE).min(dimension) {
                     let aik = a[i * dimension + k];
-                    for j in jj..(jj + TILE).min(dimension) {
-                        output[(i - first) * dimension + j] += aik * b[k * dimension + j];
+                    for (out, bkj) in out_row
+                        .iter_mut()
+                        .zip(&b[k * dimension + jj..k * dimension + j_end])
+                    {
+                        *out += aik * bkj;
                     }
                 }
             }
@@ -250,8 +260,8 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
         let int_left: Vec<u32> = (0..count).map(|i| (i % 17) as u32).collect();
         let int_right: Vec<u32> = (0..count).map(|i| (i % 29) as u32).collect();
         let vector_add = |first: usize, out: &mut [u32]| {
-            for (offset, value) in out.iter_mut().enumerate() {
-                *value = int_left[first + offset] + int_right[first + offset];
+            for ((value, l), r) in out.iter_mut().zip(&int_left[first..]).zip(&int_right[first..]) {
+                *value = l + r;
             }
         };
         let output = std::cell::RefCell::new(vec![0_u32; count]);
@@ -274,8 +284,8 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
             .collect();
         let y: Vec<f32> = (0..count).map(|i| ((i % 53) as i32 - 26) as f32 * 0.25).collect();
         let saxpy = |first: usize, out: &mut [f32]| {
-            for (offset, value) in out.iter_mut().enumerate() {
-                *value = 1.5 * x[first + offset] + y[first + offset];
+            for ((value, xi), yi) in out.iter_mut().zip(&x[first..]).zip(&y[first..]) {
+                *value = 1.5 * xi + yi;
             }
         };
         let saxpy_ok = |out: &[f32]| {
@@ -301,9 +311,8 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
         const WIDTH: usize = 64;
         let groups = count / WIDTH;
         let reduce = |first: usize, out: &mut [f32]| {
-            for (offset, value) in out.iter_mut().enumerate() {
-                let group = first + offset;
-                *value = x[group * WIDTH..(group + 1) * WIDTH].iter().sum();
+            for (value, group) in out.iter_mut().zip(x[first * WIDTH..].as_chunks::<WIDTH>().0) {
+                *value = group.iter().sum();
             }
         };
         let reduce_ok = |out: &[f32]| {
@@ -331,8 +340,7 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
         )?);
 
         let stencil = |first: usize, out: &mut [f32]| {
-            for (offset, value) in out.iter_mut().enumerate() {
-                let index = first + offset;
+            let edge = |index: usize| {
                 let mut sum = x[index];
                 if index > 0 {
                     sum += x[index - 1];
@@ -340,7 +348,27 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
                 if index + 1 < count {
                     sum += x[index + 1];
                 }
-                *value = sum;
+                sum
+            };
+            let last = out.len().saturating_sub(1);
+            // Interior points have both neighbours: a branch-free sliding window.
+            let begin = usize::from(first == 0);
+            let end = if first + out.len() == count {
+                last
+            } else {
+                out.len()
+            };
+            if begin < end {
+                let window = &x[first + begin - 1..first + end + 1];
+                for (value, w) in out[begin..end].iter_mut().zip(window.windows(3)) {
+                    *value = w[1] + w[0] + w[2];
+                }
+            }
+            if begin == 1 {
+                out[0] = edge(first);
+            }
+            if end == last && !out.is_empty() {
+                out[last] = edge(first + last);
             }
         };
         let stencil_ok = |out: &[f32]| {
@@ -372,11 +400,13 @@ fn add_cpu_compute(results: &mut Vec<Measurement>, options: &Options, executor: 
 
         // Inclusive scan within independent 64-element tiles, matching the GPU scan fixture.
         let scan = |first_tile: usize, out: &mut [u32]| {
-            for (tile, values) in out.chunks_mut(WIDTH).enumerate() {
-                let base = (first_tile + tile) * WIDTH;
+            for (values, inputs) in out
+                .chunks_mut(WIDTH)
+                .zip(int_left[first_tile * WIDTH..].chunks(WIDTH))
+            {
                 let mut sum = 0;
-                for (lane, value) in values.iter_mut().enumerate() {
-                    sum += int_left[base + lane];
+                for (value, input) in values.iter_mut().zip(inputs) {
+                    sum += input;
                     *value = sum;
                 }
             }

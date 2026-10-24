@@ -11,11 +11,11 @@ use kora::{Cluster, ClusterOptions, OffloadPolicy, RuntimeOptions, WorkerOptions
 use crate::gpu::{COMPUTE_SIZES, SAXPY, SaxpyParams, saxpy_metadata};
 use crate::report::{Failure, Measurement, Options, Outcome, failed, run_checked, unavailable};
 
+/// Default runtime options (including startup calibration, as in the C++ benchmark) without
+/// log output.
 fn quiet() -> RuntimeOptions {
     RuntimeOptions {
         log_level: Some(Level::Off),
-        enable_validation: Some(false),
-        enable_startup_calibration: Some(false),
         ..RuntimeOptions::default()
     }
 }
