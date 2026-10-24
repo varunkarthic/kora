@@ -1,34 +1,30 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "pybind11>=2.13,<4"]
-build-backend = "scikit_build_core.build"
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
 
 [project]
 name = "kora-runtime"
-version = "0.1.0"
-description = "Python bindings for the KORA C++ compute runtime"
+dynamic = ["version"]
+description = "Python bindings for the KORA compute runtime"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Programming Language :: C++",
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Rust",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+numpy = ["numpy>=1.26"]
+test = ["pytest>=8", "numpy>=1.26"]
 
-[tool.scikit-build]
-minimum-version = "0.10"
-wheel.packages = ["python/kora"]
-sdist.include = ["bindings/python/**", "python/kora/**", "tests/python/**"]
-
-[tool.scikit-build.cmake.define]
-KORA_BUILD_PYTHON = "ON"
-KORA_BUILD_TESTS = "OFF"
-KORA_BUILD_TOOLS = "OFF"
-KORA_ENABLE_SPIRV_TOOLS = "OFF"
+[tool.maturin]
+manifest-path = "crates/kora-python/Cargo.toml"
+python-source = "python"
+module-name = "kora._core"
+include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]

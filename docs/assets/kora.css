@@ -1,0 +1,141 @@
+/* KORA documentation theme: teal primary, amber accent, tuned for both color schemes. */
+:root {
+  --md-primary-fg-color: #0f766e;
+  --md-primary-fg-color--light: #14b8a6;
+  --md-primary-fg-color--dark: #115e59;
+  --md-accent-fg-color: #d97706;
+  --md-accent-fg-color--transparent: rgba(217, 119, 6, 0.1);
+  --kora-hero-from: #0f766e;
+  --kora-hero-to: #134e4a;
+  --kora-card-border: rgba(15, 118, 110, 0.18);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #115e59;
+  --md-primary-fg-color--light: #2dd4bf;
+  --md-primary-fg-color--dark: #0f3d3a;
+  --md-accent-fg-color: #fbbf24;
+  --md-accent-fg-color--transparent: rgba(251, 191, 36, 0.12);
+  --md-default-bg-color: #0d1117;
+  --md-typeset-a-color: #5eead4;
+  --kora-hero-from: #134e4a;
+  --kora-hero-to: #0d1117;
+  --kora-card-border: rgba(94, 234, 212, 0.18);
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+/* Landing-page hero. */
+.kora-hero {
+  margin: -1.2rem -0.8rem 2rem;
+  padding: 3rem 2rem 2.5rem;
+  border-radius: 0 0 1rem 1rem;
+  background: linear-gradient(135deg, var(--kora-hero-from), var(--kora-hero-to));
+  color: #f0fdfa;
+}
+
+.kora-hero h1 {
+  margin: 0 0 0.6rem;
+  color: #f0fdfa;
+  font-size: 2.4rem;
+  line-height: 1.15;
+}
+
+.kora-hero p {
+  max-width: 44rem;
+  font-size: 1.05rem;
+  opacity: 0.92;
+}
+
+.kora-hero .md-button {
+  margin: 0.4rem 0.6rem 0 0;
+  color: #f0fdfa;
+  border-color: rgba(240, 253, 250, 0.6);
+}
+
+.kora-hero .md-button--primary {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1c1917;
+}
+
+.kora-hero .md-button:hover {
+  background: #fbbf24;
+  border-color: #fbbf24;
+  color: #1c1917;
+}
+
+/* Feature cards. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border: 1px solid var(--kora-card-border);
+  border-radius: 0.75rem;
+  transition: border-color 125ms, box-shadow 125ms, transform 125ms;
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+/* Benchmark figures. */
+.md-typeset figure img,
+.md-typeset img[src$=".svg"] {
+  border-radius: 0.5rem;
+  background: #ffffff;
+}
+
+.md-typeset table:not([class]) th {
+  white-space: nowrap;
+}
+
+.md-typeset .kora-numbers td:not(:first-child),
+.md-typeset .kora-numbers th:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Full-strength page titles in both schemes (Material dims h1 by default). */
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+}
+
+/* The landing page's hero replaces the page title row. */
+.md-content__inner:has(.kora-hero) > .md-content__button {
+  display: none;
+}
+
+/* Diagrams in the KORA palette. */
+:root {
+  --md-mermaid-font-family: var(--md-text-font-family), sans-serif;
+  --md-mermaid-node-bg-color: #ccfbf1;
+  --md-mermaid-node-fg-color: #134e4a;
+  --md-mermaid-edge-color: #0f766e;
+  --md-mermaid-label-bg-color: #ffffff;
+  --md-mermaid-label-fg-color: #134e4a;
+  --md-mermaid-sequence-actor-bg-color: #ccfbf1;
+  --md-mermaid-sequence-actor-fg-color: #134e4a;
+  --md-mermaid-sequence-actor-border-color: #0f766e;
+  --md-mermaid-sequence-actor-line-color: #0f766e;
+  --md-mermaid-sequence-message-fg-color: #134e4a;
+  --md-mermaid-sequence-message-line-color: #0f766e;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-mermaid-node-bg-color: #134e4a;
+  --md-mermaid-node-fg-color: #ccfbf1;
+  --md-mermaid-edge-color: #5eead4;
+  --md-mermaid-label-bg-color: #0d1117;
+  --md-mermaid-label-fg-color: #ccfbf1;
+  --md-mermaid-sequence-actor-bg-color: #134e4a;
+  --md-mermaid-sequence-actor-fg-color: #ccfbf1;
+  --md-mermaid-sequence-actor-border-color: #5eead4;
+  --md-mermaid-sequence-actor-line-color: #5eead4;
+  --md-mermaid-sequence-message-fg-color: #ccfbf1;
+  --md-mermaid-sequence-message-line-color: #5eead4;
+}

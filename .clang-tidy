@@ -1,2 +1,0 @@
-Checks: 'bugprone-*,performance-*,modernize-use-nullptr,modernize-use-override,-bugprone-easily-swappable-parameters'
-WarningsAsErrors: ''

@@ -1,0 +1,165 @@
+site_name: KORA
+site_description: Vendor-neutral Vulkan compute in Rust, C, and Python — from one GPU to devices you can plug in and out.
+site_url: https://kora.readthedocs.io/en/latest/
+repo_url: https://github.com/varunkarthic/kora
+repo_name: varunkarthic/kora
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 Varun Karthic · Apache-2.0
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+
+extra_css:
+  - assets/kora.css
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets:
+      base_path: [".", "docs"]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: relative_to_docs
+    unrecognized_links: warn
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/varunkarthic/kora
+
+nav:
+  - Home: index.md
+  - Get started:
+      - get-started/index.md
+      - Install: get-started/installation.md
+      - Your first dispatch: get-started/quickstart.md
+      - Core concepts: get-started/concepts.md
+  - Guides:
+      - guides/index.md
+      - Kernels and manifests: guides/kernels.md
+      - Buffers and memory: guides/memory.md
+      - Dispatch and synchronization: guides/dispatch.md
+      - Choosing devices: guides/devices.md
+      - Multiple devices and remote workers: guides/cluster.md
+      - Adaptive placement and calibration: guides/adaptive.md
+      - Task graphs: guides/task-graphs.md
+      - CPU executor and fallbacks: guides/cpu.md
+      - Recovery and device loss: guides/recovery.md
+      - Profiling and tracing: guides/profiling.md
+      - Debugging: guides/debugging.md
+      - Configuration: guides/configuration.md
+  - Tools:
+      - tools/index.md
+      - kora-info: tools/kora-info.md
+      - kora-top: tools/kora-top.md
+      - kora-bench: tools/kora-bench.md
+      - kora-worker: tools/kora-worker.md
+  - API:
+      - api/index.md
+      - Rust: api/rust.md
+      - C: api/c.md
+      - Python: api/python.md
+      - Errors: api/errors.md
+  - Performance:
+      - performance/index.md
+      - Methodology: performance/methodology.md
+      - Rust vs. C++ (1.0): performance/rust-vs-cpp.md
+      - Against Metal, OpenCL, OpenGL: performance/competitors.md
+      - 0.x optimization history: performance/history.md
+  - Internals:
+      - internals/index.md
+      - Architecture: internals/architecture.md
+      - Invariants: internals/invariants.md
+      - Memory subsystem: internals/memory.md
+      - Queues and transfers: internals/queues.md
+      - Kernels and pipelines: internals/pipelines.md
+  - Project:
+      - project/index.md
+      - Platform support: project/platform-support.md
+      - Migrating from 0.x: project/migrating.md
+      - Building and testing: project/building.md
+      - Releases: project/releases.md
+      - CI/CD: project/ci-cd.md
+      - Security: project/security.md

@@ -23,8 +23,8 @@ def validate_cuda_report(kora_report: dict, cuda_report: dict) -> list[dict]:
     """Validate optional externally produced CUDA measurements against one KORA report."""
     if not isinstance(kora_report, dict) or not isinstance(cuda_report, dict):
         raise ValueError("KORA and CUDA reports must be JSON objects")
-    if kora_report.get("schema_version") != 3:
-        raise ValueError("KORA report must use schema version 3")
+    if kora_report.get("schema_version") not in (3, 4):
+        raise ValueError("KORA report must use schema version 3 or 4")
     if kora_report.get("diagnostic_profile") is True:
         raise ValueError("diagnostic profile reports include telemetry overhead")
     kora_gpu = kora_report.get("gpu_measurements")

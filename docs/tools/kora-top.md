@@ -1,61 +1,57 @@
 # kora-top
 
-`kora-top` shows what a running `kora::Cluster` is doing: every local GPU and remote worker,
+`kora-top` shows what a running `Cluster` is doing: every local GPU and remote worker,
 which of them received work in the last second, device memory, worker cache, and a log of
 connects, disconnects, failovers, device rescans, and routing changes.
 
 ## Watch the demo
 
 ```sh
-./build/release/tools/kora-top --demo
+kora-top --demo
 ```
 
-The demo needs no setup. It creates a Cluster with every local device and two loopback workers,
+The demo needs no setup and exits with status 77 when no Vulkan device is available. It creates a
+Cluster with every local device and two loopback workers,
 A and B, and runs a 4K-element dispatch and a 1M-element `split()` dispatch in a loop. A script
 plugs worker B in at 3 s, unplugs A at 7 s, plugs A back in at 11 s, and unplugs B at 15 s, then
 repeats. Every eighth round the demo reads both result buffers and compares every element with the
 expected value. The footer counts verified results and mismatches, and `kora-top --demo` exits
 non-zero if any result was wrong.
 
-This frame was captured from `kora-top --demo --no-color` on an Apple M4, 10 s in, after worker A
-had been unplugged:
+This frame was captured from `kora-top --demo --no-color` on an Apple M4 (KosmicKrisp and MoltenVK
+drivers for the same GPU, plus two loopback workers), 9.8 s in. Worker A was unplugged at 7.0 s: its
+in-flight dispatch re-ran locally, work moved to worker B, and all 250 checked results were exact.
 
 ```text
-kora-top  127.0.0.1:54876  up 9.9 s  policy prefer-remote
-dispatches: local 1, remote 1,217, split 1,214 (3,645 slices)   failovers 1   device rescans 0   recoveries 0
+kora-top  127.0.0.1:50243  up 9.8 s  policy prefer-remote
+dispatches: local 3, remote 1,414, split 573 (1,157 slices)   failovers 1   device rescans 0   recoveries 0
 
-  TARGET                                    WORK NOW               TOTAL     RUN  MEMORY
-* local 2   Apple M4                        ████░░░░░░░░░░░░   25%  1,215     0    ░░░░░░░░ 16.0 MiB of 14.2 GiB
-* local 1   llvmpipe (LLVM 22.1.8, 128 bit~ ████░░░░░░░░░░░░   25%  1,214     0    ░░░░░░░░ 16.0 MiB of 4.5 GiB
-* local 0   Apple M4                        ████░░░░░░░░░░░░   25%  1,214     0    16.0 MiB
-o worker    127.0.0.1:54874  unplugged      ░░░░░░░░░░░░░░░░    0%  871       0    1 connects, 1 failovers
-* worker    127.0.0.1:54875  Apple M4       ████░░░░░░░░░░░░   25%  349       0    cached 8.0 MiB
+  TARGET                                              WORK NOW               TOTAL     RUN  MEMORY
+* local 1   Apple M4                                  █████░░░░░░░░░░░   33%  575       0    ░░░░░░░░ 16.0 MiB of 14.2 GiB
+* local 0   Apple M4                                  █████░░░░░░░░░░░   33%  574       0    16.0 MiB
+o worker    127.0.0.1:50241  unplugged                ░░░░░░░░░░░░░░░░    0%  922       0    1 connects, 1 failovers
+* worker    127.0.0.1:50242  Apple M4                 █████░░░░░░░░░░░   33%  503       0    cached 8.0 MiB
 
   EVENTS
-     0.0s  worker 127.0.0.1:54874 connected (Apple M4)
-     1.0s  demo.saxpy now runs on worker 127.0.0.1:54874, split(local 1 + worker 127.0.0.1:54874 +~
-     2.0s  demo.saxpy now runs on worker 127.0.0.1:54874, split(local 1 + local 0 + local 2), spli~
-     3.1s  worker 127.0.0.1:54875 connected (Apple M4)
-     4.0s  demo.saxpy now runs on worker 127.0.0.1:54874, split(local 1 + worker 127.0.0.1:54875 +~
-     5.0s  demo.saxpy now runs on worker 127.0.0.1:54874, split(local 1 + local 0 + local 2), spli~
-     7.0s  worker 127.0.0.1:54874 failed a dispatch; re-running it locally
-     7.0s  worker 127.0.0.1:54874 disconnected
-     8.0s  demo.saxpy now runs on worker 127.0.0.1:54874, worker 127.0.0.1:54875, local 2, split(l~
-     9.0s  demo.saxpy now runs on worker 127.0.0.1:54875, split(local 1 + local 0 + local 2), spli~
+     3.0s  demo.saxpy now runs on worker 127.0.0.1:50241, split(local 0 + local 1), split(local 1 + local 0)
+     3.1s  worker 127.0.0.1:50242 connected (Apple M4)
+     4.0s  demo.saxpy now runs on worker 127.0.0.1:50241, worker 127.0.0.1:50242, split(local 1 + local 0), ~
+     5.0s  demo.saxpy now runs on worker 127.0.0.1:50241, split(local 1 + local 0)
+     6.0s  demo.saxpy now runs on worker 127.0.0.1:50241, worker 127.0.0.1:50242, split(local 1 + local 0), ~
+     7.0s  worker 127.0.0.1:50241 failed a dispatch; re-running it locally
+     7.0s  worker 127.0.0.1:50241 disconnected
+     7.0s  demo.saxpy now runs on worker 127.0.0.1:50241, worker 127.0.0.1:50242, local 0, split(local 0 + l~
+     8.0s  demo.saxpy now runs on worker 127.0.0.1:50242, split(local 1 + local 0), split(local 1 + local 0 ~
+     9.1s  demo.saxpy now runs on worker 127.0.0.1:50242, split(local 1 + local 0)
 
-demo  results verified 304, 0 mismatches   next: plug in worker A (127.0.0.1:54874) in 2 s   (Ctrl-C to quit)
+demo  results verified 250, 0 mismatches   next: plug in worker A (127.0.0.1:50241) in 2 s   (Ctrl-C to quit)
 ```
 
-The frame shows:
-
-- The three local devices (two Vulkan drivers for the M4 GPU, plus llvmpipe) and worker B each ran
-  a quarter of the last second's work, mostly split slices.
-- Worker A is gone. At 7.0 s it failed one in-flight dispatch, that dispatch re-ran locally, and
-  work moved to B.
-- 304 results were checked across the unplug with no mismatches.
-- Memory shows what KORA has allocated on each device, against the budget the driver reports
-  when it supports `VK_EXT_memory_budget`. `cached` is how much of the host's buffer data the worker
-  holds at the current version, which the next dispatch does not resend.
+Each line shows a target: local devices first, then workers. **WORK NOW** is the target's share of the
+work completed in roughly the last second; **TOTAL** counts whole dispatches plus split slices; **RUN**
+is work in flight. **MEMORY** is what KORA has allocated on a device, against the driver's budget when
+it reports one; for a worker, `cached` is how much of the host's buffer data it holds at the current
+version, which the next dispatch does not resend.
 
 ## Attach to your application
 
@@ -67,10 +63,11 @@ KORA_STATUS_LISTEN=127.0.0.1:7979 ./my-app
 
 or in code:
 
-```cpp
-kora::ClusterOptions options;
-options.status_listen = "127.0.0.1:7979";  // Port 0 picks a free port; see status_port().
-auto cluster = kora::Cluster::create(options);
+```rust
+let cluster = kora::Cluster::new(kora::ClusterOptions {
+    status_listen: "127.0.0.1:7979".into(), // port 0 picks a free port; see status_port()
+    ..kora::ClusterOptions::default()
+})?;
 ```
 
 Then run `kora-top` in another terminal. `127.0.0.1:7979` is its default; pass `host:port` for any
@@ -99,8 +96,8 @@ than allowed to slow the Cluster. Fields:
 | `stats` | The `ClusterStats` counters. |
 | `events[]` | Up to 64 recent events: `at_ms`, `message`, and `repeats` (identical consecutive events are merged). |
 
-The same data is available in-process through `Cluster::local_devices()`, `Cluster::workers()`,
-`Cluster::stats()`, and `Cluster::events()`.
+The same data is available in-process through `Cluster::local_devices()`, `workers()`, `stats()`,
+and `events()`.
 
 ## Security
 

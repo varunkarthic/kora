@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render accessible, timing-domain-separated SVG charts from schema-3 reports."""
+"""Render accessible, timing-domain-separated SVG charts from schema-3 or schema-4 reports."""
 
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ def report_series(report: dict[str, Any], kind: str, sizes: tuple[int | str, ...
     """Validate report identity/schema and return only available, correctly-domain-tagged values."""
     if report.get("diagnostic_profile") is True:
         raise ValueError("diagnostic profile reports include telemetry overhead and are not comparison charts")
-    if report.get("schema_version") != 3:
-        raise ValueError("expected kora-bench JSON schema version 3")
+    if report.get("schema_version") not in (3, 4):
+        raise ValueError("expected kora-bench JSON schema version 3 or 4")
     measurements = report.get("gpu_measurements")
     if not isinstance(measurements, dict) or not measurements.get("same_physical_device_for_kora_and_raw_vulkan"):
         raise ValueError("report must confirm a shared physical device for KORA and raw Vulkan")
@@ -286,8 +286,8 @@ def render_report(report: dict[str, Any], output_dir: Path, sizes: tuple[int, ..
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("report", type=Path, help="schema-3 kora-bench JSON report")
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/charts"))
+    parser.add_argument("report", type=Path, help="schema-3 or schema-4 kora-bench JSON report")
+    parser.add_argument("--output-dir", type=Path, default=Path("docs/assets/charts"))
     args = parser.parse_args()
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))

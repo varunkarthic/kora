@@ -12,6 +12,169 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the
+[migration guide](https://kora.readthedocs.io/en/latest/project/migrating/).
+
+### Removed
+- The C++ runtime: its public headers (`include/kora`), sources, CMake build and presets, the
+  installed CMake package (`find_package(kora)`), the pybind11 module, and the C++ test suites. Use
+  the `kora` Rust crate, the C ABI (`kora.h` and `libkora`) from C or C++, or the PyO3 wheel, which
+  keeps `import kora` and the 0.x Python names.
+
+### Changed
+- `VERSION` is `1.0`, so releases from `main` are `v1.0.x`. Each release attaches per-platform
+  archives with `include/kora.h`, the shared and static `libkora`, and the `kora-info`, `kora-top`,
+  `kora-bench`, and `kora-worker` tools, plus abi3 Python wheels (CPython 3.11+).
+- CI builds and tests the Cargo workspace: on Linux with lavapipe (including a pass under
+  synchronization validation), and on macOS and Windows for pushes to `main`.
+- The benchmark chart scripts accept `kora-bench` schema 4, and `tools/competitor-bench/build.sh`
+  builds the macOS comparison harness without CMake.
+
+### Added
+- Start the KORA 1.0 Rust migration: a Cargo workspace (`crates/kora`) builds alongside the C++
+  tree, CI checks Rust formatting, Clippy, tests, and rustdoc, and the vendor-neutrality check now
+  scans Rust sources.
+- Port the core types to Rust: structured `Error`/`ErrorCode` with cause chains, checked size
+  arithmetic, categorized logging (`kora_log!`), `RuntimeOptions` resolution with every `KORA_*`
+  variable, the bounded strict JSON parser and writer, kernel-metadata parsing/validation/
+  serialization, and verification comparators (now a type-safe `VerificationPolicy` enum).
+- Port host-side planning to Rust: `Event`/`EventPromise` (an abandoned promise now cancels its
+  event instead of hanging waiters), the work-stealing `CpuExecutor` (no global lock on the
+  submit/run path), `TaskGraph`/`ExecutionPlan` with allocation-free replay, temporary-buffer
+  aliasing (reachability bitsets replace per-pair graph searches), `DynamicPartitioner`, scheduler
+  cost/policy models, transfer models, and the persistent performance database.
+- Port the Vulkan bootstrap to Rust on `ash`: runtime loader discovery (including macOS SDK and
+  Homebrew locations), instance negotiation with portability enumeration, owned physical-device
+  snapshots with no escaping `pNext` chains, logical devices that enable only queried features,
+  `DeviceInfo` capability tiers and memory topology, device selection, and deterministic fault
+  injection. An advertised validation layer that fails to load now falls back to an unvalidated
+  instance with a warning instead of failing creation.
+- Port the memory subsystem to Rust: the TLSF-style suballocator (statistics are now O(1)
+  running counters instead of a full region walk per allocation), device-memory pools that try
+  the allocation before running recovery and release surplus empty blocks, the budget ledger and
+  memory-type selection, staging rings whose slices keep their mapping alive and reclaim through a
+  timeline heap, dirty-range flush/invalidate, residency tracking, LRU-2 eviction planning, and
+  the bounded OOM recovery coordinator. Fault injection can now fail a window of consecutive calls.
+- Port queue execution and transfers to Rust: `QueueContext` (submission and completion threads,
+  timeline or pooled-fence completion, coalescing, device-loss propagation; Vulkan objects are
+  released only after both workers exit), the command-buffer ring, hazard tracking with precise
+  barriers, queue-family ownership barriers, the GPU timestamp ring, and the `TransferEngine`.
+  Staged transfers no longer serialize on the previous staged transfer: producers wait for pending
+  reservations to be submitted, and transfers larger than the staging ring are split into pipelined
+  chunks instead of failing. Downloads deliver bytes to a completion closure, and transfers keep
+  their buffers alive until completion.
+- Port the kernel layer to Rust: structural SPIR-V validation and compute-interface reflection,
+  the per-device `PipelineManager` (LRU pipeline cache, shared descriptor and pipeline layouts,
+  descriptor pools, and the identity-bound persistent pipeline cache in the existing file format),
+  and the `LocalSizeId` workgroup autotuner. Cache hits no longer re-validate the module or copy it
+  into a key, pipeline compilation runs outside the manager lock, and pipelines, layouts, and
+  descriptor-set leases are reference counted so they stay valid after eviction or manager drop.
+  Descriptor pools grow by counting their sets instead of relying on driver out-of-pool errors.
+  SPIR-V test fixtures are committed, so `cargo test` needs no shader compiler.
+- Port logical buffers to Rust: `BufferHandle` and `Pod`-typed `Buffer<T>` with per-buffer locks
+  (no global registry mutex), exclusive mapping guards that cannot race host writes, and versions
+  that are unique across buffers. Device results that arrive while a buffer is mapped are parked
+  and applied on the next access instead of blocking the completion thread. A thread that re-enters
+  a buffer it has mapped gets an error instead of a deadlock. A full-range write mapping now
+  clears a data-loss mark, and per-device replicas are released with the last handle.
+- Port the runtime core to Rust: `Runtime::new` with device selection and `AllEligible`
+  quarantine, kernels validated and pre-compiled at load (`load_kernel`, `load_kernel_on`,
+  `load_kernel_file`), the `DispatchBuilder` (`read`/`write`/`read_write`, `Pod` push constants,
+  priority, deferred readback), `readback`, CPU fallbacks with typed `CpuTaskContext` views,
+  memory, transfer, and timestamp statistics, and `VK_EXT_device_fault` reports. Staged input
+  uploads no longer block the submitting thread until the copy finishes, and device replicas are
+  freed as soon as the last handle and in-flight submission release them.
+- Complete the Rust runtime: bounded startup calibration (submission, transfer, and compute
+  probes cached per device and driver; corrupt caches are rebuilt, and `Runtime::calibrate`
+  forces a refresh), the calibration cost model, `dispatch_adaptive` placement that blends
+  calibration with confident online observations and returns to the device that holds
+  device-resident inputs, duplicate verification across devices with quarantine on mismatch,
+  `recover` and `rebuild_devices` that keep buffers and CPU fallbacks, per-dispatch host phase
+  profiling, and Chrome trace export with scheduler scores. Profiling stats report whether the
+  device has GPU timestamps.
+- Port the Cluster to Rust: `Cluster` with hot-swappable remote workers, failover, split
+  dispatches, local device-loss recovery, the device-rescan monitor, and the `kora-top` status
+  stream; `WorkerServer` and the `kora-worker` binary (new `kora-tools` crate). The worker protocol
+  is now version 2 (peers of different versions reject each other at the first frame) and uses the
+  RustCrypto HMAC/SHA-256 and `crc32c` crates instead of hand-written implementations. Released
+  buffers are dropped from worker caches within a quarter second, and a malformed worker reply that
+  names the same output twice now drops the link instead of being committed.
+
+- Port the command-line tools to Rust in `kora-tools`: `kora-info` (same `--json` schema 2),
+  `kora-top` (live view and `--demo`), and `kora-bench`. The Rust `kora-bench` measures the same
+  CPU, KORA Runtime, raw Vulkan, transfer, staging-ring, command-pool, and Cluster workloads under the
+  same result names, and writes report schema 4: schema 3 plus `implementation: "rust"` and new
+  CPU-executor submit and fan-out, allocator-churn, and logical-buffer creation families. CI checks
+  both tools' JSON contracts against lavapipe. `MappedPtr::from_raw` lets externally mapped memory
+  be used as a transfer buffer.
+- Add the stable C ABI (`kora-capi`, built as `libkora` with a cbindgen-generated `kora.h`): opaque
+  runtime, buffer, kernel, dispatch, and event handles; `KoraStatus` codes equal to the KORA error
+  codes; a per-thread last-error message; and panics contained at the boundary.
+  `tools/ci/check_capi.sh` builds and installs the library, compiles the C vector-add example
+  against the installed header, and runs it (skipping cleanly without a Vulkan device).
+- Replace the pybind11 extension with PyO3/maturin bindings (`kora-runtime` wheel, abi3 for
+  Python 3.11+). Names match the 0.x module; new: `Runtime.create_buffer_from` and
+  `Buffer.to_numpy` for NumPy, SPIR-V bytes accepted by `Runtime.load_kernel`, `Event.done`,
+  `Buffer.id`, `KernelMetadata.from_json`/`to_json`, and `RuntimeOptions.enable_validation` and
+  `enable_startup_calibration`. Behavior changes: Python 3.9 and 3.10 are no longer supported;
+  `RuntimeOptions` fields default to `None` (environment and built-in defaults apply); a
+  `MappedView` belongs to the thread that created it, and while it lives, other access to that
+  buffer from the same thread raises `KoraError` (`INVALID_ARGUMENT`) instead of deadlocking;
+  `MappedView.release()` ends a mapping early; a `DispatchBuilder` can be submitted once.
+- Measure the Rust runtime against 0.3 C++ in ten ABBA-interleaved pairs per device on Apple M4
+  (MoltenVK and KosmicKrisp); reports and summaries are retained in
+  `benchmarks/results/rust-vs-cpp-apple-m4`. `tools/kora-bench/run_ab.py` runs interleaved pairs and
+  `render_ab.py --families` summarizes every benchmark family (schema 3 and 4 reports).
+- Task-graph finalization is about 35% faster (no per-task tree sets, compact successor lists), and
+  staging-ring reservations no longer slow down with the number of live ranges (cancelling the
+  newest reservation returns its space; reservation IDs use a cheap hash): reserve plus cancel with
+  512 live ranges went from 1.4 µs to 0.16 µs.
+- Rebuild the documentation on MkDocs Material for 1.0: light and dark themes, search, linked
+  Rust/C/Python code tabs, copy buttons, themed diagrams, and task-oriented sections (Get started,
+  Guides, Tools, API, Performance, Internals, Project), with the Rust API reference published next to
+  it on Read the Docs. Every page was rewritten for the Rust runtime or retired: the 0.x optimization
+  studies and API comparisons moved to Performance, and the C++ API and per-class internals pages were
+  replaced by the API section, rustdoc, and five internals overviews. Runnable vector-add examples in
+  Rust, C, and Python (`examples/`) back the quickstart, and CI builds the site with `--strict`.
+- Rewrite the README for 1.0. Its charts (light and dark SVGs) and tables are generated by
+  `tools/bench-report/render.py` with matplotlib and NumPy from the retained Rust-vs-C++ reports;
+  `render.py --check` and `tests/bench_report` (CI) verify that every README number equals the
+  median in the JSON. The documentation uses the same charts.
+- Close the gaps found by auditing the C++ tests against the Rust suite: tests now cover the
+  pre-1.2 extension feature path, CPU-task access rules and push constants, draining pending CPU
+  fallbacks when a runtime is dropped, and releasing inputs while their dispatch is in flight. The
+  GPU-timestamp test skips on devices that report no timestamp support. Concurrency and randomized
+  tests run fewer rounds under Miri, so the documented Miri command finishes (73 tests, no findings).
+### Fixed
+- The first dispatch on a new buffer now records a barrier against earlier device writes to its
+  memory, which may belong to a released buffer, and a direct host upload no longer discards a
+  pending write's barrier. Synchronization validation reported this on lavapipe.
+- `tests/bench_report` registers `render.py` before loading it, so the README benchmark test
+  passes on Python 3.11–3.14 (it failed in CI on Python 3.12).
+- A split `Cluster` dispatch could commit one slice's range a dispatch behind when a worker failed
+  over and its slice re-ran on a local device that had already run another slice of the same split:
+  the second slice re-uploaded the host copy over the first slice's range before it was read back.
+  Slices of one split now share the device copy; found by repeating the worker-chaos test.
+- After a device loss, results that only the lost device held (deferred outputs that were never
+  read back) are marked lost on recovery instead of silently reverting to older host contents.
+- Dispatches that read or overwrite a buffer written by an earlier dispatch now record a memory
+  barrier; independent dispatches still record none. The C++ runtime recorded no barrier between
+  dependent dispatches.
+- Once a `LocalSizeId` kernel finishes autotuning, every dispatch is specialized with the tuned
+  workgroup size. The C++ runtime computed group counts from the tuned size but compiled the
+  default size, which could leave elements unprocessed.
+- A dispatch whose input has newer, unread results on another device now fails with a clear error
+  instead of silently uploading stale host bytes.
+- A graceful shutdown now drains follow-up work that completion callbacks enqueue (such as a
+  dispatch's output readback) instead of rejecting it.
+- Logical devices now enable `shaderInt16`, `shaderInt64`, and `shaderFloat64` when supported,
+  so modules declaring those capabilities (which reflection already accepted) are valid, and
+  enable `maintenance4` when available; `LocalSizeId` kernels are rejected with a clear error on
+  devices without it instead of creating an invalid pipeline.
+- A positive integer `default` for an `i32`/`i64` specialization constant, or an integer default
+  for an `f32`/`f64` constant, is now accepted and converted to the declared type instead of being
+  rejected as a type mismatch.
+
 ## [0.3.0] - 2026-10-20
 
 ### Changed
