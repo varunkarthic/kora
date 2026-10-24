@@ -138,6 +138,10 @@ jobs:
           python3 tests/check_kora_bench_json.py target/release/kora-bench --gpu --cluster
       - name: Check the installed C ABI
         run: tools/ci/check_capi.sh
+      - name: Check README benchmark numbers
+        run: |
+          python3 tools/bench-report/render.py --check
+          python3 -m unittest discover -s tests/bench_report
       - name: Build and test the Python wheel
         run: |
           python3 -m venv .venv

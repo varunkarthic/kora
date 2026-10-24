@@ -12,8 +12,8 @@ Pair *i* ran A then B for even *i* and B then A for odd *i* (`tools/kora-bench/r
 ## Summaries
 
 - `families-<device>.md`: per-family median of every per-pair B/A p50 ratio (below 1.00 = Rust faster).
-- `compute-<device>.md`: matched compute workloads per size, with the charts in
-  `docs/assets/charts/rust-vs-cpp-<device>-{default,deferred}.svg`.
+- `compute-<device>.md`: matched compute workloads per size (`render_ab.py`).
+- The README's and documentation's charts and tables: `python3 tools/bench-report/render.py`.
 
 Regenerate:
 
@@ -23,9 +23,8 @@ python3 tools/kora-bench/render_ab.py --families \
   --after benchmarks/results/rust-vs-cpp-apple-m4/moltenvk/b-*.json.gz
 python3 tools/kora-bench/render_ab.py \
   --before benchmarks/results/rust-vs-cpp-apple-m4/moltenvk/a-*.json.gz \
-  --after benchmarks/results/rust-vs-cpp-apple-m4/moltenvk/b-*.json.gz \
-  --output-dir docs/assets/charts --title-suffix "Apple M4 / MoltenVK" \
-  --change "1.0 (Rust, after) vs 0.3 (C++, before)" --prefix rust-vs-cpp-moltenvk
+  --after benchmarks/results/rust-vs-cpp-apple-m4/moltenvk/b-*.json.gz > compute-moltenvk.md
+python3 tools/bench-report/render.py
 ```
 
 ## Reading the results

@@ -287,7 +287,7 @@ def render_report(report: dict[str, Any], output_dir: Path, sizes: tuple[int, ..
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="schema-3 kora-bench JSON report")
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/charts"))
+    parser.add_argument("--output-dir", type=Path, default=Path("docs/assets/charts"))
     args = parser.parse_args()
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))
