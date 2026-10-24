@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "benchmarks" / "results" / "rust-vs-cpp-apple-m4"
 spec = importlib.util.spec_from_file_location("render", ROOT / "tools" / "bench-report" / "render.py")
 render = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = render  # dataclasses look up their module while the class is created.
 spec.loader.exec_module(render)
 
 

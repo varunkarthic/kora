@@ -146,6 +146,8 @@ KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the
   GPU-timestamp test skips on devices that report no timestamp support. Concurrency and randomized
   tests run fewer rounds under Miri, so the documented Miri command finishes (73 tests, no findings).
 ### Fixed
+- `tests/bench_report` registers `render.py` before loading it, so the README benchmark test
+  passes on Python 3.11–3.14 (it failed in CI on Python 3.12).
 - A split `Cluster` dispatch could commit one slice's range a dispatch behind when a worker failed
   over and its slice re-ran on a local device that had already run another slice of the same split:
   the second slice re-uploaded the host copy over the first slice's range before it was read back.
