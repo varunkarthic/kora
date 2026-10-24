@@ -87,11 +87,6 @@ jobs:
         run: cmake --build --preset debug --parallel
       - name: Test
         run: ctest --preset debug --output-on-failure
-      - name: Build and test Python package
-        run: |
-          python3 -m venv build/python-venv
-          build/python-venv/bin/python -m pip install '.[test]'
-          build/python-venv/bin/python -m pytest -q tests/python
       - name: Test with synchronization validation
         env:
           VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
@@ -143,6 +138,13 @@ jobs:
           python3 tests/check_kora_bench_json.py target/release/kora-bench --gpu --cluster
       - name: Check the installed C ABI
         run: tools/ci/check_capi.sh
+      - name: Build and test the Python wheel
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install "maturin>=1.15,<2" "pytest>=8" "numpy>=1.26"
+          .venv/bin/maturin build --release --locked -o wheels
+          .venv/bin/pip install --no-index --find-links wheels kora-runtime
+          .venv/bin/python -m pytest tests/python -q
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
