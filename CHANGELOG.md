@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-24
+
 ### Fixed
 - Releases use the current release workflow. GitHub runs it from the default branch, which still
   held the pre-cut-over `v1` copy, so `v1.0.0`, `v1.0.1`, and `v1.0.2` were tagged without
@@ -815,7 +817,8 @@ KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the
   Vulkan dependency no longer builds its unused experimental C++ module.
 - Release-status refreshes now exit successfully before the repository has its first release.
 
-[Unreleased]: https://github.com/varunkarthic/kora/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/varunkarthic/kora/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/varunkarthic/kora/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/varunkarthic/kora/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/varunkarthic/kora/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/varunkarthic/kora/releases/tag/v1.0.0
