@@ -1,0 +1,25 @@
+[package]
+name = "kora-capi"
+description = "Stable C ABI for KORA (libkora + kora.h)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "kora"
+crate-type = ["cdylib", "staticlib"]
+# Documented by include/kora.h; rustdoc would collide with the `kora` crate's output path.
+doc = false
+
+[dependencies]
+kora_rt = { package = "kora", path = "../kora" }
+
+[dev-dependencies]
+cbindgen = { version = "0.29", default-features = false }
+
+[lints]
+workspace = true
