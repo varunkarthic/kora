@@ -141,6 +141,8 @@ jobs:
           cargo build --release --locked -p kora-tools
           python3 tests/integration/check_kora_info_json.py target/release/kora-info
           python3 tests/check_kora_bench_json.py target/release/kora-bench --gpu --cluster
+      - name: Check the installed C ABI
+        run: tools/ci/check_capi.sh
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings

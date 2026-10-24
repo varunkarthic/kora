@@ -89,6 +89,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   CPU-executor submit and fan-out, allocator-churn, and logical-buffer creation families. CI checks
   both tools' JSON contracts against lavapipe. `MappedPtr::from_raw` lets externally mapped memory
   be used as a transfer buffer.
+- Add the stable C ABI (`kora-capi`, built as `libkora` with a cbindgen-generated `kora.h`): opaque
+  runtime, buffer, kernel, dispatch, and event handles; `KoraStatus` codes equal to the KORA error
+  codes; a per-thread last-error message; and panics contained at the boundary.
+  `tools/ci/check_capi.sh` builds and installs the library, compiles the C vector-add example
+  against the installed header, and runs it (skipping cleanly without a Vulkan device).
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
   read back) are marked lost on recovery instead of silently reverting to older host contents.
