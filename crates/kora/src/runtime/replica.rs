@@ -68,7 +68,12 @@ impl Replica {
             pool,
             allocation,
             transfer,
-            state: Mutex::default(),
+            // The memory may have been another replica's, whose device writes this replica's
+            // hazard tracking never saw: the first dispatch orders itself after them.
+            state: Mutex::new(ReplicaState {
+                access: DeviceAccess::Write,
+                ..ReplicaState::default()
+            }),
         }
     }
 
