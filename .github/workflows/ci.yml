@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   linux:
-    name: Linux / GCC / lavapipe
+    name: Linux / lavapipe
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -57,58 +57,6 @@ jobs:
             "refs/remotes/origin/${BASE_REF}" \
             "refs/remotes/origin/pull/${PR_NUMBER}/head" \
             --allow-version 0.2.5
-      - name: Install build and Vulkan dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            clang-format \
-            ninja-build \
-            libvulkan-dev \
-            mesa-vulkan-drivers \
-            vulkan-validationlayers \
-            python3-yaml \
-            spirv-tools \
-            glslang-tools
-      - name: Locate lavapipe ICD
-        run: |
-          icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
-          if [ -z "$icd" ]; then
-            echo "The mesa-vulkan-drivers package did not install a lavapipe ICD manifest." >&2
-            exit 1
-          fi
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-      - name: Check C++ formatting
-        run: find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --dry-run --Werror
-      - name: Check vendor-neutral device policy
-        run: bash tools/ci/check_vendor_neutrality.sh
-      - name: Configure
-        run: cmake --preset debug
-      - name: Build
-        run: cmake --build --preset debug --parallel
-      - name: Test
-        run: ctest --preset debug --output-on-failure
-      - name: Test with synchronization validation
-        env:
-          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
-          VK_LAYER_VALIDATE_SYNC: "1"
-        run: bash tools/ci/run_sync_validation.sh
-      - name: Validate installed package
-        run: tools/ci/check_install.sh
-      - name: Validate workflow and release tooling
-        run: |
-          python3 tools/ci/check_workflows.py
-          python3 -m unittest discover -s tests/release -v
-      - name: Build documentation
-        run: |
-          python3 -m pip install --break-system-packages -r docs/requirements.txt
-          python3 -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.readthedocs.yaml').read_text())"
-          mkdocs build --strict
-
-  rust:
-    name: Rust / Linux / lavapipe
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -116,7 +64,7 @@ jobs:
       - name: Install Vulkan runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers vulkan-validationlayers glslang-tools spirv-tools
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers vulkan-validationlayers python3-yaml
       - name: Locate lavapipe ICD
         run: |
           icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
@@ -125,16 +73,23 @@ jobs:
             exit 1
           fi
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+      - name: Check vendor-neutral device policy
+        run: bash tools/ci/check_vendor_neutrality.sh
       - name: Check Rust formatting
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
+      - name: Test with synchronization validation
+        env:
+          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+          VK_KHRONOS_VALIDATION_VALIDATE_SYNC: "true"
+        run: cargo test -p kora --tests --locked
       - name: Check tool JSON contracts
         run: |
           cargo build --release --locked -p kora-tools
-          python3 tests/integration/check_kora_info_json.py target/release/kora-info
+          python3 tests/check_kora_info_json.py target/release/kora-info
           python3 tests/check_kora_bench_json.py target/release/kora-bench --gpu --cluster
       - name: Check the installed C ABI
         run: tools/ci/check_capi.sh
@@ -153,6 +108,15 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
+      - name: Validate workflow and release tooling
+        run: |
+          python3 tools/ci/check_workflows.py
+          python3 -m unittest discover -s tests/release -v
+      - name: Build documentation
+        run: |
+          python3 -m pip install --break-system-packages -r docs/requirements.txt
+          python3 -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.readthedocs.yaml').read_text())"
+          mkdocs build --strict
 
   platform:
     name: ${{ matrix.name }}
@@ -161,29 +125,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS / AppleClang
+          - name: macOS / arm64
             os: macos-14
           - name: Windows / MSVC
             os: windows-2025
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: seanmiddleditch/gha-setup-ninja@v5
-      - name: Initialize MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-      - name: Configure
-        run: cmake --preset debug
-      - name: Verify MSVC selection
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $compiler = Select-String -Path build/debug/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=.*cl.exe$'
-          if (-not $compiler) { throw 'CMake did not select the MSVC cl.exe compiler' }
-      - name: Build
-        run: cmake --build --preset debug --parallel
-      - name: Test
-        run: ctest --preset debug --output-on-failure
       - uses: dtolnay/rust-toolchain@stable
-      - name: Rust build and test
+      - uses: Swatinem/rust-cache@v2
+      # Hosted runners have no Vulkan driver: device tests skip and report NoVulkanImplementation.
+      - name: Test
         run: cargo test --workspace --locked
+      - name: Build release binaries
+        run: cargo build --release --workspace --locked

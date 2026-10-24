@@ -37,7 +37,7 @@ Plus, for the bindings and tools:
 
 ```sh
 tools/ci/check_capi.sh                                            # C ABI install + example
-python3 tests/integration/check_kora_info_json.py target/release/kora-info
+python3 tests/check_kora_info_json.py target/release/kora-info
 python3 tests/check_kora_bench_json.py target/release/kora-bench --gpu --cluster
 python3 -m pip install ".[numpy]" pytest && python3 -m pytest tests/python
 mkdocs build --strict                                             # this site

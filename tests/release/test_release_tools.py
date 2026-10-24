@@ -206,7 +206,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("kora-0.2.10-linux-x86_64.tar.gz", body)
         self.assertIn("kora-0.2.10-macos-arm64.tar.gz", body)
         self.assertIn("kora-0.2.10-windows-x86_64.zip", body)
-        self.assertIn("CMAKE_PREFIX_PATH", body)
+        self.assertIn("include/kora.h", body)
+        self.assertIn("kora_runtime-0.2.10-cp311-abi3-", body)
+        self.assertIn("KORA_VERSION_PATCH=10 cargo build --release --workspace", body)
         self.assertEqual(body.count("git clone --branch"), 1)
 
     def test_release_page_groups_every_gate_and_escapes_markdown_titles(self):

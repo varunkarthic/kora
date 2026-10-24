@@ -50,13 +50,13 @@ def cases() -> list[dict[str, Any]]:
     return rows
 
 
-def load(paths: list[Path], schema: int) -> list[dict[str, dict[str, Any]]]:
+def load(paths: list[Path], schemas: tuple[int, ...]) -> list[dict[str, dict[str, Any]]]:
     runs = []
     for path in paths:
         data = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
         report = json.loads(data.decode("utf-8"))
-        if report.get("schema_version") != schema:
-            raise ValueError(f"{path} must use schema version {schema}")
+        if report.get("schema_version") not in schemas:
+            raise ValueError(f"{path} must use schema version {' or '.join(map(str, schemas))}")
         if report.get("diagnostic_profile") is True:
             raise ValueError(f"{path} is a diagnostic profile, not a comparison report")
         runs.append({item["name"]: item for item in report["results"]})
@@ -80,8 +80,8 @@ def cell(value: dict[str, float] | None) -> str:
 
 
 def render(kora_paths: list[Path], competitor_paths: list[Path], output_dir: Path | None) -> str:
-    kora = load(kora_paths, 3)
-    competitors = load(competitor_paths, 1)
+    kora = load(kora_paths, (3, 4))  # Schema 4 (1.0) adds fields to schema 3 (0.x).
+    competitors = load(competitor_paths, (1,))
     host_domain, device_domain, cpu_domain = "host_submit_completion", "gpu_execution_timestamp", "host_cpu_execution"
     lines = [
         f"{len(kora_paths)} kora-bench and {len(competitor_paths)} competitor-bench runs, interleaved; each value is "
