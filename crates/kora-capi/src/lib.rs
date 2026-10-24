@@ -382,6 +382,9 @@ pub unsafe extern "C" fn kora_runtime_create(
     out: *mut *mut KoraRuntime,
 ) -> KoraStatus {
     guard(|| {
+        if out.is_null() {
+            return Err(invalid("output pointer is NULL")); // Before creating any devices.
+        }
         // SAFETY: forwarded from the caller.
         let options = unsafe { runtime_options(options) }?;
         let runtime = Runtime::new(&options)?;
