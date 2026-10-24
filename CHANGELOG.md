@@ -74,6 +74,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `recover` and `rebuild_devices` that keep buffers and CPU fallbacks, per-dispatch host phase
   profiling, and Chrome trace export with scheduler scores. Profiling stats report whether the
   device has GPU timestamps.
+- Port the Cluster to Rust: `Cluster` with hot-swappable remote workers, failover, split
+  dispatches, local device-loss recovery, the device-rescan monitor, and the `kora-top` status
+  stream; `WorkerServer` and the `kora-worker` binary (new `kora-tools` crate). The worker protocol
+  is now version 2 (peers of different versions reject each other at the first frame) and uses the
+  RustCrypto HMAC/SHA-256 and `crc32c` crates instead of hand-written implementations. Released
+  buffers are dropped from worker caches within a quarter second, and a malformed worker reply that
+  names the same output twice now drops the link instead of being committed.
 
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never

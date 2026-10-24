@@ -727,6 +727,12 @@ impl Runtime {
         Ok(readback_from(self.context(device)?, buffer.as_ref())?.unwrap_or_else(|| Event::ready(Ok(()))))
     }
 
+    /// A handle that reads byte ranges of device replicas on `device` after the runtime lock that
+    /// produced it is released (used by split cluster dispatches).
+    pub(crate) fn replica_reader(&self, device: &DeviceId) -> Result<ReplicaReader> {
+        Ok(ReplicaReader(Arc::clone(self.context(device)?)))
+    }
+
     /// Registers (or replaces) a CPU implementation under `key`.
     ///
     /// # Errors
@@ -931,6 +937,22 @@ impl Runtime {
     #[doc(hidden)]
     pub fn owns(&self, kernel: &Kernel) -> bool {
         kernel.state.context.runtime == self.id
+    }
+}
+
+/// Reads replica ranges of one device; see [`Runtime::replica_reader`].
+#[derive(Debug, Clone)]
+pub(crate) struct ReplicaReader(Arc<DeviceContext>);
+
+impl ReplicaReader {
+    pub(crate) fn read(
+        &self,
+        buffer: &BufferHandle,
+        offset: u64,
+        size: u64,
+        sink: impl FnOnce(&[u8]) -> Status + Send + 'static,
+    ) -> Result<Event> {
+        dispatch::read_replica_range(&self.0, buffer, offset, size, sink)
     }
 }
 

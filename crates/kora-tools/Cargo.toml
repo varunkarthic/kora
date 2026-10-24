@@ -1,0 +1,16 @@
+[package]
+name = "kora-tools"
+description = "Command-line tools for KORA: kora-worker"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+kora = { path = "../kora" }
+
+[lints]
+workspace = true
