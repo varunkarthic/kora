@@ -290,23 +290,29 @@ def render(repo: str, version: str, changelog: str, issues: list[dict[str, objec
 
 ## Download packages
 
-Each archive contains the installed CMake development prefix. Extract it, then set
-`CMAKE_PREFIX_PATH` to the extracted prefix before configuring your consumer project.
+Each archive holds the C ABI (`include/kora.h` and `lib/` with the shared and static `libkora`) and
+the `kora-info`, `kora-top`, `kora-bench`, and `kora-worker` tools in `bin/`. The abi3 Python wheels
+(`kora_runtime-*.whl`, CPython 3.11+) are attached alongside them.
 
 | Platform | Architecture | Package |
 | --- | --- | --- |
 {asset_rows}
 
-All three package jobs must pass before this release is published. Archives do not include a Vulkan
-driver, MoltenVK, a Python runtime, or a system C/C++ runtime.
+All three package jobs must pass before this release is published. Packages do not include a Vulkan
+loader or driver (on macOS, install MoltenVK or the Vulkan SDK).
 
 ## Install and use
 
-Link an installed package from CMake:
+Rust:
 
-```cmake
-find_package(kora CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE kora::kora)
+```sh
+cargo add kora --git https://github.com/{repo} --tag v{version}
+```
+
+C: compile against `include/kora.h` and link `-lkora` (`kora.dll.lib` on Windows). Python:
+
+```sh
+pip install kora_runtime-{version}-cp311-abi3-<platform>.whl
 ```
 
 Or build from the matching source tag:
@@ -314,9 +320,7 @@ Or build from the matching source tag:
 ```sh
 git clone --branch v{version} https://github.com/{repo}.git
 cd kora
-cmake --preset release -DKORA_VERSION_PATCH={version.rsplit('.', 1)[1]}
-cmake --build --preset release --parallel
-ctest --preset release --output-on-failure
+KORA_VERSION_PATCH={version.rsplit('.', 1)[1]} cargo build --release --workspace
 ```
 
 ## Release validation

@@ -27,4 +27,4 @@ has `index`, `name`, `api_version`, `driver_name`, `portability_subset`, `molten
 `memory.{budget_available, heaps[], types[]}`.
 
 Fields may be added within a schema version; incompatible changes increment it.
-`tests/integration/check_kora_info_json.py` checks the contract and runs in CI.
+`tests/check_kora_info_json.py` checks the contract and runs in CI.

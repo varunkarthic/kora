@@ -5,13 +5,11 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
 
 # Lines tagged `kora:identity-check` compare persisted cache identity, not runtime behavior.
-# C++ (`vendorID`) and Rust (`vendor_id`) spellings; `match` covers Rust pattern dispatch.
+# Vulkan (`vendorID`) and Rust (`vendor_id`) spellings; `match` covers Rust pattern dispatch.
 id='(vendorID|vendor_id)'
 pattern="(if|switch|while|match)[[:space:]]*\\(?[^){]*${id}|${id}(\\(\\))?[[:space:]]*(==|!=|<=|>=|<|>|\\?|&&|\\|\\|)|((==|!=|<=|>=|<|>)[[:space:]]*[^;]*${id})"
-scan_dirs=src
-[ -d crates ] && scan_dirs="src crates"
 set +e
-matches=$(grep -RInE --include='*.cpp' --include='*.hpp' --include='*.rs' "$pattern" $scan_dirs | grep -v 'kora:identity-check')
+matches=$(grep -RInE --include='*.rs' "$pattern" crates | grep -v 'kora:identity-check')
 grep_status=$?
 set -e
 

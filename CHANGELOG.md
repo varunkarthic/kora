@@ -12,6 +12,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the
+[migration guide](https://kora.readthedocs.io/en/latest/project/migrating/).
+
+### Removed
+- The C++ runtime: its public headers (`include/kora`), sources, CMake build and presets, the
+  installed CMake package (`find_package(kora)`), the pybind11 module, and the C++ test suites. Use
+  the `kora` Rust crate, the C ABI (`kora.h` and `libkora`) from C or C++, or the PyO3 wheel, which
+  keeps `import kora` and the 0.x Python names.
+
+### Changed
+- `VERSION` is `1.0`, so releases from `main` are `v1.0.x`. Each release attaches per-platform
+  archives with `include/kora.h`, the shared and static `libkora`, and the `kora-info`, `kora-top`,
+  `kora-bench`, and `kora-worker` tools, plus abi3 Python wheels (CPython 3.11+).
+- CI builds and tests the Cargo workspace: on Linux with lavapipe (including a pass under
+  synchronization validation), and on macOS and Windows for pushes to `main`.
+- The benchmark chart scripts accept `kora-bench` schema 4, and `tools/competitor-bench/build.sh`
+  builds the macOS comparison harness without CMake.
+
 ### Added
 - Start the KORA 1.0 Rust migration: a Cargo workspace (`crates/kora`) builds alongside the C++
   tree, CI checks Rust formatting, Clippy, tests, and rustdoc, and the vendor-neutrality check now

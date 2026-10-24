@@ -32,10 +32,12 @@ def main() -> None:
     if package_job.get("timeout-minutes") != 180:
         raise SystemExit("release package jobs must have a 180-minute job timeout")
     test_steps = [step for step in package_job.get("steps", []) if step.get("name") == "Test"]
-    if len(test_steps) != 1 or "ctest --preset release --output-on-failure --timeout 900" not in test_steps[0].get(
-        "run", ""
+    if (
+        len(test_steps) != 1
+        or "cargo test --workspace --locked" not in test_steps[0].get("run", "")
+        or test_steps[0].get("timeout-minutes") != 60
     ):
-        raise SystemExit("release CTest must set a 900-second per-test timeout")
+        raise SystemExit("release tests must run the Cargo workspace with a 60-minute step timeout")
     publish_job = release_document["jobs"].get("publish", {})
     publish_condition = "${{ needs.package.result == 'success' }}"
     if "package" not in publish_job.get("needs", []) or publish_job.get("if") != publish_condition:
