@@ -23,6 +23,8 @@ fn main() {
         .filter(|r| r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()))
         .unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=KORA_SOURCE_REVISION={revision}");
+    // HEAD names the branch; the reflog changes on every commit and checkout.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
 }
