@@ -1,0 +1,27 @@
+[package]
+name = "kora-python"
+description = "PyO3 extension module kora._core"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+# The Python API is documented in docs/python-api.md and by the package's docstrings.
+doc = false
+test = false
+
+[dependencies]
+kora = { path = "../kora" }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py311"] }
+
+[build-dependencies]
+pyo3-build-config = "0.30"
+
+[lints]
+workspace = true
