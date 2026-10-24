@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- The Windows release package pins MSVC's `link.exe`: in bash steps rustc ran Git's coreutils
+  `link`, so v1.0.0 and v1.0.1 were tagged but not published.
+
 ## [1.0.1] - 2026-10-24
 
 ### Fixed
