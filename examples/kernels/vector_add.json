@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "kernel_id": "examples.vector_add",
+  "local_size": [64, 1, 1],
+  "push_constant_size": 4,
+  "push_constants": [{ "name": "count", "type": "u32", "offset": 0, "size": 4 }],
+  "bindings": [
+    { "set": 0, "binding": 0, "name": "input_a", "kind": "storage_buffer", "access": "read" },
+    { "set": 0, "binding": 1, "name": "input_b", "kind": "storage_buffer", "access": "read" },
+    { "set": 0, "binding": 2, "name": "output_data", "kind": "storage_buffer", "access": "write" }
+  ],
+  "specialization_constants": []
+}

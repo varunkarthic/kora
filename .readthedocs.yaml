@@ -4,9 +4,16 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
+  jobs:
+    post_build:
+      # Publish the Rust API reference next to the handbook at /rustdoc/.
+      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - $HOME/.cargo/bin/cargo doc -p kora --no-deps --locked
+      - mkdir -p $READTHEDOCS_OUTPUT/html/rustdoc
+      - cp -R target/doc/. $READTHEDOCS_OUTPUT/html/rustdoc/
 
-sphinx:
-  configuration: docs/conf.py
+mkdocs:
+  configuration: mkdocs.yml
   fail_on_warning: true
 
 python:

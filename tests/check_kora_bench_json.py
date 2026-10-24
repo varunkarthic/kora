@@ -21,10 +21,10 @@ report = json.loads(completed.stdout)
 # CPU-executor, allocator-churn, and logical-buffer families.
 schema = report["schema_version"]
 assert schema in (3, 4)
-benchmarking_doc = Path(__file__).resolve().parents[1] / "docs" / "benchmarking.md"
+benchmarking_doc = Path(__file__).resolve().parents[1] / "docs" / "tools" / "kora-bench.md"
 documentation = benchmarking_doc.read_text(encoding="utf-8")
 assert re.search(rf"schema version `{schema}`", documentation), (
-    "docs/benchmarking.md must state the schema version emitted by kora-bench"
+    "docs/tools/kora-bench.md must state the schema version emitted by kora-bench"
 )
 assert report["clock"] == "steady_clock"
 assert report["iterations"] == 3

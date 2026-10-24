@@ -1,80 +1,45 @@
-# Errors and results
+# Errors
 
-KORA represents expected runtime failures as values. Native APIs return `Result<T>` when successful
-operations produce a value and `Status` when they do not. Exceptions are reserved for explicitly
-throwing API boundaries and language bindings.
+Every API reports expected failures with the same stable codes. Values never change; new codes may
+be added.
 
-## Error codes
+| Value | Rust `ErrorCode` | C `KoraStatus` | Python `ErrorCode` | Meaning |
+| ---: | --- | --- | --- | --- |
+| 0 | — | `KORA_STATUS_OK` | `OK` | Success. |
+| 1 | `NoVulkanImplementation` | `KORA_STATUS_NO_VULKAN_IMPLEMENTATION` | `NO_VULKAN_IMPLEMENTATION` | No Vulkan loader or implementation could be loaded. |
+| 2 | `NoEligibleDevice` | `KORA_STATUS_NO_ELIGIBLE_DEVICE` | `NO_ELIGIBLE_DEVICE` | No physical device satisfied the selection policy and requirements. |
+| 3 | `NoComputeQueue` | `KORA_STATUS_NO_COMPUTE_QUEUE` | `NO_COMPUTE_QUEUE` | The selected device exposes no compute-capable queue family. |
+| 4 | `UnsupportedFeature` | `KORA_STATUS_UNSUPPORTED_FEATURE` | `UNSUPPORTED_FEATURE` | A required feature, extension, or capability is not available. |
+| 5 | `InvalidKernel` | `KORA_STATUS_INVALID_KERNEL` | `INVALID_KERNEL` | A kernel module or its manifest is malformed or inconsistent. |
+| 6 | `InvalidKernelBinding` | `KORA_STATUS_INVALID_KERNEL_BINDING` | `INVALID_KERNEL_BINDING` | Dispatch bindings do not match the kernel interface. |
+| 7 | `InvalidDispatch` | `KORA_STATUS_INVALID_DISPATCH` | `INVALID_DISPATCH` | Dispatch dimensions or parameters are outside device limits. |
+| 8 | `AllocationFailed` | `KORA_STATUS_ALLOCATION_FAILED` | `ALLOCATION_FAILED` | A host or device allocation failed. |
+| 9 | `OutOfMemoryBudget` | `KORA_STATUS_OUT_OF_MEMORY_BUDGET` | `OUT_OF_MEMORY_BUDGET` | The request does not fit the configured memory budget. |
+| 10 | `TransferFailed` | `KORA_STATUS_TRANSFER_FAILED` | `TRANSFER_FAILED` | A host/device transfer failed. |
+| 11 | `Timeout` | `KORA_STATUS_TIMEOUT` | `TIMEOUT` | A wait expired before the operation completed (the operation continues). |
+| 12 | `DeviceLost` | `KORA_STATUS_DEVICE_LOST` | `DEVICE_LOST` | The logical device was lost. |
+| 13 | `PipelineCreationFailed` | `KORA_STATUS_PIPELINE_CREATION_FAILED` | `PIPELINE_CREATION_FAILED` | Compute pipeline creation failed. |
+| 14 | `SynchronizationError` | `KORA_STATUS_SYNCHRONIZATION_ERROR` | `SYNCHRONIZATION_ERROR` | A synchronization primitive failed or was misused. |
+| 15 | `ValidationError` | `KORA_STATUS_VALIDATION_ERROR` | `VALIDATION_ERROR` | Validation (or duplicate verification) detected an error. |
+| 16 | `PythonBindingError` | `KORA_STATUS_PYTHON_BINDING_ERROR` | `PYTHON_BINDING_ERROR` | A Python callback failed or returned an invalid value. |
+| 17 | `InternalInvariantViolation` | `KORA_STATUS_INTERNAL_INVARIANT_VIOLATION` | `INTERNAL_INVARIANT_VIOLATION` | An internal invariant was violated (a KORA bug; please report it). |
+| 18 | `InvalidArgument` | `KORA_STATUS_INVALID_ARGUMENT` | `INVALID_ARGUMENT` | Bad caller input: out-of-range values, mismatched sizes, misuse. |
+| 19 | `Overflow` | `KORA_STATUS_OVERFLOW` | `OVERFLOW` | Checked arithmetic overflowed. |
+| 20 | `GraphCycle` | `KORA_STATUS_GRAPH_CYCLE` | `GRAPH_CYCLE` | A task graph contains a cycle. |
+| 21 | `Cancelled` | `KORA_STATUS_CANCELLED` | `CANCELLED` | Work was cancelled by shutdown or by the caller. |
+| 22 | `StaleHandle` | `KORA_STATUS_STALE_HANDLE` | `STALE_HANDLE` | A buffer handle refers to a released or reused slot. |
+| 23 | `DataLoss` | `KORA_STATUS_DATA_LOSS` | `DATA_LOSS` | Authoritative data existed only on a lost device. |
+| 24 | `IoError` | `KORA_STATUS_IO_ERROR` | `IO_ERROR` | A persistent cache, file, or network operation failed. |
 
-`ErrorCode` is the stable machine-readable category. It distinguishes environment and capability
-problems, invalid inputs and kernels, memory and transfer failures, synchronization and device
-loss, cancellation, data loss, I/O failures, and internal invariant violations. Call
-`to_string(code)` for the stable enumerator name used by diagnostics.
+## Context
 
-`ErrorCode::Ok` represents success only inside a default `Status`. Functions returning
-`Result<T>` construct success from a `T`, not from an `Error` with code `Ok`.
+Beyond the code, an error carries a message and, when known, the device, kernel id, task id, Vulkan
+result, a suggested recovery action, and a chain of causes:
 
-## Error context
+- Rust: `error.code()`, `message()`, `device()`, `kernel_id()`, `task_id()`, `vk_result()`,
+  `recovery_action()`, `cause()`, and `describe()` for everything on one line.
+- C: `kora_last_error_message()` returns `describe()` for the calling thread.
+- Python: `KoraError` has `code`, `code_name`, `message`, `device`, `kernel_id`, `task_id`,
+  `vk_result`, and `recovery_action`; `str(error)` is `describe()`.
 
-`Error` contains a code and human-readable message plus optional Vulkan result, device identity,
-task ID, kernel ID, recovery action, and nested cause. The `with_vk`, `with_device`, `with_task`,
-`with_kernel`, `with_recovery`, and `with_cause` methods add context and return the same object for
-chaining.
-
-`describe()` produces a single-line diagnostic. Context fields appear in brackets and nested causes
-follow `<-`, preserving both the high-level failure and its underlying cause. Do not parse this text
-for control flow; inspect `Error::code` and structured fields instead.
-
-## `Result<T>`
-
-A `Result<T>` contains either a value or an `Error`:
-
-```cpp
-kora::Result<int> result = compute();
-if (!result) {
-    return result.error();
-}
-int value = result.value();
-```
-
-`ok()` and explicit Boolean conversion report the active alternative. Call `value()` only after a
-successful check and `error()` only after a failed check. These accessors follow `std::variant`
-semantics when used on the wrong alternative.
-
-`map(function)` transforms a successful value and propagates an error unchanged. `and_then(function)`
-chains another result-returning operation. Both consume the source result so move-only values and
-errors can propagate without an extra copy.
-
-`value_or_throw()` returns the value or throws `kora::Exception`. Use it only at a deliberately
-throwing API boundary, not inside ordinary runtime control flow.
-
-## `Status`
-
-`Status` is `Result<void>`. A default-constructed status and `ok_status()` mean success; constructing
-from `Error` means failure. `throw_if_error(status)` returns normally for success and throws
-`kora::Exception` containing the original error for failure.
-
-## Propagation macros
-
-`KORA_TRY(name, expression)` evaluates a `Result<T>`, returns its error from the current function on
-failure, and declares `name` with the successful value. `KORA_TRY_STATUS(expression)` performs the
-same propagation for `Status`.
-
-Expressions passed to either macro are evaluated exactly once. Use each macro as a standalone
-statement, and do not reuse its generated name in the same scope.
-
-## Exceptions
-
-`kora::Exception` derives from `std::runtime_error`, owns the structured `Error`, and exposes it
-through `error()`. Its `what()` string is the error's `describe()` output. Catch `Exception` by
-reference when a throwing boundary must recover structured context.
-
-## Invariants
-
-- Expected failures travel through `Result<T>` or `Status`; internal code does not use exceptions
-  for normal error handling.
-- Every failure has a non-`Ok` code and a useful message.
-- Backend failures preserve their original Vulkan result when one exists.
-- Recovery layers add context or a nested cause instead of replacing the original failure.
-- `ErrorCode` names remain stable because logs, tests, and bindings expose them.
-- `kCount_` is an internal sentinel and is never returned to users.
+`ErrorCode::from_i32` and `ErrorCode::from_name` convert stored codes back.

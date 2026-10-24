@@ -1,58 +1,30 @@
-# `kora-info`
+# kora-info
 
-`kora-info` reports the KORA build version, Vulkan loader and negotiated instance versions, and a
-detailed capability report for every enumerated physical device.
+Reports the KORA version, the Vulkan loader and instance versions, and every physical device's
+capabilities. It does not create a runtime, so it is safe to run anywhere.
 
 ```sh
-cmake --preset debug
-cmake --build --preset debug --parallel
-./build/debug/tools/kora-info
-./build/debug/tools/kora-info --json | python3 -m json.tool
+kora-info
+kora-info --json | python3 -m json.tool
 ```
 
-The command uses KORA's runtime-loaded Vulkan path and does not link the Vulkan loader directly.
-Human and JSON reports include queue-family classifications, memory heaps and types, optional heap
-budget/usage, memory topology and benchmark-needed state, subgroup properties, synchronization and
-buffer-address capabilities, descriptor indexing, portability-subset and MoltenVK detection.
-`kora-info` does not initialize a KORA `Runtime`, so it cannot observe a runtime pipeline cache. Human
-output states `Pipeline cache state: not queried`; JSON reports the same fact at the root as
-`pipeline_cache_state: "not_queried"`. This is not evidence that caching is absent or uninitialized.
+Expected result: one block per device with its API version, driver, portability-subset and MoltenVK
+flags, memory topology, features (timeline semaphores, synchronization2, buffer device address,
+descriptor indexing), subgroup support, queue families, and memory heaps and types, with heap budget
+and usage when `VK_EXT_memory_budget` is available. Without a Vulkan loader it prints
+`NoVulkanImplementation` and exits with status 1.
 
-Reports deliberately omit device UUIDs, vendor IDs, device IDs, and other serial identifiers.
+Reports omit device UUIDs, vendor IDs, device IDs, and other serial identifiers. The pipeline cache
+is reported as `not queried`, because no runtime is created.
 
-## JSON contract
+## JSON
 
-The root `schema_version` is `2`. Root fields contain KORA, loader, and instance versions, plus
-`pipeline_cache_state`, which is always `not_queried` because this device-only command does not create
-a Runtime. Schema version 2 removes the misleading per-device `cache_state` field from version 1.
-`devices`
-contains one object per physical device with:
+The root object has `schema_version` (`2`), `kora_version`, `loader_api_version`,
+`instance_api_version`, `pipeline_cache_state` (always `"not_queried"`), and `devices`. Each device
+has `index`, `name`, `api_version`, `driver_name`, `portability_subset`, `moltenvk`,
+`memory_topology` (`discrete`, `uma`, `discrete_with_bar`, `unknown`),
+`memory_topology_needs_benchmark`, `features`, `subgroup`, `queue_families[]`, and
+`memory.{budget_available, heaps[], types[]}`.
 
-- public name, Vulkan API version, and driver name;
-- `features` and `subgroup` capability objects;
-- `queue_families`, including counts, flags, timestamp bits, and dedicated classifications;
-- `memory.heaps` and `memory.types`, with budget fields only when `VK_EXT_memory_budget` exists;
-- memory topology, portability, MoltenVK, and benchmark-needed fields.
-
-The dependency-free writer escapes JSON strings and emits native JSON booleans and integers. Field
-additions remain compatible within a schema version; incompatible changes require incrementing the
-schema version.
-
-## Data sources and invariants
-
-| KORA API | Reported information |
-| --- | --- |
-| `kora::version_string()` | KORA semantic version |
-| `Loader::supported_api_version()` | Loader-advertised maximum API version |
-| `Instance::api_version()` | Negotiated instance API version |
-| `Instance::physical_devices()` | Device, driver, queue, memory-budget, and feature queries |
-| `DeviceCaps::from_vulkan()` | Vendor-neutral topology and capability classifications |
-
-A loader, instance, or enumeration failure is printed to standard error and returns a nonzero exit.
-Unknown arguments also fail and print `Usage: kora-info [--json]`. A missing Vulkan implementation
-is never represented as a successful empty report.
-
-CTest verifies the human report, missing-ICD failure, and JSON output. The JSON test invokes the
-binary, parses standard output with Python `json.loads`, and validates required nested types and
-collections. Vulkan-dependent checks skip only when no implementation exists; Linux CI installs
-lavapipe and requires the report to execute.
+Fields may be added within a schema version; incompatible changes increment it.
+`tests/integration/check_kora_info_json.py` checks the contract and runs in CI.

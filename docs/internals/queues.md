@@ -1,32 +1,31 @@
-# Queue-family discovery and classification
+# Queues and transfers
 
-Each raw physical-device query includes the ordered Vulkan queue-family properties. Internal
-`DeviceCaps::classify_queue_families()` converts those properties into the vendor-neutral
-`DeviceInfo::QueueFamily` records consumed by later scheduling and device-creation work.
+## QueueContext
 
-## Classification rules
+Each device queue has a `QueueContext` with a submission thread and a completion thread.
 
-- `compute` is true when `VK_QUEUE_COMPUTE_BIT` is present.
-- `dedicated_compute` is true when the family supports compute but not graphics.
-- `transfer` is true when the transfer bit is explicit or when graphics or compute support implies
-  transfer operations under Vulkan queue-family rules.
-- `dedicated_transfer` is true when transfer is supported and neither graphics nor compute is
-  supported.
-- Queue count, timestamp-valid bits, sparse-binding support, and minimum image-transfer granularity
-  are copied from the raw family properties.
+- **Submission** collects recorded work, optionally coalesces independent submissions (same key, no
+  dependencies) into one `vkQueueSubmit`, and assigns monotonically increasing completion values.
+- **Completion** waits on a timeline semaphore when the device supports it, or on pooled fences that
+  emulate completion values, then runs each submission's callback in order.
+- **Device loss** is recorded once in a fault state shared by the device's queues; queued work fails
+  with `DeviceLost`, and later submissions are rejected before reaching Vulkan.
+- **Shutdown** drains (or cancels) queued work; callbacks may submit follow-up work while draining.
 
-The classifier preserves the input family order and does not discard or reject a family. These are
-capability facts, not vendor-specific labels or a queue-selection decision. In particular, buffer
-transfer suitability must not be inferred from `min_image_transfer_granularity`: that limit applies
-to image transfers. For buffer transfers, use transfer capability and available queue count.
+## Hazards and barriers
 
-## Function reference
+The hazard tracker records, per replica, the last access (read or write) and the queue value that
+made it. A new access emits a barrier only for RAW, WAR, or WAW conflicts, choosing stages and access
+masks precisely; synchronization2 is used when enabled. Transfers between queue families emit paired
+release/acquire ownership barriers.
 
-| Function | Purpose |
-| --- | --- |
-| `DeviceCaps::classify_queue_families()` | Purely maps a synthetic or queried array of `VkQueueFamilyProperties` to public queue-family records |
-| `DeviceCaps::from_vulkan()` | Includes classified queue families in the immutable `DeviceInfo` snapshot |
+## Command buffers
 
-Unit tests exercise separate compute/transfer families, shared graphics/compute families, and a
-single-family layout. All use only queue flags and reported properties; no vendor identifiers are
-consulted.
+`CommandPoolSet` keeps a ring of command buffers per thread-owned pool and reuses each only after its
+completion value has been reached. A full ring reports `OutOfMemoryBudget` until work completes.
+
+## Timestamps
+
+`TimestampRing` hands out query pairs for sampled dispatches and collects results without stalling
+the completion thread; values are masked to the queue's valid bits and scaled by the device's
+timestamp period.
