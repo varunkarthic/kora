@@ -221,7 +221,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--before", type=Path, nargs="+", required=True)
     parser.add_argument("--after", type=Path, nargs="+", required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/charts"))
+    parser.add_argument("--output-dir", type=Path, default=Path("docs/assets/charts"))
     parser.add_argument("--title-suffix", default="Apple M4 / MoltenVK")
     parser.add_argument("--change", default="#227", help="change name used in chart titles")
     parser.add_argument("--prefix", default="uma-direct", help="chart file name prefix")

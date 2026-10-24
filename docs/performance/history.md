@@ -159,7 +159,7 @@ for i in 01 02 03; do
   KORA_DEVICE=2 after/tools/kora-bench --gpu --iterations 200 --warmup 30 > after-$i.json
 done
 python3 tools/kora-bench/render_ab.py --before before-*.json --after after-*.json \
-  --output-dir benchmarks/charts
+  --output-dir docs/assets/charts/history
 ```
 
 All 30 retained reports are in

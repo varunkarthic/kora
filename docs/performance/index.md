@@ -14,4 +14,5 @@ state, so single-run numbers are never compared.
 
 </div>
 
-![KORA 1.0 vs 0.3, default readback, Apple M4 / MoltenVK](../assets/charts/rust-vs-cpp-moltenvk-default.svg)
+![KORA 1.0, 0.3, and raw Vulkan dispatch latency on Apple M4 / MoltenVK](../assets/charts/readme-dispatch-moltenvk-light.svg#only-light)
+![KORA 1.0, 0.3, and raw Vulkan dispatch latency on Apple M4 / MoltenVK](../assets/charts/readme-dispatch-moltenvk-dark.svg#only-dark)
