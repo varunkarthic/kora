@@ -14,6 +14,10 @@ Stable means the project's validation checklist is closed, not a warranty for ev
 workload. Qualify the hardware and workload you ship. A workflow re-renders the status table on each
 release page when a tracked issue changes.
 
+The release workflow starts when CI succeeds on `main`. GitHub runs `workflow_run` workflows from
+the repository's **default branch**, so the default branch must carry the current
+`.github/workflows/release.yml`. A copy that differs from `main` packages with stale steps.
+
 ## What a release contains
 
 | Asset | Contents |
