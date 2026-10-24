@@ -682,7 +682,8 @@ fn make_resident(
         if state.resident_version == Some(version) || same_split {
             return Ok((version, None));
         }
-        let event = if ctx.direct_host_access && replica.directly_accessible(0) {
+        let direct = ctx.direct_host_access && replica.directly_accessible(0);
+        let event = if direct {
             let mapped = replica
                 .transfer()
                 .mapped
@@ -706,8 +707,11 @@ fn make_resident(
         state.resident_version = Some(version);
         state.partial_version = None;
         state.device_newer = false;
-        // Staged copies end with a barrier to compute access; direct writes precede the submit.
-        state.access = DeviceAccess::None;
+        // Staged copies begin and end with barriers against compute access. Direct writes precede
+        // the submit but record no barrier, so an earlier device write still needs one.
+        if !direct || state.access != DeviceAccess::Write {
+            state.access = DeviceAccess::None;
+        }
         Ok((version, event))
     })?
 }
