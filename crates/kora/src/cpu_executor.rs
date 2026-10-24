@@ -398,7 +398,8 @@ mod tests {
         let executor = pool(4);
         assert_eq!(executor.worker_count(), 4);
         let completed = Arc::new(AtomicUsize::new(0));
-        for index in 0..1_000_000usize {
+        let tasks = if cfg!(miri) { 2_000 } else { 1_000_000 };
+        for index in 0..tasks {
             let completed = Arc::clone(&completed);
             executor
                 .submit(PRIORITIES[index % 4], move || {
@@ -408,7 +409,7 @@ mod tests {
                 .unwrap();
         }
         executor.shutdown(ShutdownMode::Graceful).unwrap();
-        assert_eq!(completed.load(SeqCst), 1_000_000);
+        assert_eq!(completed.load(SeqCst), tasks);
         assert_eq!(
             executor
                 .submit(CpuTaskPriority::Normal, || Ok(()))
@@ -420,10 +421,11 @@ mod tests {
 
     #[test]
     fn repeated_graceful_shutdown_drains_short_task_bursts() {
-        for iteration in 0..128 {
+        let (rounds, burst) = if cfg!(miri) { (4, 16) } else { (128, 128) };
+        for iteration in 0..rounds {
             let executor = pool(4);
             let completed = Arc::new(AtomicUsize::new(0));
-            for _ in 0..128 {
+            for _ in 0..burst {
                 let completed = Arc::clone(&completed);
                 executor
                     .submit(CpuTaskPriority::Normal, move || {
@@ -433,7 +435,7 @@ mod tests {
                     .unwrap();
             }
             executor.shutdown(ShutdownMode::Graceful).unwrap();
-            assert_eq!(completed.load(SeqCst), 128, "iteration {iteration}");
+            assert_eq!(completed.load(SeqCst), burst, "iteration {iteration}");
         }
     }
 
@@ -582,7 +584,7 @@ mod tests {
 
     #[test]
     fn cancel_pending_races_with_concurrent_submitters_without_hanging() {
-        for _ in 0..200 {
+        for _ in 0..if cfg!(miri) { 4 } else { 200 } {
             let executor = pool(2);
             let submitters: Vec<_> = (0..3)
                 .map(|_| {

@@ -1010,3 +1010,122 @@ impl Drop for Runtime {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::spirv::words_from_bytes;
+    use crate::{KernelBindingKind, KernelBindingMetadata, PushConstantFieldMetadata};
+
+    fn split_saxpy(runtime: &Runtime) -> Kernel {
+        let binding = |binding, name: &str, access| KernelBindingMetadata {
+            set: 0,
+            binding,
+            name: name.into(),
+            kind: KernelBindingKind::StorageBuffer,
+            access,
+        };
+        let field = |name: &str, type_name: &str, offset| PushConstantFieldMetadata {
+            name: name.into(),
+            type_name: type_name.into(),
+            offset,
+            size: 4,
+        };
+        let metadata = KernelMetadata {
+            kernel_id: "unit.runtime.split_saxpy".into(),
+            local_size: [64, 1, 1],
+            bindings: vec![
+                binding(0, "input_x", KernelAccess::Read),
+                binding(1, "input_y", KernelAccess::ReadWrite),
+            ],
+            push_constant_size: 12,
+            push_constants: vec![
+                field("scale", "f32", 0),
+                field("count", "u32", 4),
+                field("base", "u32", 8),
+            ],
+            ..KernelMetadata::default()
+        };
+        let words = words_from_bytes(include_bytes!("../../tests/fixtures/split_saxpy.spv")).unwrap();
+        runtime.load_kernel(&words, "main", metadata).unwrap()
+    }
+
+    fn read_range(reader: &ReplicaReader, buffer: &BufferHandle, offset: u64, size: u64) -> Vec<f32> {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&bytes);
+        reader
+            .read(buffer, offset, size, move |b| {
+                *lock(&sink) = b.to_vec();
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        let bytes = lock(&bytes);
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect()
+    }
+
+    /// Two slices of one split on the same device (a failed-over slice) must not re-upload the
+    /// host copy over the first slice's range before that range is read back.
+    #[test]
+    fn slices_of_one_split_share_a_replica_and_other_splits_reupload() {
+        let options = RuntimeOptions {
+            enable_startup_calibration: Some(false),
+            ..RuntimeOptions::default()
+        };
+        let runtime = match Runtime::new(&options) {
+            Ok(runtime) => runtime,
+            Err(error) => return eprintln!("skipping: {error}"),
+        };
+        let kernel = split_saxpy(&runtime);
+        let (count, half) = (1024_u32, 512_u64);
+        let x = runtime.create_buffer::<f32>(u64::from(count)).unwrap();
+        let y = runtime.create_buffer::<f32>(u64::from(count)).unwrap();
+        x.write(&vec![1.0; count as usize]).unwrap();
+        y.write(&vec![0.0; count as usize]).unwrap();
+        let slice = |split: u64, base: u32| {
+            let push: Vec<u8> = [1.0_f32.to_bits(), count, base]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            runtime
+                .dispatch(&kernel)
+                .global(half)
+                .read(&x)
+                .read_write(&y)
+                .push_bytes(&push)
+                .partial_outputs(split)
+                .submit()
+                .unwrap()
+                .wait()
+                .unwrap();
+        };
+        let reader = runtime.replica_reader(&runtime.devices()[0]).unwrap();
+        let bytes = half * 4;
+        slice(1, 0);
+        slice(1, half as u32);
+        assert!(
+            read_range(&reader, y.handle(), 0, bytes)
+                .iter()
+                .all(|&v| v == 1.0)
+        );
+        assert!(
+            read_range(&reader, y.handle(), bytes, bytes)
+                .iter()
+                .all(|&v| v == 1.0)
+        );
+        // Another split at the same host version starts from the host copy again.
+        slice(2, half as u32);
+        assert!(
+            read_range(&reader, y.handle(), 0, bytes)
+                .iter()
+                .all(|&v| v == 0.0)
+        );
+        assert!(y.read().unwrap().iter().all(|&v| v == 0.0)); // Slices never commit by themselves.
+    }
+}

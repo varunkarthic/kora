@@ -122,7 +122,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `tools/bench-report/render.py` with matplotlib and NumPy from the retained Rust-vs-C++ reports;
   `render.py --check` and `tests/bench_report` (CI) verify that every README number equals the
   median in the JSON. The documentation uses the same charts.
+- Close the gaps found by auditing the C++ tests against the Rust suite: tests now cover the
+  pre-1.2 extension feature path, CPU-task access rules and push constants, draining pending CPU
+  fallbacks when a runtime is dropped, and releasing inputs while their dispatch is in flight. The
+  GPU-timestamp test skips on devices that report no timestamp support. Concurrency and randomized
+  tests run fewer rounds under Miri, so the documented Miri command finishes (73 tests, no findings).
 ### Fixed
+- A split `Cluster` dispatch could commit one slice's range a dispatch behind when a worker failed
+  over and its slice re-ran on a local device that had already run another slice of the same split:
+  the second slice re-uploaded the host copy over the first slice's range before it was read back.
+  Slices of one split now share the device copy; found by repeating the worker-chaos test.
 - After a device loss, results that only the lost device held (deferred outputs that were never
   read back) are marked lost on recovery instead of silently reverting to older host contents.
 - Dispatches that read or overwrite a buffer written by an earlier dispatch now record a memory

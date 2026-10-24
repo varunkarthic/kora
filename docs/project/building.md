@@ -54,12 +54,17 @@ error. On macOS with Homebrew's layer, add `DYLD_FALLBACK_LIBRARY_PATH=/opt/home
 
 ## Miri
 
-Concurrency and `unsafe`-heavy modules have tests that run under Miri:
+Concurrency and `unsafe`-heavy modules have tests that run under Miri; loops and property tests run
+fewer rounds there (`cfg!(miri)`), so the set takes about six minutes on an Apple M4:
 
 ```sh
 rustup +nightly component add miri
-cargo +nightly miri test -p kora --lib -- event cpu_executor buffer task_graph checked suballocator
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" \
+  cargo +nightly miri test -p kora --lib -- event cpu_executor buffer task_graph checked suballocator
 ```
+
+Expected result: `test result: ok. 73 passed`. Permissive provenance allows the fake Vulkan handles
+that the queue and command-pool mocks create from integers.
 
 ## macOS notes
 

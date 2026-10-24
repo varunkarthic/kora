@@ -270,6 +270,8 @@ struct SplitProgress {
 
 /// Collects the slices of one split dispatch and commits the merged outputs once.
 struct SplitState {
+    /// Unique per split dispatch; lets its slices share a device replica.
+    id: u64,
     work: Work,
     promise: Mutex<Option<EventPromise>>,
     /// Indices of written bindings.
@@ -1316,7 +1318,9 @@ impl Shared {
             unreachable!("slices are never split again");
         };
         let base_offset = work.kernel.base_offset.expect("validated at submit") as usize;
+        static NEXT_SPLIT: AtomicU64 = AtomicU64::new(1);
         let split = Arc::new(SplitState {
+            id: NEXT_SPLIT.fetch_add(1, Ordering::Relaxed),
             work: work.clone(),
             promise: Mutex::new(Some(promise)),
             outputs,
@@ -1451,7 +1455,8 @@ impl Shared {
         let started = Instant::now();
         let generation = self.local_generation.load(Ordering::Acquire);
         let key = device_key(device);
-        let slice = job.slice().is_some();
+        let split = job.slice().map(|slice| slice.split.id);
+        let slice = split.is_some();
         let submitted = {
             let runtime = read(&self.runtime);
             self.local_kernel(&runtime, &job.work.kernel, device)
@@ -1468,8 +1473,8 @@ impl Shared {
                         };
                     }
                     // A slice leaves its outputs on the device; only its own range is read back.
-                    let reader = if slice {
-                        builder = builder.partial_outputs();
+                    let reader = if let Some(split) = split {
+                        builder = builder.partial_outputs(split);
                         Some(runtime.replica_reader(device)?)
                     } else {
                         None

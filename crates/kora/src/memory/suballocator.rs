@@ -607,7 +607,7 @@ mod tests {
         let mut a = Suballocator::new(capacity).unwrap();
         let mut live: Vec<Suballocation> = Vec::new();
         let mut random = SplitMix(0x4b4f_5241);
-        for _ in 0..5000 {
+        for _ in 0..if cfg!(miri) { 300 } else { 5000 } {
             let allocate = live.is_empty() || (live.len() < 80 && random.below(100) < 65);
             if allocate {
                 let size = 1 + random.below(257);
@@ -656,7 +656,7 @@ mod tests {
         let mut a = Suballocator::new(1 << 20).unwrap();
         let mut random = SplitMix(7);
         let mut live = Vec::new();
-        for _ in 0..2000 {
+        for _ in 0..if cfg!(miri) { 200 } else { 2000 } {
             if live.len() < 200 && random.below(3) != 0 {
                 if let Ok(x) = a.allocate(1 + random.below(4096), 1 << random.below(6)) {
                     live.push(x);

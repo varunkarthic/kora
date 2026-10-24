@@ -42,6 +42,51 @@ pub struct FeatureSupport {
     pub maintenance4: bool,
 }
 
+/// Feature support on a pre-1.2 device, merged from the promoted extensions' query structures.
+fn extension_feature_support(
+    timeline: &vk::PhysicalDeviceTimelineSemaphoreFeatures<'_>,
+    bda: &vk::PhysicalDeviceBufferDeviceAddressFeatures<'_>,
+    bda_ext: &vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT<'_>,
+    ext_bda_khr: bool,
+    indexing: &vk::PhysicalDeviceDescriptorIndexingFeatures<'_>,
+) -> FeatureSupport {
+    let on = |b: vk::Bool32| b == vk::TRUE;
+    let f = indexing;
+    let any_indexing = [
+        f.shader_input_attachment_array_dynamic_indexing,
+        f.shader_uniform_texel_buffer_array_dynamic_indexing,
+        f.shader_storage_texel_buffer_array_dynamic_indexing,
+        f.shader_uniform_buffer_array_non_uniform_indexing,
+        f.shader_sampled_image_array_non_uniform_indexing,
+        f.shader_storage_buffer_array_non_uniform_indexing,
+        f.shader_storage_image_array_non_uniform_indexing,
+        f.shader_input_attachment_array_non_uniform_indexing,
+        f.shader_uniform_texel_buffer_array_non_uniform_indexing,
+        f.shader_storage_texel_buffer_array_non_uniform_indexing,
+        f.descriptor_binding_uniform_buffer_update_after_bind,
+        f.descriptor_binding_sampled_image_update_after_bind,
+        f.descriptor_binding_storage_image_update_after_bind,
+        f.descriptor_binding_storage_buffer_update_after_bind,
+        f.descriptor_binding_uniform_texel_buffer_update_after_bind,
+        f.descriptor_binding_storage_texel_buffer_update_after_bind,
+        f.descriptor_binding_update_unused_while_pending,
+        f.descriptor_binding_partially_bound,
+        f.descriptor_binding_variable_descriptor_count,
+        f.runtime_descriptor_array,
+    ]
+    .contains(&vk::TRUE);
+    FeatureSupport {
+        timeline_semaphore: on(timeline.timeline_semaphore),
+        buffer_device_address: on(bda.buffer_device_address) || on(bda_ext.buffer_device_address),
+        buffer_device_address_ext_only: !ext_bda_khr && on(bda_ext.buffer_device_address),
+        descriptor_indexing: any_indexing,
+        runtime_descriptor_array: on(f.runtime_descriptor_array),
+        descriptor_binding_partially_bound: on(f.descriptor_binding_partially_bound),
+        descriptor_binding_variable_descriptor_count: on(f.descriptor_binding_variable_descriptor_count),
+        ..Default::default()
+    }
+}
+
 /// `VK_EXT_memory_budget` snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MemoryBudget {
@@ -233,31 +278,6 @@ pub(crate) fn query_physical_device(
         }
         features.features
     };
-    let any_indexing = |f: &vk::PhysicalDeviceDescriptorIndexingFeatures<'_>| {
-        [
-            f.shader_input_attachment_array_dynamic_indexing,
-            f.shader_uniform_texel_buffer_array_dynamic_indexing,
-            f.shader_storage_texel_buffer_array_dynamic_indexing,
-            f.shader_uniform_buffer_array_non_uniform_indexing,
-            f.shader_sampled_image_array_non_uniform_indexing,
-            f.shader_storage_buffer_array_non_uniform_indexing,
-            f.shader_storage_image_array_non_uniform_indexing,
-            f.shader_input_attachment_array_non_uniform_indexing,
-            f.shader_uniform_texel_buffer_array_non_uniform_indexing,
-            f.shader_storage_texel_buffer_array_non_uniform_indexing,
-            f.descriptor_binding_uniform_buffer_update_after_bind,
-            f.descriptor_binding_sampled_image_update_after_bind,
-            f.descriptor_binding_storage_image_update_after_bind,
-            f.descriptor_binding_storage_buffer_update_after_bind,
-            f.descriptor_binding_uniform_texel_buffer_update_after_bind,
-            f.descriptor_binding_storage_texel_buffer_update_after_bind,
-            f.descriptor_binding_update_unused_while_pending,
-            f.descriptor_binding_partially_bound,
-            f.descriptor_binding_variable_descriptor_count,
-            f.runtime_descriptor_array,
-        ]
-        .contains(&vk::TRUE)
-    };
     let on = |b: vk::Bool32| b == vk::TRUE;
     info.support = if core12 {
         FeatureSupport {
@@ -271,18 +291,7 @@ pub(crate) fn query_physical_device(
             ..Default::default()
         }
     } else {
-        FeatureSupport {
-            timeline_semaphore: on(timeline.timeline_semaphore),
-            buffer_device_address: on(bda.buffer_device_address) || on(bda_ext.buffer_device_address),
-            buffer_device_address_ext_only: !ext_bda_khr && on(bda_ext.buffer_device_address),
-            descriptor_indexing: any_indexing(&indexing),
-            runtime_descriptor_array: on(indexing.runtime_descriptor_array),
-            descriptor_binding_partially_bound: on(indexing.descriptor_binding_partially_bound),
-            descriptor_binding_variable_descriptor_count: on(
-                indexing.descriptor_binding_variable_descriptor_count
-            ),
-            ..Default::default()
-        }
+        extension_feature_support(&timeline, &bda, &bda_ext, ext_bda_khr, &indexing)
     };
     info.support.synchronization2 = if core13 {
         on(f13.synchronization2)
@@ -385,4 +394,41 @@ pub(crate) fn query_physical_device(
             })?;
     }
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_promoted_features_from_extension_query_structures() {
+        let timeline = vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
+        let bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default().buffer_device_address(true);
+        let bda_ext = vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT::default();
+        let indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default()
+            .descriptor_binding_partially_bound(true)
+            .runtime_descriptor_array(true);
+        let support = extension_feature_support(&timeline, &bda, &bda_ext, true, &indexing);
+        assert!(support.timeline_semaphore);
+        assert!(support.buffer_device_address);
+        assert!(!support.buffer_device_address_ext_only);
+        assert!(support.descriptor_indexing);
+        assert!(!support.descriptor_indexing_core);
+        assert!(support.runtime_descriptor_array);
+        assert!(support.descriptor_binding_partially_bound);
+        assert!(!support.descriptor_binding_variable_descriptor_count);
+
+        let bda_ext = vk::PhysicalDeviceBufferDeviceAddressFeaturesEXT::default().buffer_device_address(true);
+        let none = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+        let ext_only = extension_feature_support(
+            &vk::PhysicalDeviceTimelineSemaphoreFeatures::default(),
+            &vk::PhysicalDeviceBufferDeviceAddressFeatures::default(),
+            &bda_ext,
+            false,
+            &none,
+        );
+        assert!(!ext_only.timeline_semaphore);
+        assert!(ext_only.buffer_device_address && ext_only.buffer_device_address_ext_only);
+        assert!(!ext_only.descriptor_indexing);
+    }
 }

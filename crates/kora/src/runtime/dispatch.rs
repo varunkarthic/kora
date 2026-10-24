@@ -59,9 +59,9 @@ pub struct DispatchBuilder {
     pub(crate) verification: Option<(VerificationPolicy, VerificationDataType)>,
     /// A verification duplicate: the other participants hold divergent copies by design.
     pub(crate) duplicate: bool,
-    /// A slice of a split dispatch: its outputs are partial, so they never become the buffer's
-    /// newest contents; the caller reads its range back with a replica reader.
-    pub(crate) partial: bool,
+    /// A slice of the split dispatch with this ID: its outputs are partial, so they never become
+    /// the buffer's newest contents; the caller reads its range back with a replica reader.
+    pub(crate) partial: Option<u64>,
 }
 
 /// Placement made by [`Runtime::dispatch_adaptive`](super::Runtime::dispatch_adaptive).
@@ -108,7 +108,7 @@ impl DispatchBuilder {
             adaptive: None,
             verification: None,
             duplicate: false,
-            partial: false,
+            partial: None,
         }
     }
 
@@ -171,9 +171,9 @@ impl DispatchBuilder {
         self
     }
 
-    /// Marks this dispatch as one slice of a split dispatch (see [`DispatchBuilder::partial`]).
-    pub(crate) fn partial_outputs(mut self) -> Self {
-        self.partial = true;
+    /// Marks this dispatch as one slice of split dispatch `split` (see [`DispatchBuilder::partial`]).
+    pub(crate) fn partial_outputs(mut self, split: u64) -> Self {
+        self.partial = Some(split);
         self.defer_readback = true;
         self
     }
@@ -325,7 +325,7 @@ impl DispatchBuilder {
             .map(|(buffer, _)| ctx.replica(buffer))
             .collect::<Result<Vec<_>>>()?;
         for (buffer, access) in &self.bindings {
-            if access.reads() && !self.duplicate && !self.partial {
+            if access.reads() && !self.duplicate && self.partial.is_none() {
                 reject_newer_elsewhere(ctx, buffer)?;
             }
         }
@@ -334,7 +334,7 @@ impl DispatchBuilder {
         let mut uploads = Vec::new();
         for ((buffer, access), replica) in self.bindings.iter().zip(&replicas) {
             if access.reads() {
-                let (version, upload) = make_resident(ctx, buffer, replica)?;
+                let (version, upload) = make_resident(ctx, buffer, replica, self.partial)?;
                 bound_versions.push(version);
                 uploads.extend(upload);
             } else {
@@ -406,8 +406,14 @@ impl DispatchBuilder {
                 DeviceAccess::Read
             };
             if access.writes() {
-                replica_state.resident_version = (!self.partial).then_some(bound_versions[index]);
-                replica_state.device_newer = !self.partial;
+                replica_state.resident_version = self.partial.is_none().then_some(bound_versions[index]);
+                replica_state.device_newer = self.partial.is_none();
+                // Another slice of the same split reads only its own range, which this slice left
+                // as uploaded; re-uploading would overwrite this slice's range before it is read back.
+                replica_state.partial_version = self
+                    .partial
+                    .filter(|_| access.reads())
+                    .map(|split| (bound_versions[index], split));
             }
         }
 
@@ -507,6 +513,7 @@ impl DispatchBuilder {
                 for replica in &output_replicas {
                     let mut state = replica.state();
                     state.resident_version = None;
+                    state.partial_version = None;
                     state.device_newer = false;
                 }
                 Err(error)
@@ -667,10 +674,12 @@ fn make_resident(
     ctx: &DeviceContext,
     buffer: &BufferHandle,
     replica: &Arc<Replica>,
+    partial: Option<u64>,
 ) -> Result<(u64, Option<Event>)> {
     let mut state = replica.state();
     buffer.with_contents(|bytes, version| -> Result<(u64, Option<Event>)> {
-        if state.resident_version == Some(version) {
+        let same_split = partial.is_some_and(|split| state.partial_version == Some((version, split)));
+        if state.resident_version == Some(version) || same_split {
             return Ok((version, None));
         }
         let event = if ctx.direct_host_access && replica.directly_accessible(0) {
@@ -695,6 +704,7 @@ fn make_resident(
         };
         ctx.uploads.fetch_add(1, Ordering::Relaxed);
         state.resident_version = Some(version);
+        state.partial_version = None;
         state.device_newer = false;
         // Staged copies end with a barrier to compute access; direct writes precede the submit.
         state.access = DeviceAccess::None;
@@ -942,6 +952,7 @@ impl Submitted {
             for &index in &self.outputs {
                 let mut state = self.replicas[index].state();
                 state.resident_version = None;
+                state.partial_version = None;
                 state.device_newer = false;
             }
         }
@@ -1018,6 +1029,7 @@ impl Completed {
             for &index in &outputs {
                 let mut state = replicas[index].state();
                 state.resident_version = None;
+                state.partial_version = None;
                 state.device_newer = false;
             }
         } else if !defer_readback {
