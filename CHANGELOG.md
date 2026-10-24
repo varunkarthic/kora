@@ -146,6 +146,9 @@ KORA 1.0 is a Rust rewrite of the 0.x C++ runtime. Move existing code with the
   GPU-timestamp test skips on devices that report no timestamp support. Concurrency and randomized
   tests run fewer rounds under Miri, so the documented Miri command finishes (73 tests, no findings).
 ### Fixed
+- The C ABI header check ignores line endings, so it passes on Windows checkouts that use CRLF.
+- Restore the `site/` and `docs/_build/` ignore rules that the 1.0 cut-over merged into one wrong
+  entry.
 - `kora_runtime_create` rejects a NULL output pointer with `InvalidArgument` before creating a
   runtime, instead of reporting `NoVulkanImplementation` on machines without a Vulkan driver.
 - The first dispatch on a new buffer now records a barrier against earlier device writes to its
