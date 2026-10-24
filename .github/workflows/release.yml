@@ -91,12 +91,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Rust locates the MSVC linker itself. Putting MSVC on PATH for bash steps would let Git
-      # Bash's /usr/bin/link (coreutils) shadow link.exe.
+      # In bash steps Git's usr/bin is on PATH, and rustc would run its coreutils `link` as the
+      # linker; pin MSVC's link.exe for cargo and maturin.
       - name: Verify MSVC selection
         if: runner.os == 'Windows'
         run: |
           rustc -vV | grep -q 'host: x86_64-pc-windows-msvc' || { echo 'Rust is not targeting MSVC' >&2; exit 1; }
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          linker=$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+            -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/link.exe' | tr -d '\r' | head -n 1)
+          [[ -n "$linker" ]] || { echo 'MSVC link.exe was not found' >&2; exit 1; }
+          echo "Using MSVC linker: $linker"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> "$GITHUB_ENV"
       - name: Stamp the package version
         # Cargo and the wheel carry the full release version; the runtime reads VERSION and the patch.
         run: |

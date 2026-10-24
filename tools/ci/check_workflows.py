@@ -22,7 +22,7 @@ def main() -> None:
         print(f"validated {path}")
 
     release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    for contract in ("Verify MSVC selection", "x86_64-pc-windows-msvc"):
+    for contract in ("Verify MSVC selection", "x86_64-pc-windows-msvc", "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"):
         if contract not in release:
             raise SystemExit(f"release workflow is missing Windows package contract: {contract}")
     if "ilammy/msvc-dev-cmd" in release:
