@@ -1,6 +1,6 @@
 [package]
 name = "kora-tools"
-description = "Command-line tools for KORA: kora-worker"
+description = "Command-line tools for KORA: kora-info, kora-bench, kora-top, kora-worker"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -10,6 +10,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
 kora = { path = "../kora" }
 
 [lints]

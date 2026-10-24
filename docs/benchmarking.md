@@ -20,6 +20,9 @@ checks the installed CPU smoke report; when shader tooling is available, the opt
 installed under `share/kora/benchmarks` for `--gpu`.
 
 Expected result: the command exits successfully and writes valid JSON with schema version `3`. The
+Rust `kora-bench` (`cargo run --release -p kora-tools --bin kora-bench`) writes schema version `4`:
+the same results plus `implementation: "rust"` and the `cpu_executor_submit_wait`,
+`cpu_executor_fanout_1024`, `allocator_churn_4096`, and `buffer_create_drop_4096` families. The
 report is intentionally written to stdout; redirect it to a new or intentionally replaceable path.
 `--smoke` runs three measured samples and one warm-up per workload, and is used by CTest without
 requiring a Vulkan device:

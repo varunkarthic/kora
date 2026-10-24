@@ -127,6 +127,16 @@ unsafe impl Send for MappedPtr {}
 unsafe impl Sync for MappedPtr {}
 
 impl MappedPtr {
+    /// Wraps the address of mapped memory that KORA did not map itself (for example, a buffer an
+    /// application or benchmark allocated directly).
+    ///
+    /// # Safety
+    /// `ptr` must point into host-visible memory that stays mapped for as long as the result (or
+    /// any [`TransferBuffer`](super::TransferBuffer) holding it) is used.
+    pub unsafe fn from_raw(ptr: NonNull<u8>) -> MappedPtr {
+        MappedPtr(ptr)
+    }
+
     /// Raw pointer.
     pub fn as_ptr(self) -> *mut u8 {
         self.0.as_ptr()
