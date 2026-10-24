@@ -82,6 +82,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   buffers are dropped from worker caches within a quarter second, and a malformed worker reply that
   names the same output twice now drops the link instead of being committed.
 
+- Port the command-line tools to Rust in `kora-tools`: `kora-info` (same `--json` schema 2),
+  `kora-top` (live view and `--demo`), and `kora-bench`. The Rust `kora-bench` measures the same
+  CPU, KORA Runtime, raw Vulkan, transfer, staging-ring, command-pool, and Cluster workloads under the
+  same result names, and writes report schema 4: schema 3 plus `implementation: "rust"` and new
+  CPU-executor submit and fan-out, allocator-churn, and logical-buffer creation families. CI checks
+  both tools' JSON contracts against lavapipe. `MappedPtr::from_raw` lets externally mapped memory
+  be used as a transfer buffer.
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
   read back) are marked lost on recovery instead of silently reverting to older host contents.

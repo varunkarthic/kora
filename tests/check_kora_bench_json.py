@@ -17,10 +17,13 @@ if completed.returncode == 3:
     sys.exit(77)
 completed.check_returncode()
 report = json.loads(completed.stdout)
-assert report["schema_version"] == 3
+# Schema 3 is the C++ kora-bench (v0.3); schema 4 is the Rust kora-bench (1.0), which adds the
+# CPU-executor, allocator-churn, and logical-buffer families.
+schema = report["schema_version"]
+assert schema in (3, 4)
 benchmarking_doc = Path(__file__).resolve().parents[1] / "docs" / "benchmarking.md"
 documentation = benchmarking_doc.read_text(encoding="utf-8")
-assert re.search(r"valid JSON with schema version `3`", documentation), (
+assert re.search(rf"schema version `{schema}`", documentation), (
     "docs/benchmarking.md must state the schema version emitted by kora-bench"
 )
 assert report["clock"] == "steady_clock"
@@ -28,7 +31,7 @@ assert report["iterations"] == 3
 assert report["warmup"] == 1
 assert report["environment"]["os"] in {"windows", "macos", "linux", "unknown"}
 assert report["environment"]["architecture"] in {"arm64", "x86_64", "x86", "unknown"}
-assert report["environment"]["compiler"].startswith(("MSVC ", "Clang ", "AppleClang ", "GCC ", "unknown"))
+assert report["environment"]["compiler"].startswith(("MSVC ", "Clang ", "AppleClang ", "GCC ", "rustc ", "unknown"))
 assert report["environment"]["build_type"]
 assert isinstance(report["environment"]["cpu_model"], str) and report["environment"]["cpu_model"]
 assert isinstance(report["environment"]["build_flags"], str)
@@ -58,6 +61,14 @@ expected_names |= {
     for count in compute_sizes
 }
 expected_names |= {f"cpu_tiled_matmul_parallel_{dimension}" for dimension in (16, 64, 128)}
+if schema == 4:
+    assert report["implementation"] == "rust"
+    expected_names |= {
+        "allocator_churn_4096",
+        "buffer_create_drop_4096",
+        "cpu_executor_submit_wait",
+        "cpu_executor_fanout_1024",
+    }
 if "--gpu" in arguments:
     gpu = report["gpu_measurements"]
     assert gpu["backend"] == "vulkan"
@@ -149,7 +160,7 @@ for result in report["results"]:
         assert result["timing_domain"] == "host_submit_completion"
     assert len(result["samples"]) == 3
     assert result["median"] <= result["p95"]
-    if "_parallel_" in result["name"]:
+    if "_parallel_" in result["name"] or result["name"].startswith("cpu_executor_"):
         assert result["thread_count"] == 4
     if result["name"].startswith(("transfer_", "raw_vulkan_copy_", "kora_transfer_copy_")):
         assert result["bytes_transferred"] in (4096, 65536, 1048576)
