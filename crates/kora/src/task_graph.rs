@@ -7,7 +7,7 @@
 //! [`ExecutionPlan`](crate::execution_plan::ExecutionPlan)).
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::error::{Error, ErrorCode, Result, Status};
 use crate::ids::BufferId;
@@ -168,8 +168,9 @@ impl TaskGraph {
 
     /// Adds a task and infers its dependencies from its buffer accesses.
     pub fn add_task(&mut self, metadata: TaskMetadata) -> Result<TaskId> {
-        // Fold repeated declarations of one buffer into a single access mode.
-        let mut accesses: BTreeMap<BufferId, AccessMode> = BTreeMap::new();
+        // Fold repeated declarations of one buffer into a single access mode (tasks declare few
+        // buffers, so a sorted vector beats a map).
+        let mut accesses: Vec<(BufferId, AccessMode)> = Vec::with_capacity(metadata.accesses.len());
         for access in &metadata.accesses {
             if access.buffer.generation == 0 {
                 return Err(Error::new(
@@ -177,23 +178,23 @@ impl TaskGraph {
                     "task access has an invalid buffer generation",
                 ));
             }
-            accesses
-                .entry(access.buffer)
-                .and_modify(|mode| *mode = mode.union(access.mode))
-                .or_insert(access.mode);
+            match accesses.iter_mut().find(|(buffer, _)| *buffer == access.buffer) {
+                Some((_, mode)) => *mode = mode.union(access.mode),
+                None => accesses.push((access.buffer, access.mode)),
+            }
         }
         let id = self.tasks.len() as TaskId + 1;
-        let mut dependencies = BTreeSet::new();
+        let mut dependencies = Vec::new();
         for (buffer, mode) in &accesses {
             if let Some(state) = self.buffers.get(buffer) {
-                if let Some(writer) = state.last_writer {
-                    dependencies.insert(writer);
-                }
+                dependencies.extend(state.last_writer);
                 if mode.writes() {
-                    dependencies.extend(state.active_readers.iter().copied());
+                    dependencies.extend_from_slice(&state.active_readers);
                 }
             }
         }
+        dependencies.sort_unstable();
+        dependencies.dedup();
         for (buffer, mode) in accesses {
             let state = self.buffers.entry(buffer).or_default();
             if mode.writes() {
@@ -206,7 +207,7 @@ impl TaskGraph {
         self.tasks.push(TaskNode {
             id,
             metadata,
-            dependencies: dependencies.into_iter().collect(),
+            dependencies,
         });
         Ok(id)
     }
@@ -230,23 +231,40 @@ impl TaskGraph {
     /// A cycle yields [`ErrorCode::GraphCycle`] carrying one member's task ID.
     pub fn finalize(&self) -> Result<TaskGraphPlan> {
         let count = self.tasks.len();
-        let mut dependencies: Vec<BTreeSet<TaskId>> = self
-            .tasks
-            .iter()
-            .map(|task| task.dependencies.iter().copied().collect())
-            .collect();
-        for &(prerequisite, dependent) in &self.explicit {
-            dependencies[(dependent - 1) as usize].insert(prerequisite);
-        }
-        let mut successors: Vec<Vec<TaskId>> = vec![Vec::new(); count];
-        let mut indegree = vec![0usize; count];
+        // Inferred dependencies are already sorted and unique; merge explicit edges in place.
         let mut tasks = self.tasks.clone();
-        for (index, deps) in dependencies.into_iter().enumerate() {
-            indegree[index] = deps.len();
-            for &prerequisite in &deps {
-                successors[(prerequisite - 1) as usize].push(index as TaskId + 1);
+        let mut touched = vec![false; count];
+        for &(prerequisite, dependent) in &self.explicit {
+            let index = (dependent - 1) as usize;
+            tasks[index].dependencies.push(prerequisite);
+            touched[index] = true;
+        }
+        for (task, touched) in tasks.iter_mut().zip(touched) {
+            if touched {
+                task.dependencies.sort_unstable();
+                task.dependencies.dedup();
             }
-            tasks[index].dependencies = deps.into_iter().collect();
+        }
+        // Successor lists in compressed form: successors of task i are
+        // successors[offsets[i]..offsets[i + 1]].
+        let mut indegree: Vec<usize> = tasks.iter().map(|t| t.dependencies.len()).collect();
+        let mut offsets = vec![0usize; count + 1];
+        for task in &tasks {
+            for &prerequisite in &task.dependencies {
+                offsets[prerequisite as usize] += 1;
+            }
+        }
+        for index in 0..count {
+            offsets[index + 1] += offsets[index];
+        }
+        let mut fill = offsets.clone();
+        let mut successors = vec![0 as TaskId; offsets[count]];
+        for task in &tasks {
+            for &prerequisite in &task.dependencies {
+                let slot = &mut fill[(prerequisite - 1) as usize];
+                successors[*slot] = task.id;
+                *slot += 1;
+            }
         }
         let mut ready: BinaryHeap<Reverse<TaskId>> = (1..=count as TaskId)
             .filter(|id| indegree[(*id - 1) as usize] == 0)
@@ -255,7 +273,8 @@ impl TaskGraph {
         let mut order = Vec::with_capacity(count);
         while let Some(Reverse(id)) = ready.pop() {
             order.push(id);
-            for &successor in &successors[(id - 1) as usize] {
+            let index = (id - 1) as usize;
+            for &successor in &successors[offsets[index]..offsets[index + 1]] {
                 let degree = &mut indegree[(successor - 1) as usize];
                 *degree -= 1;
                 if *degree == 0 {
@@ -281,6 +300,8 @@ impl TaskGraph {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
 
     /// Small deterministic generator for randomized tests (SplitMix64).

@@ -103,6 +103,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `MappedView` belongs to the thread that created it, and while it lives, other access to that
   buffer from the same thread raises `KoraError` (`INVALID_ARGUMENT`) instead of deadlocking;
   `MappedView.release()` ends a mapping early; a `DispatchBuilder` can be submitted once.
+- Measure the Rust runtime against 0.3 C++ in ten ABBA-interleaved pairs per device on Apple M4
+  (MoltenVK and KosmicKrisp); reports and summaries are retained in
+  `benchmarks/results/rust-vs-cpp-apple-m4`. `tools/kora-bench/run_ab.py` runs interleaved pairs and
+  `render_ab.py --families` summarizes every benchmark family (schema 3 and 4 reports).
+- Task-graph finalization is about 35% faster (no per-task tree sets, compact successor lists), and
+  staging-ring reservations no longer slow down with the number of live ranges (cancelling the
+  newest reservation returns its space; reservation IDs use a cheap hash): reserve plus cancel with
+  512 live ranges went from 1.4 µs to 0.16 µs.
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
   read back) are marked lost on recovery instead of silently reverting to older host contents.

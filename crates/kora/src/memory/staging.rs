@@ -8,6 +8,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::fmt;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -85,13 +86,31 @@ struct Block {
     segments: BTreeMap<u64, Segment>,
 }
 
+/// Hashes sequential reservation IDs with one multiply (SipHash dominated reservation cost).
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    }
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
 #[derive(Default)]
 struct RingState {
     blocks: Vec<Block>,
     next_reservation: u64,
     capacity: u64,
     /// Reservation ID -> (block, offset).
-    ids: HashMap<u64, (usize, u64)>,
+    ids: HashMap<u64, (usize, u64), BuildHasherDefault<IdHasher>>,
     /// Submitted segments by release timeline (lazily cleaned).
     pending: BinaryHeap<Reverse<(u64, u64)>>,
 }
@@ -645,6 +664,14 @@ impl StagingRing {
                 ErrorCode::InvalidArgument,
                 "submitted staging reservation cannot be cancelled",
             ));
+        }
+        if let Some(&(index, _)) = state.ids.get(&slice.reservation) {
+            // Cancelling the newest reservation hands its space straight back: the cursor is only
+            // a search hint, so rewinding it never allows an overlap.
+            let block = &mut state.blocks[index];
+            if block.cursor == (segment.offset + segment.reserved_size) % block.capacity {
+                block.cursor = segment.offset;
+            }
         }
         state.remove(slice.reservation);
         drop(state);
