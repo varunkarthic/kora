@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 660" role="img" aria-labelledby="title desc">
+<title id="title">Vulkan dispatch — host submit to completion · Apple M4 / MoltenVK</title><desc id="desc">Vulkan dispatch — host submit to completion. Host-observed latency includes KORA/raw Vulkan submission and completion. KORA default includes output readback; deferred KORA and raw Vulkan keep output device-resident. Reference configuration: Apple M4 / MoltenVK · macos arm64.</desc>
+<style>text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#17243b}.muted{fill:#607089}.grid{stroke:#dbe3ef;stroke-width:1}.axis{stroke:#8b9bb1;stroke-width:1.25}.whisker{stroke-width:2.5;stroke-linecap:round}.median{stroke:#fff;stroke-width:2}.series-line{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;opacity:.72}.card{fill:#fff;stroke:#dce5f1;stroke-width:1.3}.plot-bg{fill:#f8fafd}.pill{fill:#eaf0f8}.tick{font-variant-numeric:tabular-nums}</style>
+<rect x="1" y="1" width="1038" height="658" rx="18" fill="#f2f6fb" stroke="#dce5f1"/>
+<rect class="card" x="18" y="18" width="1004" height="624" rx="14"/>
+<text x="112" y="55" font-size="27" font-weight="700">Vulkan dispatch</text>
+<text class="muted" x="112" y="82" font-size="15">host submit to completion · Apple M4 / MoltenVK</text>
+<rect class="pill" x="684" y="37" width="312" height="30" rx="15"/>
+<text x="840" y="57" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.1">HOST SUBMIT + COMPLETION · P50 / P95</text>
+<rect class="plot-bg" x="112" y="112" width="884" height="368" rx="8"/>
+<line class="grid" x1="112" y1="480.0" x2="996" y2="480.0"/>
+<text class="muted tick" x="98" y="485.0" text-anchor="end" font-size="13">0.1</text>
+<line class="grid" x1="112" y1="296.0" x2="996" y2="296.0"/>
+<text class="muted tick" x="98" y="301.0" text-anchor="end" font-size="13">1</text>
+<line class="grid" x1="112" y1="112.0" x2="996" y2="112.0"/>
+<text class="muted tick" x="98" y="117.0" text-anchor="end" font-size="13">10</text>
+<line class="axis" x1="112" y1="112" x2="112" y2="480"/>
+<line class="axis" x1="112" y1="480" x2="996" y2="480"/>
+<text class="muted" x="29" y="296.0" transform="rotate(-90 29 296.0)" text-anchor="middle" font-size="13">Latency (ms, logarithmic scale)</text>
+<text class="muted" x="554.0" y="537" text-anchor="middle" font-size="13">Vector elements · problem size</text>
+<text class="muted tick" x="259.3" y="506" text-anchor="middle" font-size="13">4,096</text>
+<text class="muted tick" x="554.0" y="506" text-anchor="middle" font-size="13">1,048,576</text>
+<text class="muted tick" x="848.7" y="506" text-anchor="middle" font-size="13">4,194,240</text>
+<path class="series-line" stroke="#c2410c" d="M 239.3 319.1 L 534.0 293.3 L 828.7 255.2"/>
+<line class="whisker" stroke="#c2410c" x1="239.3" y1="279.9" x2="239.3" y2="319.1"/>
+<line class="whisker" stroke="#c2410c" x1="233.3" y1="279.9" x2="245.3" y2="279.9"/>
+<circle class="median" fill="#c2410c" cx="239.3" cy="319.1" r="7"><title>KORA default readback: median 749334 ns, p95 1.22271e+06 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#c2410c" x1="534.0" y1="247.4" x2="534.0" y2="293.3"/>
+<line class="whisker" stroke="#c2410c" x1="528.0" y1="247.4" x2="540.0" y2="247.4"/>
+<circle class="median" fill="#c2410c" cx="534.0" cy="293.3" r="7"><title>KORA default readback: median 1.03492e+06 ns, p95 1.83788e+06 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#c2410c" x1="828.7" y1="233.1" x2="828.7" y2="255.2"/>
+<line class="whisker" stroke="#c2410c" x1="822.7" y1="233.1" x2="834.7" y2="233.1"/>
+<circle class="median" fill="#c2410c" cx="828.7" cy="255.2" r="7"><title>KORA default readback: median 1.66608e+06 ns, p95 2.19592e+06 ns at 4,194,240 elements</title></circle>
+<path class="series-line" stroke="#2563eb" d="M 259.3 381.2 L 554.0 285.6 L 848.7 248.9"/>
+<line class="whisker" stroke="#2563eb" x1="259.3" y1="369.6" x2="259.3" y2="381.2"/>
+<line class="whisker" stroke="#2563eb" x1="253.3" y1="369.6" x2="265.3" y2="369.6"/>
+<circle class="median" fill="#2563eb" cx="259.3" cy="381.2" r="7"><title>KORA deferred readback: median 344500 ns, p95 398292 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#2563eb" x1="554.0" y1="276.6" x2="554.0" y2="285.6"/>
+<line class="whisker" stroke="#2563eb" x1="548.0" y1="276.6" x2="560.0" y2="276.6"/>
+<circle class="median" fill="#2563eb" cx="554.0" cy="285.6" r="7"><title>KORA deferred readback: median 1.13967e+06 ns, p95 1.27533e+06 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#2563eb" x1="848.7" y1="240.2" x2="848.7" y2="248.9"/>
+<line class="whisker" stroke="#2563eb" x1="842.7" y1="240.2" x2="854.7" y2="240.2"/>
+<circle class="median" fill="#2563eb" cx="848.7" cy="248.9" r="7"><title>KORA deferred readback: median 1.80304e+06 ns, p95 2.01096e+06 ns at 4,194,240 elements</title></circle>
+<path class="series-line" stroke="#15803d" d="M 279.3 358.5 L 574.0 358.9 L 868.7 299.3"/>
+<line class="whisker" stroke="#15803d" x1="279.3" y1="344.2" x2="279.3" y2="358.5"/>
+<line class="whisker" stroke="#15803d" x1="273.3" y1="344.2" x2="285.3" y2="344.2"/>
+<circle class="median" fill="#15803d" cx="279.3" cy="358.5" r="7"><title>Raw Vulkan: median 457417 ns, p95 547209 ns at 4,096 elements</title></circle>
+<line class="whisker" stroke="#15803d" x1="574.0" y1="318.2" x2="574.0" y2="358.9"/>
+<line class="whisker" stroke="#15803d" x1="568.0" y1="318.2" x2="580.0" y2="318.2"/>
+<circle class="median" fill="#15803d" cx="574.0" cy="358.9" r="7"><title>Raw Vulkan: median 454958 ns, p95 757208 ns at 1,048,576 elements</title></circle>
+<line class="whisker" stroke="#15803d" x1="868.7" y1="239.0" x2="868.7" y2="299.3"/>
+<line class="whisker" stroke="#15803d" x1="862.7" y1="239.0" x2="874.7" y2="239.0"/>
+<circle class="median" fill="#15803d" cx="868.7" cy="299.3" r="7"><title>Raw Vulkan: median 958958 ns, p95 2.04104e+06 ns at 4,194,240 elements</title></circle>
+<line stroke="#c2410c" stroke-width="3" x1="112.0" y1="581" x2="132.0" y2="581"/>
+<circle fill="#c2410c" stroke="#fff" stroke-width="1.5" cx="122.0" cy="581" r="5"/>
+<text x="142.0" y="586" font-size="13" font-weight="600">KORA default readback</text>
+<line stroke="#2563eb" stroke-width="3" x1="406.7" y1="581" x2="426.7" y2="581"/>
+<circle fill="#2563eb" stroke="#fff" stroke-width="1.5" cx="416.7" cy="581" r="5"/>
+<text x="436.7" y="586" font-size="13" font-weight="600">KORA deferred readback</text>
+<line stroke="#15803d" stroke-width="3" x1="701.3" y1="581" x2="721.3" y2="581"/>
+<circle fill="#15803d" stroke="#fff" stroke-width="1.5" cx="711.3" cy="581" r="5"/>
+<text x="731.3" y="586" font-size="13" font-weight="600">Raw Vulkan</text>
+<text class="muted" x="112" y="607" font-size="12">Line + dot: median (p50) · whisker: p95 · missing points: timer unavailable</text>
+<text class="muted" x="112" y="628" font-size="12">Log scale; lower is faster. Compare only within this timing domain and the same recorded configuration.</text>
+</svg>

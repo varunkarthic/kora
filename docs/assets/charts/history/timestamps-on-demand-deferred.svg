@@ -1,0 +1,236 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 660" role="img" aria-labelledby="title desc">
+<title id="title">KORA deferred readback before and after #235 — host submit to completion · Apple M4 / MoltenVK</title><desc id="desc">KORA deferred readback before and after #235 — host submit to completion · Apple M4 / MoltenVK. Median across interleaved runs of each run&#x27;s p50 (dot) and p95 (whisker).</desc>
+<style>text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;fill:#17243b}.muted{fill:#607089}.grid{stroke:#dbe3ef;stroke-width:1}.axis{stroke:#8b9bb1;stroke-width:1.25}.whisker{stroke-width:2.5;stroke-linecap:round}.median{stroke:#fff;stroke-width:2}.series-line{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;opacity:.72}.card{fill:#fff;stroke:#dce5f1;stroke-width:1.3}.plot-bg{fill:#f8fafd}.pill{fill:#eaf0f8}.tick{font-variant-numeric:tabular-nums}</style>
+<rect x="1" y="1" width="1518" height="658" rx="18" fill="#f2f6fb" stroke="#dce5f1"/>
+<rect class="card" x="18" y="18" width="1484" height="624" rx="14"/>
+<text x="112" y="55" font-size="27" font-weight="700">KORA deferred readback before and after #235</text>
+<text class="muted" x="112" y="82" font-size="15">host submit to completion · Apple M4 / MoltenVK</text>
+<rect class="pill" x="1164" y="37" width="312" height="30" rx="15"/>
+<text x="1320" y="57" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.1">HOST SUBMIT + COMPLETION · P50 / P95</text>
+<rect class="plot-bg" x="112" y="112" width="1364" height="368" rx="8"/>
+<line class="grid" x1="112" y1="480.0" x2="1476" y2="480.0"/>
+<text class="muted tick" x="98" y="485.0" text-anchor="end" font-size="13">0.1</text>
+<line class="grid" x1="112" y1="296.0" x2="1476" y2="296.0"/>
+<text class="muted tick" x="98" y="301.0" text-anchor="end" font-size="13">1</text>
+<line class="grid" x1="112" y1="112.0" x2="1476" y2="112.0"/>
+<text class="muted tick" x="98" y="117.0" text-anchor="end" font-size="13">10</text>
+<line class="axis" x1="112" y1="112" x2="112" y2="480"/>
+<line class="axis" x1="112" y1="480" x2="1476" y2="480"/>
+<text class="muted" x="29" y="296.0" transform="rotate(-90 29 296.0)" text-anchor="middle" font-size="13">Latency (ms, logarithmic scale)</text>
+<text class="muted" x="794.0" y="552" text-anchor="middle" font-size="13">Workload · problem size (elements, or matrix dimension²)</text>
+<text class="muted tick" x="147.9" y="506" text-anchor="middle" font-size="13">4K</text>
+<text class="muted tick" x="219.7" y="506" text-anchor="middle" font-size="13">64K</text>
+<text class="muted tick" x="291.5" y="506" text-anchor="middle" font-size="13">1M</text>
+<text class="muted tick" x="363.3" y="506" text-anchor="middle" font-size="13">4K</text>
+<text class="muted tick" x="435.1" y="506" text-anchor="middle" font-size="13">64K</text>
+<text class="muted tick" x="506.8" y="506" text-anchor="middle" font-size="13">1M</text>
+<text class="muted tick" x="578.6" y="506" text-anchor="middle" font-size="13">4K</text>
+<text class="muted tick" x="650.4" y="506" text-anchor="middle" font-size="13">64K</text>
+<text class="muted tick" x="722.2" y="506" text-anchor="middle" font-size="13">1M</text>
+<text class="muted tick" x="794.0" y="506" text-anchor="middle" font-size="13">4K</text>
+<text class="muted tick" x="865.8" y="506" text-anchor="middle" font-size="13">64K</text>
+<text class="muted tick" x="937.6" y="506" text-anchor="middle" font-size="13">1M</text>
+<text class="muted tick" x="1009.4" y="506" text-anchor="middle" font-size="13">16²</text>
+<text class="muted tick" x="1081.2" y="506" text-anchor="middle" font-size="13">64²</text>
+<text class="muted tick" x="1152.9" y="506" text-anchor="middle" font-size="13">128²</text>
+<text class="muted tick" x="1224.7" y="506" text-anchor="middle" font-size="13">4K</text>
+<text class="muted tick" x="1296.5" y="506" text-anchor="middle" font-size="13">64K</text>
+<text class="muted tick" x="1368.3" y="506" text-anchor="middle" font-size="13">1M</text>
+<text class="muted tick" x="1440.1" y="506" text-anchor="middle" font-size="13">4M</text>
+<text x="219.7" y="527" text-anchor="middle" font-size="13" font-weight="600">SAXPY</text>
+<text x="435.1" y="527" text-anchor="middle" font-size="13" font-weight="600">Reduction</text>
+<line class="grid" x1="327.4" y1="112" x2="327.4" y2="480"/>
+<text x="650.4" y="527" text-anchor="middle" font-size="13" font-weight="600">Scan</text>
+<line class="grid" x1="542.7" y1="112" x2="542.7" y2="480"/>
+<text x="865.8" y="527" text-anchor="middle" font-size="13" font-weight="600">Stencil</text>
+<line class="grid" x1="758.1" y1="112" x2="758.1" y2="480"/>
+<text x="1081.2" y="527" text-anchor="middle" font-size="13" font-weight="600">Tiled matmul</text>
+<line class="grid" x1="973.5" y1="112" x2="973.5" y2="480"/>
+<text x="1332.4" y="527" text-anchor="middle" font-size="13" font-weight="600">Vector add</text>
+<line class="grid" x1="1188.8" y1="112" x2="1188.8" y2="480"/>
+<path class="series-line" stroke="#c2410c" d="M 129.9 363.0 L 201.7 360.4 L 273.5 323.9 M 345.3 363.4 L 417.1 367.1 L 488.9 321.3 M 560.7 366.7 L 632.5 362.8 L 704.3 360.7 M 776.1 364.3 L 847.8 363.1 L 919.6 363.0 M 991.4 361.0 L 1063.2 364.4 L 1135.0 357.5 M 1206.8 372.8 L 1278.6 365.9 L 1350.4 308.5 L 1422.2 269.3"/>
+<line class="whisker" stroke="#c2410c" x1="129.9" y1="344.4" x2="129.9" y2="363.0"/>
+<line class="whisker" stroke="#c2410c" x1="123.9" y1="344.4" x2="135.9" y2="344.4"/>
+<circle class="median" fill="#c2410c" cx="129.9" cy="363.0" r="7"><title>KORA deferred readback · before: median 432271 ns, p95 545666 ns at SAXPY 4K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="201.7" y1="351.7" x2="201.7" y2="360.4"/>
+<line class="whisker" stroke="#c2410c" x1="195.7" y1="351.7" x2="207.7" y2="351.7"/>
+<circle class="median" fill="#c2410c" cx="201.7" cy="360.4" r="7"><title>KORA deferred readback · before: median 446730 ns, p95 498000 ns at SAXPY 64K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="273.5" y1="264.0" x2="273.5" y2="323.9"/>
+<line class="whisker" stroke="#c2410c" x1="267.5" y1="264.0" x2="279.5" y2="264.0"/>
+<circle class="median" fill="#c2410c" cx="273.5" cy="323.9" r="7"><title>KORA deferred readback · before: median 705333 ns, p95 1.49333e+06 ns at SAXPY 1M</title></circle>
+<line class="whisker" stroke="#c2410c" x1="345.3" y1="356.4" x2="345.3" y2="363.4"/>
+<line class="whisker" stroke="#c2410c" x1="339.3" y1="356.4" x2="351.3" y2="356.4"/>
+<circle class="median" fill="#c2410c" cx="345.3" cy="363.4" r="7"><title>KORA deferred readback · before: median 430458 ns, p95 469604 ns at Reduction 4K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="417.1" y1="358.5" x2="417.1" y2="367.1"/>
+<line class="whisker" stroke="#c2410c" x1="411.1" y1="358.5" x2="423.1" y2="358.5"/>
+<circle class="median" fill="#c2410c" cx="417.1" cy="367.1" r="7"><title>KORA deferred readback · before: median 410792 ns, p95 457438 ns at Reduction 64K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="488.9" y1="307.8" x2="488.9" y2="321.3"/>
+<line class="whisker" stroke="#c2410c" x1="482.9" y1="307.8" x2="494.9" y2="307.8"/>
+<circle class="median" fill="#c2410c" cx="488.9" cy="321.3" r="7"><title>KORA deferred readback · before: median 728271 ns, p95 862958 ns at Reduction 1M</title></circle>
+<line class="whisker" stroke="#c2410c" x1="560.7" y1="356.6" x2="560.7" y2="366.7"/>
+<line class="whisker" stroke="#c2410c" x1="554.7" y1="356.6" x2="566.7" y2="356.6"/>
+<circle class="median" fill="#c2410c" cx="560.7" cy="366.7" r="7"><title>KORA deferred readback · before: median 413000 ns, p95 468416 ns at Scan 4K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="632.5" y1="350.1" x2="632.5" y2="362.8"/>
+<line class="whisker" stroke="#c2410c" x1="626.5" y1="350.1" x2="638.5" y2="350.1"/>
+<circle class="median" fill="#c2410c" cx="632.5" cy="362.8" r="7"><title>KORA deferred readback · before: median 433312 ns, p95 508000 ns at Scan 64K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="704.3" y1="339.3" x2="704.3" y2="360.7"/>
+<line class="whisker" stroke="#c2410c" x1="698.3" y1="339.3" x2="710.3" y2="339.3"/>
+<circle class="median" fill="#c2410c" cx="704.3" cy="360.7" r="7"><title>KORA deferred readback · before: median 444979 ns, p95 581584 ns at Scan 1M</title></circle>
+<line class="whisker" stroke="#c2410c" x1="776.1" y1="356.4" x2="776.1" y2="364.3"/>
+<line class="whisker" stroke="#c2410c" x1="770.1" y1="356.4" x2="782.1" y2="356.4"/>
+<circle class="median" fill="#c2410c" cx="776.1" cy="364.3" r="7"><title>KORA deferred readback · before: median 425458 ns, p95 469562 ns at Stencil 4K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="847.8" y1="356.6" x2="847.8" y2="363.1"/>
+<line class="whisker" stroke="#c2410c" x1="841.8" y1="356.6" x2="853.8" y2="356.6"/>
+<circle class="median" fill="#c2410c" cx="847.8" cy="363.1" r="7"><title>KORA deferred readback · before: median 431854 ns, p95 468188 ns at Stencil 64K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="919.6" y1="334.9" x2="919.6" y2="363.0"/>
+<line class="whisker" stroke="#c2410c" x1="913.6" y1="334.9" x2="925.6" y2="334.9"/>
+<circle class="median" fill="#c2410c" cx="919.6" cy="363.0" r="7"><title>KORA deferred readback · before: median 432312 ns, p95 614438 ns at Stencil 1M</title></circle>
+<line class="whisker" stroke="#c2410c" x1="991.4" y1="351.4" x2="991.4" y2="361.0"/>
+<line class="whisker" stroke="#c2410c" x1="985.4" y1="351.4" x2="997.4" y2="351.4"/>
+<circle class="median" fill="#c2410c" cx="991.4" cy="361.0" r="7"><title>KORA deferred readback · before: median 443104 ns, p95 499980 ns at Tiled matmul 16²</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1063.2" y1="351.4" x2="1063.2" y2="364.4"/>
+<line class="whisker" stroke="#c2410c" x1="1057.2" y1="351.4" x2="1069.2" y2="351.4"/>
+<circle class="median" fill="#c2410c" cx="1063.2" cy="364.4" r="7"><title>KORA deferred readback · before: median 425084 ns, p95 500021 ns at Tiled matmul 64²</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1135.0" y1="349.0" x2="1135.0" y2="357.5"/>
+<line class="whisker" stroke="#c2410c" x1="1129.0" y1="349.0" x2="1141.0" y2="349.0"/>
+<circle class="median" fill="#c2410c" cx="1135.0" cy="357.5" r="7"><title>KORA deferred readback · before: median 462958 ns, p95 514896 ns at Tiled matmul 128²</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1206.8" y1="363.9" x2="1206.8" y2="372.8"/>
+<line class="whisker" stroke="#c2410c" x1="1200.8" y1="363.9" x2="1212.8" y2="363.9"/>
+<circle class="median" fill="#c2410c" cx="1206.8" cy="372.8" r="7"><title>KORA deferred readback · before: median 382396 ns, p95 427292 ns at Vector add 4K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1278.6" y1="358.3" x2="1278.6" y2="365.9"/>
+<line class="whisker" stroke="#c2410c" x1="1272.6" y1="358.3" x2="1284.6" y2="358.3"/>
+<circle class="median" fill="#c2410c" cx="1278.6" cy="365.9" r="7"><title>KORA deferred readback · before: median 417062 ns, p95 458438 ns at Vector add 64K</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1350.4" y1="280.8" x2="1350.4" y2="308.5"/>
+<line class="whisker" stroke="#c2410c" x1="1344.4" y1="280.8" x2="1356.4" y2="280.8"/>
+<circle class="median" fill="#c2410c" cx="1350.4" cy="308.5" r="7"><title>KORA deferred readback · before: median 855125 ns, p95 1.20996e+06 ns at Vector add 1M</title></circle>
+<line class="whisker" stroke="#c2410c" x1="1422.2" y1="258.7" x2="1422.2" y2="269.3"/>
+<line class="whisker" stroke="#c2410c" x1="1416.2" y1="258.7" x2="1428.2" y2="258.7"/>
+<circle class="median" fill="#c2410c" cx="1422.2" cy="269.3" r="7"><title>KORA deferred readback · before: median 1.39675e+06 ns, p95 1.59515e+06 ns at Vector add 4M</title></circle>
+<path class="series-line" stroke="#2563eb" d="M 147.9 379.5 L 219.7 367.5 L 291.5 327.9 M 363.3 379.8 L 435.1 371.8 L 506.8 330.0 M 578.6 375.6 L 650.4 365.5 L 722.2 367.0 M 794.0 380.4 L 865.8 385.6 L 937.6 369.2 M 1009.4 377.8 L 1081.2 376.6 L 1152.9 360.9 M 1224.7 396.8 L 1296.5 388.6 L 1368.3 297.9 L 1440.1 249.6"/>
+<line class="whisker" stroke="#2563eb" x1="147.9" y1="360.6" x2="147.9" y2="379.5"/>
+<line class="whisker" stroke="#2563eb" x1="141.9" y1="360.6" x2="153.9" y2="360.6"/>
+<circle class="median" fill="#2563eb" cx="147.9" cy="379.5" r="7"><title>KORA deferred readback · after: median 351626 ns, p95 445438 ns at SAXPY 4K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="219.7" y1="356.5" x2="219.7" y2="367.5"/>
+<line class="whisker" stroke="#2563eb" x1="213.7" y1="356.5" x2="225.7" y2="356.5"/>
+<circle class="median" fill="#2563eb" cx="219.7" cy="367.5" r="7"><title>KORA deferred readback · after: median 408604 ns, p95 469146 ns at SAXPY 64K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="291.5" y1="274.3" x2="291.5" y2="327.9"/>
+<line class="whisker" stroke="#2563eb" x1="285.5" y1="274.3" x2="297.5" y2="274.3"/>
+<circle class="median" fill="#2563eb" cx="291.5" cy="327.9" r="7"><title>KORA deferred readback · after: median 670500 ns, p95 1.31271e+06 ns at SAXPY 1M</title></circle>
+<line class="whisker" stroke="#2563eb" x1="363.3" y1="363.4" x2="363.3" y2="379.8"/>
+<line class="whisker" stroke="#2563eb" x1="357.3" y1="363.4" x2="369.3" y2="363.4"/>
+<circle class="median" fill="#2563eb" cx="363.3" cy="379.8" r="7"><title>KORA deferred readback · after: median 350458 ns, p95 430375 ns at Reduction 4K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="435.1" y1="361.0" x2="435.1" y2="371.8"/>
+<line class="whisker" stroke="#2563eb" x1="429.1" y1="361.0" x2="441.1" y2="361.0"/>
+<circle class="median" fill="#2563eb" cx="435.1" cy="371.8" r="7"><title>KORA deferred readback · after: median 387375 ns, p95 443125 ns at Reduction 64K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="506.8" y1="317.2" x2="506.8" y2="330.0"/>
+<line class="whisker" stroke="#2563eb" x1="500.8" y1="317.2" x2="512.8" y2="317.2"/>
+<circle class="median" fill="#2563eb" cx="506.8" cy="330.0" r="7"><title>KORA deferred readback · after: median 653792 ns, p95 766688 ns at Reduction 1M</title></circle>
+<line class="whisker" stroke="#2563eb" x1="578.6" y1="361.1" x2="578.6" y2="375.6"/>
+<line class="whisker" stroke="#2563eb" x1="572.6" y1="361.1" x2="584.6" y2="361.1"/>
+<circle class="median" fill="#2563eb" cx="578.6" cy="375.6" r="7"><title>KORA deferred readback · after: median 369458 ns, p95 442979 ns at Scan 4K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="650.4" y1="355.5" x2="650.4" y2="365.5"/>
+<line class="whisker" stroke="#2563eb" x1="644.4" y1="355.5" x2="656.4" y2="355.5"/>
+<circle class="median" fill="#2563eb" cx="650.4" cy="365.5" r="7"><title>KORA deferred readback · after: median 418854 ns, p95 475083 ns at Scan 64K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="722.2" y1="325.1" x2="722.2" y2="367.0"/>
+<line class="whisker" stroke="#2563eb" x1="716.2" y1="325.1" x2="728.2" y2="325.1"/>
+<circle class="median" fill="#2563eb" cx="722.2" cy="367.0" r="7"><title>KORA deferred readback · after: median 411354 ns, p95 695208 ns at Scan 1M</title></circle>
+<line class="whisker" stroke="#2563eb" x1="794.0" y1="362.5" x2="794.0" y2="380.4"/>
+<line class="whisker" stroke="#2563eb" x1="788.0" y1="362.5" x2="800.0" y2="362.5"/>
+<circle class="median" fill="#2563eb" cx="794.0" cy="380.4" r="7"><title>KORA deferred readback · after: median 347792 ns, p95 434938 ns at Stencil 4K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="865.8" y1="368.5" x2="865.8" y2="385.6"/>
+<line class="whisker" stroke="#2563eb" x1="859.8" y1="368.5" x2="871.8" y2="368.5"/>
+<circle class="median" fill="#2563eb" cx="865.8" cy="385.6" r="7"><title>KORA deferred readback · after: median 325958 ns, p95 403542 ns at Stencil 64K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="937.6" y1="360.6" x2="937.6" y2="369.2"/>
+<line class="whisker" stroke="#2563eb" x1="931.6" y1="360.6" x2="943.6" y2="360.6"/>
+<circle class="median" fill="#2563eb" cx="937.6" cy="369.2" r="7"><title>KORA deferred readback · after: median 400083 ns, p95 445604 ns at Stencil 1M</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1009.4" y1="365.2" x2="1009.4" y2="377.8"/>
+<line class="whisker" stroke="#2563eb" x1="1003.4" y1="365.2" x2="1015.4" y2="365.2"/>
+<circle class="median" fill="#2563eb" cx="1009.4" cy="377.8" r="7"><title>KORA deferred readback · after: median 359124 ns, p95 420542 ns at Tiled matmul 16²</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1081.2" y1="360.0" x2="1081.2" y2="376.6"/>
+<line class="whisker" stroke="#2563eb" x1="1075.2" y1="360.0" x2="1087.2" y2="360.0"/>
+<circle class="median" fill="#2563eb" cx="1081.2" cy="376.6" r="7"><title>KORA deferred readback · after: median 364646 ns, p95 448771 ns at Tiled matmul 64²</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1152.9" y1="352.5" x2="1152.9" y2="360.9"/>
+<line class="whisker" stroke="#2563eb" x1="1146.9" y1="352.5" x2="1158.9" y2="352.5"/>
+<circle class="median" fill="#2563eb" cx="1152.9" cy="360.9" r="7"><title>KORA deferred readback · after: median 443750 ns, p95 492875 ns at Tiled matmul 128²</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1224.7" y1="376.1" x2="1224.7" y2="396.8"/>
+<line class="whisker" stroke="#2563eb" x1="1218.7" y1="376.1" x2="1230.7" y2="376.1"/>
+<circle class="median" fill="#2563eb" cx="1224.7" cy="396.8" r="7"><title>KORA deferred readback · after: median 283230 ns, p95 366896 ns at Vector add 4K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1296.5" y1="376.4" x2="1296.5" y2="388.6"/>
+<line class="whisker" stroke="#2563eb" x1="1290.5" y1="376.4" x2="1302.5" y2="376.4"/>
+<circle class="median" fill="#2563eb" cx="1296.5" cy="388.6" r="7"><title>KORA deferred readback · after: median 313812 ns, p95 365458 ns at Vector add 64K</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1368.3" y1="281.2" x2="1368.3" y2="297.9"/>
+<line class="whisker" stroke="#2563eb" x1="1362.3" y1="281.2" x2="1374.3" y2="281.2"/>
+<circle class="median" fill="#2563eb" cx="1368.3" cy="297.9" r="7"><title>KORA deferred readback · after: median 976709 ns, p95 1.20327e+06 ns at Vector add 1M</title></circle>
+<line class="whisker" stroke="#2563eb" x1="1440.1" y1="240.3" x2="1440.1" y2="249.6"/>
+<line class="whisker" stroke="#2563eb" x1="1434.1" y1="240.3" x2="1446.1" y2="240.3"/>
+<circle class="median" fill="#2563eb" cx="1440.1" cy="249.6" r="7"><title>KORA deferred readback · after: median 1.78825e+06 ns, p95 2.00827e+06 ns at Vector add 4M</title></circle>
+<path class="series-line" stroke="#15803d" d="M 165.8 388.6 L 237.6 368.7 L 309.4 331.4 M 381.2 383.3 L 453.0 373.6 L 524.8 389.9 M 596.6 385.3 L 668.4 365.9 L 740.2 369.8 M 811.9 386.5 L 883.7 384.9 L 955.5 372.9 M 1027.3 417.3 L 1099.1 389.7 L 1170.9 361.2 M 1242.7 363.3 L 1314.5 364.8 L 1386.3 280.1 L 1458.1 246.0"/>
+<line class="whisker" stroke="#15803d" x1="165.8" y1="378.1" x2="165.8" y2="388.6"/>
+<line class="whisker" stroke="#15803d" x1="159.8" y1="378.1" x2="171.8" y2="378.1"/>
+<circle class="median" fill="#15803d" cx="165.8" cy="388.6" r="7"><title>Raw Vulkan: median 313854 ns, p95 358146 ns at SAXPY 4K</title></circle>
+<line class="whisker" stroke="#15803d" x1="237.6" y1="355.9" x2="237.6" y2="368.7"/>
+<line class="whisker" stroke="#15803d" x1="231.6" y1="355.9" x2="243.6" y2="355.9"/>
+<circle class="median" fill="#15803d" cx="237.6" cy="368.7" r="7"><title>Raw Vulkan: median 402583 ns, p95 472687 ns at SAXPY 64K</title></circle>
+<line class="whisker" stroke="#15803d" x1="309.4" y1="282.4" x2="309.4" y2="331.4"/>
+<line class="whisker" stroke="#15803d" x1="303.4" y1="282.4" x2="315.4" y2="282.4"/>
+<circle class="median" fill="#15803d" cx="309.4" cy="331.4" r="7"><title>Raw Vulkan: median 642396 ns, p95 1.18565e+06 ns at SAXPY 1M</title></circle>
+<line class="whisker" stroke="#15803d" x1="381.2" y1="372.7" x2="381.2" y2="383.3"/>
+<line class="whisker" stroke="#15803d" x1="375.2" y1="372.7" x2="387.2" y2="372.7"/>
+<circle class="median" fill="#15803d" cx="381.2" cy="383.3" r="7"><title>Raw Vulkan: median 335333 ns, p95 383063 ns at Reduction 4K</title></circle>
+<line class="whisker" stroke="#15803d" x1="453.0" y1="364.1" x2="453.0" y2="373.6"/>
+<line class="whisker" stroke="#15803d" x1="447.0" y1="364.1" x2="459.0" y2="364.1"/>
+<circle class="median" fill="#15803d" cx="453.0" cy="373.6" r="7"><title>Raw Vulkan: median 378729 ns, p95 426438 ns at Reduction 64K</title></circle>
+<line class="whisker" stroke="#15803d" x1="524.8" y1="388.2" x2="524.8" y2="389.9"/>
+<line class="whisker" stroke="#15803d" x1="518.8" y1="388.2" x2="530.8" y2="388.2"/>
+<circle class="median" fill="#15803d" cx="524.8" cy="389.9" r="7"><title>Raw Vulkan: median 308750 ns, p95 315354 ns at Reduction 1M</title></circle>
+<line class="whisker" stroke="#15803d" x1="596.6" y1="377.7" x2="596.6" y2="385.3"/>
+<line class="whisker" stroke="#15803d" x1="590.6" y1="377.7" x2="602.6" y2="377.7"/>
+<circle class="median" fill="#15803d" cx="596.6" cy="385.3" r="7"><title>Raw Vulkan: median 326917 ns, p95 359792 ns at Scan 4K</title></circle>
+<line class="whisker" stroke="#15803d" x1="668.4" y1="353.0" x2="668.4" y2="365.9"/>
+<line class="whisker" stroke="#15803d" x1="662.4" y1="353.0" x2="674.4" y2="353.0"/>
+<circle class="median" fill="#15803d" cx="668.4" cy="365.9" r="7"><title>Raw Vulkan: median 416896 ns, p95 490188 ns at Scan 64K</title></circle>
+<line class="whisker" stroke="#15803d" x1="740.2" y1="360.3" x2="740.2" y2="369.8"/>
+<line class="whisker" stroke="#15803d" x1="734.2" y1="360.3" x2="746.2" y2="360.3"/>
+<circle class="median" fill="#15803d" cx="740.2" cy="369.8" r="7"><title>Raw Vulkan: median 396916 ns, p95 447187 ns at Scan 1M</title></circle>
+<line class="whisker" stroke="#15803d" x1="811.9" y1="376.6" x2="811.9" y2="386.5"/>
+<line class="whisker" stroke="#15803d" x1="805.9" y1="376.6" x2="817.9" y2="376.6"/>
+<circle class="median" fill="#15803d" cx="811.9" cy="386.5" r="7"><title>Raw Vulkan: median 322271 ns, p95 364938 ns at Stencil 4K</title></circle>
+<line class="whisker" stroke="#15803d" x1="883.7" y1="373.2" x2="883.7" y2="384.9"/>
+<line class="whisker" stroke="#15803d" x1="877.7" y1="373.2" x2="889.7" y2="373.2"/>
+<circle class="median" fill="#15803d" cx="883.7" cy="384.9" r="7"><title>Raw Vulkan: median 328854 ns, p95 380687 ns at Stencil 64K</title></circle>
+<line class="whisker" stroke="#15803d" x1="955.5" y1="346.5" x2="955.5" y2="372.9"/>
+<line class="whisker" stroke="#15803d" x1="949.5" y1="346.5" x2="961.5" y2="346.5"/>
+<circle class="median" fill="#15803d" cx="955.5" cy="372.9" r="7"><title>Raw Vulkan: median 382166 ns, p95 531771 ns at Stencil 1M</title></circle>
+<line class="whisker" stroke="#15803d" x1="1027.3" y1="415.9" x2="1027.3" y2="417.3"/>
+<line class="whisker" stroke="#15803d" x1="1021.3" y1="415.9" x2="1033.3" y2="415.9"/>
+<circle class="median" fill="#15803d" cx="1027.3" cy="417.3" r="7"><title>Raw Vulkan: median 219124 ns, p95 222979 ns at Tiled matmul 16²</title></circle>
+<line class="whisker" stroke="#15803d" x1="1099.1" y1="377.3" x2="1099.1" y2="389.7"/>
+<line class="whisker" stroke="#15803d" x1="1093.1" y1="377.3" x2="1105.1" y2="377.3"/>
+<circle class="median" fill="#15803d" cx="1099.1" cy="389.7" r="7"><title>Raw Vulkan: median 309542 ns, p95 361542 ns at Tiled matmul 64²</title></circle>
+<line class="whisker" stroke="#15803d" x1="1170.9" y1="350.1" x2="1170.9" y2="361.2"/>
+<line class="whisker" stroke="#15803d" x1="1164.9" y1="350.1" x2="1176.9" y2="350.1"/>
+<circle class="median" fill="#15803d" cx="1170.9" cy="361.2" r="7"><title>Raw Vulkan: median 442437 ns, p95 508000 ns at Tiled matmul 128²</title></circle>
+<line class="whisker" stroke="#15803d" x1="1242.7" y1="351.9" x2="1242.7" y2="363.3"/>
+<line class="whisker" stroke="#15803d" x1="1236.7" y1="351.9" x2="1248.7" y2="351.9"/>
+<circle class="median" fill="#15803d" cx="1242.7" cy="363.3" r="7"><title>Raw Vulkan: median 430896 ns, p95 496688 ns at Vector add 4K</title></circle>
+<line class="whisker" stroke="#15803d" x1="1314.5" y1="356.1" x2="1314.5" y2="364.8"/>
+<line class="whisker" stroke="#15803d" x1="1308.5" y1="356.1" x2="1320.5" y2="356.1"/>
+<circle class="median" fill="#15803d" cx="1314.5" cy="364.8" r="7"><title>Raw Vulkan: median 422730 ns, p95 471126 ns at Vector add 64K</title></circle>
+<line class="whisker" stroke="#15803d" x1="1386.3" y1="271.3" x2="1386.3" y2="280.1"/>
+<line class="whisker" stroke="#15803d" x1="1380.3" y1="271.3" x2="1392.3" y2="271.3"/>
+<circle class="median" fill="#15803d" cx="1386.3" cy="280.1" r="7"><title>Raw Vulkan: median 1.22025e+06 ns, p95 1.36285e+06 ns at Vector add 1M</title></circle>
+<line class="whisker" stroke="#15803d" x1="1458.1" y1="237.4" x2="1458.1" y2="246.0"/>
+<line class="whisker" stroke="#15803d" x1="1452.1" y1="237.4" x2="1464.1" y2="237.4"/>
+<circle class="median" fill="#15803d" cx="1458.1" cy="246.0" r="7"><title>Raw Vulkan: median 1.87006e+06 ns, p95 2.08088e+06 ns at Vector add 4M</title></circle>
+<line stroke="#c2410c" stroke-width="3" x1="112.0" y1="581" x2="132.0" y2="581"/>
+<circle fill="#c2410c" stroke="#fff" stroke-width="1.5" cx="122.0" cy="581" r="5"/>
+<text x="142.0" y="586" font-size="13" font-weight="600">KORA deferred readback · before</text>
+<line stroke="#2563eb" stroke-width="3" x1="566.7" y1="581" x2="586.7" y2="581"/>
+<circle fill="#2563eb" stroke="#fff" stroke-width="1.5" cx="576.7" cy="581" r="5"/>
+<text x="596.7" y="586" font-size="13" font-weight="600">KORA deferred readback · after</text>
+<line stroke="#15803d" stroke-width="3" x1="1021.3" y1="581" x2="1041.3" y2="581"/>
+<circle fill="#15803d" stroke="#fff" stroke-width="1.5" cx="1031.3" cy="581" r="5"/>
+<text x="1051.3" y="586" font-size="13" font-weight="600">Raw Vulkan</text>
+<text class="muted" x="112" y="607" font-size="12">Line + dot: median (p50) · whisker: p95 · missing points: timer unavailable</text>
+<text class="muted" x="112" y="628" font-size="12">Log scale; lower is faster. Compare only within this timing domain and the same recorded configuration.</text>
+</svg>

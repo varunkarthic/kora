@@ -111,6 +111,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   staging-ring reservations no longer slow down with the number of live ranges (cancelling the
   newest reservation returns its space; reservation IDs use a cheap hash): reserve plus cancel with
   512 live ranges went from 1.4 µs to 0.16 µs.
+- Rebuild the documentation on MkDocs Material for 1.0: light and dark themes, search, linked
+  Rust/C/Python code tabs, copy buttons, themed diagrams, and task-oriented sections (Get started,
+  Guides, Tools, API, Performance, Internals, Project), with the Rust API reference published next to
+  it on Read the Docs. Every page was rewritten for the Rust runtime or retired: the 0.x optimization
+  studies and API comparisons moved to Performance, and the C++ API and per-class internals pages were
+  replaced by the API section, rustdoc, and five internals overviews. Runnable vector-add examples in
+  Rust, C, and Python (`examples/`) back the quickstart, and CI builds the site with `--strict`.
 ### Fixed
 - After a device loss, results that only the lost device held (deferred outputs that were never
   read back) are marked lost on recovery instead of silently reverting to older host contents.
