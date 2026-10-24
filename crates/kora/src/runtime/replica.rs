@@ -26,6 +26,9 @@ pub(crate) enum DeviceAccess {
 pub(crate) struct ReplicaState {
     /// Host version whose bytes the replica holds (after pending work completes).
     pub(crate) resident_version: Option<u64>,
+    /// `(host version, split ID)` after a slice of that split wrote its range of a replica holding
+    /// that version: only later slices of the same split may treat the replica as resident.
+    pub(crate) partial_version: Option<(u64, u64)>,
     /// The replica holds results newer than the host shadow (deferred readback).
     pub(crate) device_newer: bool,
     /// Compute-queue timeline value of the last submission that used the replica.

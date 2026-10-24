@@ -515,6 +515,29 @@ fn in_flight_dispatches_keep_inputs_submitted_before_a_later_host_write() {
             .wait()
             .unwrap();
         assert!(out.read().unwrap().iter().all(|&v| v == 1001));
+
+        // Inputs released while their dispatch is in flight stay alive until it completes.
+        let (a, b) = (
+            runtime.create_buffer::<u32>(n).unwrap(),
+            runtime.create_buffer::<u32>(n).unwrap(),
+        );
+        a.write(&vec![20; n as usize]).unwrap();
+        b.write(&vec![3; n as usize]).unwrap();
+        let event = runtime
+            .dispatch(&kernel)
+            .global(n)
+            .read(&a)
+            .read(&b)
+            .write(&out)
+            .push(&(n as u32))
+            .submit()
+            .unwrap();
+        drop((a, b));
+        let reused = runtime.create_buffer::<u32>(n).unwrap();
+        reused.write(&vec![9; n as usize]).unwrap();
+        event.wait().unwrap();
+        assert!(out.read().unwrap().iter().all(|&v| v == 23));
+        assert!(reused.read().unwrap().iter().all(|&v| v == 9));
     });
 }
 
@@ -626,8 +649,57 @@ fn runs_cpu_fallbacks_between_gpu_dispatches() {
             .wait()
             .unwrap_err();
         assert_eq!(misdeclared.code(), ErrorCode::InvalidKernelBinding);
+        runtime
+            .register_cpu_fallback("write-only", |task| {
+                assert_eq!(task.buffer_count(), 1);
+                assert_eq!(task.push_constants(), &[0x12, 0x34]);
+                assert_eq!(task.read(0).unwrap_err().code(), ErrorCode::InvalidKernelBinding);
+                assert_eq!(task.write(1).unwrap_err().code(), ErrorCode::InvalidArgument);
+                task.write(0)?[0] = 0x5a;
+                Ok(())
+            })
+            .unwrap();
+        runtime
+            .run_cpu_fallback(
+                "write-only",
+                &[(out.handle(), KernelAccess::Write)],
+                &[0x12, 0x34],
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(out.read().unwrap()[0].to_le_bytes()[0], 0x5a);
         assert!(runtime.register_cpu_fallback("", |_| Ok(())).is_err());
     });
+}
+
+#[test]
+fn dropping_the_runtime_drains_pending_cpu_fallbacks() {
+    let (errors, _guard) = common::ValidationErrors::capture();
+    let Some(runtime) = runtime(&options("cpu-drain")) else {
+        return;
+    };
+    let buffer = runtime.create_buffer::<u32>(16).unwrap();
+    buffer.write(&[1; 16]).unwrap();
+    runtime
+        .register_cpu_fallback("slow", |task| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert_eq!(task.read(0)?.len(), 64);
+            Ok(())
+        })
+        .unwrap();
+    let events: Vec<_> = (0..4)
+        .map(|_| {
+            runtime
+                .run_cpu_fallback("slow", &[(buffer.handle(), KernelAccess::Read)], &[])
+                .unwrap()
+        })
+        .collect();
+    drop(runtime);
+    for event in events {
+        event.wait().unwrap();
+    }
+    errors.assert_none();
 }
 
 #[test]
@@ -731,7 +803,8 @@ fn records_dispatch_timestamps_only_as_often_as_telemetry_needs() {
         };
         with_runtime_options(&options, |runtime| {
             let device = runtime.devices()[0].clone();
-            if runtime.profiling_stats(&device).is_err() {
+            // Devices without GPU timestamps (for example KosmicKrisp) never record samples.
+            if !runtime.profiling_stats(&device).is_ok_and(|s| s.gpu_timestamps) {
                 return;
             }
             let kernel = vector_add(runtime);
