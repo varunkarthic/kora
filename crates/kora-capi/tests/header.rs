@@ -20,8 +20,10 @@ fn committed_header_is_current() {
         return;
     }
     let committed = std::fs::read(&path).unwrap_or_default();
+    // Windows checkouts may convert the header to CRLF line endings.
+    let lf = |bytes: &[u8]| bytes.iter().copied().filter(|&b| b != b'\r').collect::<Vec<u8>>();
     assert!(
-        committed == generated,
+        lf(&committed) == lf(&generated),
         "include/kora.h is stale; run `KORA_BLESS=1 cargo test -p kora-capi --test header`"
     );
 }
